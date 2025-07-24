@@ -42,7 +42,7 @@ Example:
 FEEDS = [
     {
         "feed_url": "https://www.fcstpauli.com/en/rss",
-        "webhook": "https://discord.com/api/webhooks/...",
+        "webhook": "https://discord.com/api/webhooks/...",  # also possible as a list of multiple webhooks
         "username": "FC Sankt Pauli",
         "avatar_url": "...",
         "embed_template": {

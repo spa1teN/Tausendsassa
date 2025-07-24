@@ -34,12 +34,18 @@ def process_feeds():
             if tn_tpl:
                 cfg["thread_name"] = _format_str(tn_tpl, e)
             logger.info("   → %s", e.link)
-            try:
-                send_to_discord(cfg, embed)
-            except Exception as err:
-                logger.error("Error sending to Discord: %s", err, exc_info=True)
-                send_error_once(cfg.get("error_webhook", cfg["webhook"]), 500, str(err), url)
-            time.sleep(RATE_LIMIT_SECONDS)
+            webhooks = cfg["webhook"]
+            if isinstance(webhooks, str):
+                webhooks = [webhooks]
+            for webhook in webhooks:
+                cfg_copy = cfg.copy()
+                cfg_copy["webhook"] = webhook
+                try:
+                    send_to_discord(cfg_copy, embed)
+                except Exception as err:
+                    logger.error("Error sending to Discord: %s", err, exc_info=True)
+                    send_error_once(cfg_copy.get("error_webhook", webhook), 500, str(err), url)
+                time.sleep(RATE_LIMIT_SECONDS)
         if new_entries:
             state[url] = max(e.published_ts for e in new_entries if e.published_ts)
             _save_state(state)
