@@ -1,20 +1,20 @@
 # RSStoDiscord
 
-Ein Python-Skript, das RSS-Feeds ausliest und neue Einträge automatisch als Discord-Embed-Nachrichten an definierte Webhooks sendet.
+A Python script that reads RSS feeds and automatically sends new entries as Discord embed messages to defined webhooks.
 
 ## Features
 
-- Mehrere Feeds und Discord-Webhooks konfigurierbar
-- Jeder Feed kann individuell formatiert werden (Embed-Template)
-- Nur neue Einträge werden gepostet (State-Tracking per Timestamp)
-- Fehlerbenachrichtigung an separaten Discord-Webhook
-- Automatische Migration alter State-Dateien
-- Einfache Anpassung durch Konfigurationsdateien
+- Multiple feeds and Discord webhooks configurable
+- Each feed can be individually formatted (embed template)
+- Only new entries are posted (state tracking via timestamp)
+- Error notifications to a separate Discord webhook
+- Automatic migration of old state files
+- Easy customization via configuration files
 
-## Voraussetzungen
+## Requirements
 
 - Python 3.8+
-- Abhängigkeiten aus `requirements.txt` (z.B. `feedparser`, `requests`)
+- Dependencies from `requirements.txt` (e.g. `feedparser`, `requests`)
 
 ## Installation
 
@@ -24,20 +24,20 @@ cd RSStoDiscord
 pip install -r requirements.txt
 ```
 
-## Konfiguration
+## Configuration
 
 ### Feeds & Webhooks
 
-Bearbeite die Datei `setup.py` und passe die Liste `FEEDS` an.  
-Jeder Feed benötigt mindestens:
+Edit the `setup.py` file and adjust the `FEEDS` list.  
+Each feed requires at least:
 
-- `feed_url`: RSS-Feed-URL
-- `webhook`: Discord-Webhook-URL
-- `username`: Anzeigename im Discord
-- `avatar_url`: Avatar-Bild (optional)
-- `embed_template`: Dict für das Discord-Embed
+- `feed_url`: RSS feed URL
+- `webhook`: Discord webhook URL
+- `username`: Display name in Discord
+- `avatar_url`: Avatar image (optional)
+- `embed_template`: Dict for the Discord embed
 
-Beispiel:
+Example:
 ```python
 FEEDS = [
     {
@@ -49,33 +49,33 @@ FEEDS = [
             "title": "{title}",
             "description": "{description}",
             "url": "{link}",
-            "footer": {"text": "Stand: {published_custom:%d.%m.%Y %H:%M}"},
+            "footer": {"text": "As of: {published_custom:%d.%m.%Y %H:%M}"},
             "image": {"url": "{thumbnail}"},
         },
     },
-    # weitere Feeds ...
+    # more feeds ...
 ]
 ```
 
-### Fehlerbenachrichtigung
+### Error Notification
 
-Optional kann für jeden Feed ein `error_webhook` gesetzt werden, an den Fehler gemeldet werden.
+Optionally, you can set an `error_webhook` for each feed to which errors will be reported.
 
-## Nutzung
+## Usage
 
 ```bash
 python3 main.py
 ```
 
-Das Skript liest alle Feeds, postet neue Einträge und aktualisiert den State in `posted_entries.json`.
+The script reads all feeds, posts new entries, and updates the state in `posted_entries.json`.
 
-## Hinweise
+## Notes
 
-- Das Skript verwendet **nur Webhooks** – Buttons oder Interaktionen sind mit Webhooks nicht möglich.
-- Für Buttons oder automatische Thread-Erstellung ist ein richtiger Discord-Bot nötig.
-- Fehler werden maximal alle 2 Stunden pro Feed/Fehlertyp an den Error-Webhook gemeldet.
+- The script uses **webhooks only** – buttons or interactions are not possible with webhooks.
+- For buttons or automatic thread creation, a proper Discord bot is required.
+- Errors are reported to the error webhook at most every 2 hours per feed/error type.
 
-## Verzeichnisstruktur
+## Directory Structure
 
 ```
 RSStoDiscord/
@@ -94,11 +94,6 @@ RSStoDiscord/
 └── posted_entries.json
 ```
 
-## Lizenz
 
-MIT License
-
----
-
-**Fragen oder Probleme?**  
-Erstelle ein Issue oder kontaktiere
+**Questions or problems?**  
+Open an issue or contact
