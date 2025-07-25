@@ -14,8 +14,6 @@ logger = logging.getLogger("rssbot")
 def process_feeds():
     state = _load_state()
     for cfg in FEEDS:
-        if "avatar_url" in cfg:
-            cfg["avatar_url"] = resolve_avatar(cfg["webhook"], cfg["avatar_url"])
         url = cfg["feed_url"]
         # Sicherstellen, dass feed_state immer ein dict ist!
         feed_state = state.get(url, {"last_ts": 0, "posted_ids": set()})
@@ -48,6 +46,8 @@ def process_feeds():
             for webhook in webhooks:
                 cfg_copy = cfg.copy()
                 cfg_copy["webhook"] = webhook
+                if "avatar_url" in cfg:
+                    cfg_copy["avatar_url"] = resolve_avatar(webhook, cfg["avatar_url"])
                 try:
                     send_to_discord(cfg_copy, embed)
                 except Exception as err:
