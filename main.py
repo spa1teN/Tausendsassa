@@ -17,12 +17,20 @@ def process_feeds():
         if "avatar_url" in cfg:
             cfg["avatar_url"] = resolve_avatar(cfg["webhook"], cfg["avatar_url"])
         url = cfg["feed_url"]
+        # Sicherstellen, dass feed_state immer ein dict ist!
+        feed_state = state.get(url, {"last_ts": 0, "posted_ids": set()})
+        if not isinstance(feed_state, dict):
+            feed_state = {"last_ts": feed_state, "posted_ids": set()}
+        posted_ids = set(feed_state.get("posted_ids", []))
         logger.info("\n➡️  %s", url)
         feed = feedparser.parse(url)
         entries = [FeedEntry.from_feedparser(e) for e in feed.entries]
         entries.sort(key=lambda e: e.published_ts or 0)
-        last_ts = state.get(url, 0)
-        new_entries = [e for e in entries if e.published_ts and e.published_ts > last_ts]
+        last_ts = feed_state.get("last_ts", 0)
+        new_entries = [
+            e for e in entries
+            if e.published_ts and e.published_ts > last_ts and e.id not in posted_ids
+        ]
         if cfg.get("max_items"):
             new_entries = new_entries[-cfg["max_items"]:]
         if not new_entries:
@@ -46,8 +54,12 @@ def process_feeds():
                     logger.error("Error sending to Discord: %s", err, exc_info=True)
                     send_error_once(cfg_copy.get("error_webhook", webhook), 500, str(err), url)
                 time.sleep(RATE_LIMIT_SECONDS)
+            posted_ids.add(e.id)
         if new_entries:
-            state[url] = max(e.published_ts for e in new_entries if e.published_ts)
+            state[url] = {
+                "last_ts": max(e.published_ts for e in new_entries if e.published_ts),
+                "posted_ids": list(posted_ids)
+            }
             _save_state(state)
 
 if __name__ == "__main__":
