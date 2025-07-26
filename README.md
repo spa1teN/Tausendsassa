@@ -68,12 +68,6 @@ python bot.py
 - `/poll_now` ‑ Sofortiger Poll
 - `/feeds_reload` ‑ Konfiguration neu laden
 
-### Weiterführende Ideen
-- Dynamische Feed-Verwaltung (`/feeds add`, `/feeds remove`)
-- Auto-Threads und Buttons unter Embeds
-- Health-Checks & Monitoring-Channel
-- Archiv / Suche / KI-Zusammenfassungen
-
 ---
 
 **Viel Spaß mit deinem RSS-to-Discord Bot!**
