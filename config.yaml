@@ -1,0 +1,31 @@
+# -----------------------------------------------------------
+# Globale Einstellungen
+# -----------------------------------------------------------
+time_zone: "Europe/Berlin"             # Zeitzone für Zeitstempel
+max_post_age_seconds: 360               # Max. Alter (in Sekunden) für Posts
+rate_limit_seconds: 1.2                 # Delay zwischen API-Calls
+state_file: "/path/to/posted_entries.json"  # Pfad zur State-Datei
+
+# -----------------------------------------------------------
+# Feed-Definitionen
+# -----------------------------------------------------------
+# Jeder Block repräsentiert einen RSS-Feed.
+feeds:
+  - name: "Example Feed"
+    feed_url: "https://example.com/rss"
+    channel_id: 123456789012345678       # ID des Discord-Kanals (Announcement)
+    username: "ExampleBot"               # Einbett-Author-Name
+    avatar_url: "https://example.com/avatar.png"  # Einbett-Author-Icon
+    max_items: 5                          # Max. Artikel pro Durchlauf
+    crosspost: true                       # Auto-Publish für Announcement-Channels
+    embed_template:                      # Template für Discord-Embed
+      title: "{title}"
+      description: "{description}"
+      url: "{link}"
+      color: 0x3498DB
+      timestamp: "{published_custom}"
+      footer:
+        text: "Example Feed"
+      image:
+        url: "{thumbnail}"
+# Füge weitere Feeds nach diesem Muster hinzu

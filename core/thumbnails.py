@@ -1,6 +1,54 @@
+# core/thumbnails.py
+from typing import Any, Optional
 import requests
 import re
 import feedparser
+
+# Regex, um das erste <img src="..."> im HTML zu finden
+_IMG_REGEX = re.compile(r'<img[^>]+src=[\'"]([^\'"]+)[\'"]', re.IGNORECASE)
+
+def find_thumbnail(entry: Any) -> Optional[str]:
+    """
+    Versucht, ein Vorschaubild für einen RSS-Eintrag zu ermitteln.
+    Reihenfolge:
+      1. media_thumbnail
+      2. enclosures (type=image)
+      3. media_content
+      4. content[...] HTML img
+      5. summary HTML img
+    """
+    # 1. media_thumbnail
+    if getattr(entry, "media_thumbnail", None):
+        url = entry.media_thumbnail[0].get("url")
+        if url:
+            return url
+
+    # 2. enclosures
+    for enc in getattr(entry, "enclosures", []):
+        href = enc.get("href") or enc.get("url")
+        if href and enc.get("type", "").startswith("image/"):
+            return href
+
+    # 3. media_content
+    if getattr(entry, "media_content", None):
+        url = entry.media_content[0].get("url")
+        if url:
+            return url
+
+    # 4. HTML <img> in content[]
+    for c in entry.get("content", []):
+        html = c.get("value", "")
+        m = _IMG_REGEX.search(html)
+        if m:
+            return m.group(1)
+
+    # 5. HTML <img> in summary
+    summary = entry.get("summary", "")
+    m = _IMG_REGEX.search(summary)
+    if m:
+        return m.group(1)
+
+    return None
 
 APPVIEW = "https://public.api.bsky.app/xrpc"
 

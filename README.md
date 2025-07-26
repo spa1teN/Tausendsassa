@@ -1,99 +1,80 @@
-# RSStoDiscord
+## RSS-to-Discord Bot
+Ein interaktiver Discord-Bot, der RSS/Atom-Feeds periodisch abruft und als Embeds in Announcement-Channels postet.
 
-A Python script that reads RSS feeds and automatically sends new entries as Discord embed messages to defined webhooks.
+### Features
+- Periodisches Polling konfigurierbarer Feeds
+- Fallbacks für Beschreibung und Bilder
+- Auto-Crosspost in Announcement-Channels
+- Slash-Commands: `/ping`, `/poll_now`, `/feeds_reload`
+- Detailed Logging + RotatingFileHandler
 
-## Features
+### Voraussetzungen
+- Python 3.10+ installiert
+- Virtuelle Umgebung (venv)
+- Ein Discord-Bot-Token mit **Message Content Intent** aktiviert
+- Announcement-Channels in deinem Server
 
-- Multiple feeds and Discord webhooks configurable
-- Each feed can be individually formatted (embed template)
-- Only new entries are posted (state tracking via timestamp)
-- Error notifications to a separate Discord webhook
-- Automatic migration of old state files
-- Easy customization via configuration files
-
-## Requirements
-
-- Python 3.8+
-- Dependencies from `requirements.txt` (e.g. `feedparser`, `requests`)
-
-## Installation
-
+### Installation
 ```bash
-git clone https://github.com/deinuser/RSStoDiscord.git
+git clone https://github.com/yourname/RSStoDiscord.git
 cd RSStoDiscord
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Configuration
+### Konfiguration
+1. Kopiere das oben gezeigte `config.yaml`-Template in dein Projektverzeichnis.
+2. Passe deine `channel_id`, `feed_url` und andere Werte an.
+3. Lege Umgebungsvariablen fest:
+   ```bash
+   export DISCORD_TOKEN="DeinBotToken"
+   # Optional für Guild-Scoped Slash-Commands:
+   export DISCORD_GUILD_ID=123456789012345678
+   ```
 
-### Feeds & Webhooks
-
-Edit the `setup.py` file and adjust the `FEEDS` list.  
-Each feed requires at least:
-
-- `feed_url`: RSS feed URL
-- `webhook`: Discord webhook URL
-- `username`: Display name in Discord
-- `avatar_url`: Avatar image (optional)
-- `embed_template`: Dict for the Discord embed
-
-Example:
-```python
-FEEDS = [
-    {
-        "feed_url": "https://www.fcstpauli.com/en/rss",
-        "webhook": "https://discord.com/api/webhooks/...",  # also possible as a list of multiple webhooks
-        "username": "FC Sankt Pauli",
-        "avatar_url": "...",
-        "embed_template": {
-            "title": "{title}",
-            "description": "{description}",
-            "url": "{link}",
-            "footer": {"text": "As of: {published_custom:%d.%m.%Y %H:%M}"},
-            "image": {"url": "{thumbnail}"},
-        },
-    },
-    # more feeds ...
-]
-```
-
-### Error Notification
-
-Optionally, you can set an `error_webhook` for each feed to which errors will be reported.
-
-## Usage
-
+### Bot starten
 ```bash
-python3 main.py
+source .venv/bin/activate
+python bot.py
 ```
 
-The script reads all feeds, posts new entries, and updates the state in `posted_entries.json`.
+### Automatischer Start mit systemd
+1. Erstelle `/etc/systemd/system/rssbot.service`:
+   ```ini
+   [Unit]
+   Description=RSS-to-Discord Bot
+   After=network.target
 
-## Notes
+   [Service]
+   WorkingDirectory=/home/pi/RSStoDiscord
+   ExecStart=/home/pi/RSStoDiscord/.venv/bin/python bot.py
+   Environment=DISCORD_TOKEN=DeinBotToken
+   Restart=always
+   User=pi
 
-- The script uses **webhooks only** – buttons or interactions are not possible with webhooks.
-- For buttons or automatic thread creation, a proper Discord bot is required.
-- Errors are reported to the error webhook at most every 2 hours per feed/error type.
+   [Install]
+   WantedBy=multi-user.target
+   ```
+2. Aktivieren & starten:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now rssbot.service
+   sudo journalctl -fu rssbot.service
+   ```
 
-## Directory Structure
+### Slash-Commands
+- `/ping` ‑ Testet Latenz
+- `/poll_now` ‑ Sofortiger Poll
+- `/feeds_reload` ‑ Konfiguration neu laden
 
-```
-RSStoDiscord/
-├── main.py
-├── feeds.py
-├── state.py
-├── webhook.py
-├── errors.py
-├── setup.py
-├── utils.py
-├── thumbnails.py
-├── data/
-│   └── error_cache.json
-├── logs/
-│   └── rssbot.log
-└── posted_entries.json
-```
+### Weiterführende Ideen
+- Dynamische Feed-Verwaltung (`/feeds add`, `/feeds remove`)
+- Auto-Threads und Buttons unter Embeds
+- Health-Checks & Monitoring-Channel
+- Archiv / Suche / KI-Zusammenfassungen
 
+---
 
-**Questions or problems?**  
-Open an issue or contact
+**Viel Spaß mit deinem RSS-to-Discord Bot!**
+
