@@ -68,7 +68,4 @@ python bot.py
 - `/poll_now` ‑ Sofortiger Poll
 - `/feeds_reload` ‑ Konfiguration neu laden
 
----
-
-**Viel Spaß mit deinem RSS-to-Discord Bot!**
 
