@@ -7,6 +7,9 @@ from logging.handlers import RotatingFileHandler
 import discord
 from discord.ext import commands
 
+GUILD_ID = 1398409754967015647
+GUILD    = discord.Object(id=GUILD_ID) if GUILD_ID else None
+
 # ─── Logging ────────────────────────────────────────────────────────────────
 LOG_FORMAT  = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -45,8 +48,16 @@ class RSSBot(commands.Bot):
                 log.info(f"✅ Loaded extension {ext}")
             except Exception:
                 log.exception(f"❌ Failed to load extension {ext}")
-
+        await self.tree.sync()
+        log.info("✅ All slash commands synced")
+        
     async def on_ready(self):
+        status = discord.Status.online
+        activity = discord.Activity(
+            type=discord.ActivityType.listening,
+            name="spa1teN"
+        )
+        await self.change_presence(status=status, activity=activity)
         log.info(f"Logged in as {self.user} (ID: {self.user.id})")
         print("------")
 

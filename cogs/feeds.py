@@ -238,7 +238,9 @@ class FeedCog(commands.Cog):
         channel: discord.TextChannel,
         max_items: int = 3,
         crosspost: bool = False,
-        color: str = None
+        color: str = None,
+        user_name: str = None,
+        avatar_url: str = None
     ):
         await interaction.response.defer(ephemeral=True)
         # parse color hex
@@ -257,6 +259,8 @@ class FeedCog(commands.Cog):
             "channel_id": channel.id,
             "max_items": max_items,
             "crosspost": crosspost,
+            "username": user_name,
+            "avatar_url": avatar_url,
             "embed_template": {
                 "title": "{title}",
                 "description": "{description}",
