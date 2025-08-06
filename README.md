@@ -72,6 +72,10 @@ feeds:
 
 monitor_channel_id: 987654321098765432
 failure_threshold: 3
+time_zone: Europe/Berlin
+max_post_age_seconds: 360
+rate_limit_seconds: 1.2
+state_file: "PATH_TO_STATE_FILE"
 ```
 ## 🎮 Usage
 - Start the bot:
