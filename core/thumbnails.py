@@ -3,10 +3,12 @@ from typing import Any, Optional
 import requests
 import re
 import feedparser
+from urllib.parse import urljoin, urlparse
 
-# Regex, um das erste <img src="..."> im HTML zu finden
+# Regex patterns for finding images in HTML
 _IMG_REGEX = re.compile(r'<img[^>]+src=[\'"]([^\'"]+)[\'"]', re.IGNORECASE)
-
+_OG_IMAGE_REGEX = re.compile(r'<meta[^>]+property=[\'"]og:image[\'"][^>]+content=[\'"]([^\'"]+)[\'"]', re.IGNORECASE)
+_OG_IMAGE_REGEX_ALT = re.compile(r'<meta[^>]+content=[\'"]([^\'"]+)[\'"][^>]+property=[\'"]og:image[\'"]', re.IGNORECASE)
 
 APPVIEW = "https://public.api.bsky.app/xrpc"
 
@@ -34,6 +36,7 @@ def _parse_post_url(post_url: str):
     return m.group(1), m.group(2)  # (handle_or_did, rkey)
 
 def get_image_urls(post_url: str) -> list[str]:
+    """Extract image URLs from Bluesky post"""
     handle_or_did, rkey = _parse_post_url(post_url)
 
     # Resolve the handle to a DID if necessary
@@ -66,60 +69,136 @@ def get_image_urls(post_url: str) -> list[str]:
 
     return extract(thread)
 
+def _fetch_og_image_from_url(url: str) -> Optional[str]:
+    """
+    Fetch the URL and try to extract OpenGraph image meta tag.
+    Returns the first og:image URL found, or None.
+    """
+    try:
+        # Set reasonable timeout and headers
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; RSS Bot/1.0; +https://example.com/bot)'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        # Only process HTML content
+        content_type = response.headers.get('content-type', '').lower()
+        if 'text/html' not in content_type:
+            return None
+            
+        html = response.text
+        
+        # Try both variants of og:image meta tag
+        match = _OG_IMAGE_REGEX.search(html)
+        if not match:
+            match = _OG_IMAGE_REGEX_ALT.search(html)
+            
+        if match:
+            og_image_url = match.group(1)
+            # Handle relative URLs
+            if og_image_url.startswith('//'):
+                og_image_url = 'https:' + og_image_url
+            elif og_image_url.startswith('/'):
+                parsed = urlparse(url)
+                og_image_url = f"{parsed.scheme}://{parsed.netloc}{og_image_url}"
+            elif not og_image_url.startswith(('http://', 'https://')):
+                og_image_url = urljoin(url, og_image_url)
+                
+            return og_image_url
+            
+    except Exception as e:
+        # Log error but don't fail completely
+        print(f"Warning: Failed to fetch OpenGraph image from {url}: {e}")
+    
+    return None
+
 def find_thumbnail(entry: Any) -> Optional[str]:
     """
-    Versucht, ein Vorschaubild für einen RSS-Eintrag zu ermitteln.
-    Reihenfolge:
-      1. media_thumbnail
-      2. media_content
-      3. enclosures
-      4. entry.links (type=image)
-      5. content[...] HTML img
-      6. summary HTML img
+    Try to find a thumbnail image for an RSS entry.
+    Order of precedence:
+      1. OpenGraph image from the entry URL (NEW)
+      2. media_thumbnail
+      3. media_content
+      4. enclosures
+      5. entry.links (type=image)
+      6. content[...] HTML img
+      7. summary HTML img
+      8. Bluesky post images
     """
-    # 1. media_thumbnail
+    # 1. OpenGraph image from entry URL (NEW - highest priority)
+    entry_url = entry.get('link') or entry.get('url')
+    if entry_url:
+        og_image = _fetch_og_image_from_url(entry_url)
+        if og_image:
+            return og_image
+    
+    # 2. media_thumbnail
     if getattr(entry, 'media_thumbnail', None):
         url = entry.media_thumbnail[0].get('url')
         if url:
             return url
 
-    # 2. media_content
+    # 3. media_content
     if getattr(entry, 'media_content', None):
         url = entry.media_content[0].get('url')
         if url:
             return url
 
-    # 3. enclosures
+    # 4. enclosures
     if getattr(entry, 'enclosures', None):
         for enc in entry.enclosures:
             href = enc.get('href') or enc.get('url')
             if href and enc.get('type', '').startswith('image/'):
                 return href
 
-    # 4. entry.links (RSS <link> tags)
+    # 5. entry.links (RSS <link> tags)
     for link in getattr(entry, 'links', []):
         href = link.get('href')
         if href and link.get('type', '').startswith('image/'):
             return href
 
-    # 5. HTML <img> in content[]
+    # 6. HTML <img> in content[]
     for c in entry.get('content', []):
         html = c.get('value', '')
         m = _IMG_REGEX.search(html)
         if m:
-            return m.group(1)
+            img_url = m.group(1)
+            # Handle relative URLs
+            if img_url and entry_url:
+                if img_url.startswith('//'):
+                    img_url = 'https:' + img_url
+                elif img_url.startswith('/'):
+                    parsed = urlparse(entry_url)
+                    img_url = f"{parsed.scheme}://{parsed.netloc}{img_url}"
+                elif not img_url.startswith(('http://', 'https://')):
+                    img_url = urljoin(entry_url, img_url)
+            return img_url
 
-    # 6. HTML <img> in summary
+    # 7. HTML <img> in summary
     summary = entry.get('summary', '')
     m = _IMG_REGEX.search(summary)
     if m:
-        return m.group(1)
+        img_url = m.group(1)
+        # Handle relative URLs
+        if img_url and entry_url:
+            if img_url.startswith('//'):
+                img_url = 'https:' + img_url
+            elif img_url.startswith('/'):
+                parsed = urlparse(entry_url)
+                img_url = f"{parsed.scheme}://{parsed.netlook}{img_url}"
+            elif not img_url.startswith(('http://', 'https://')):
+                img_url = urljoin(entry_url, img_url)
+        return img_url
 
-    # 7. Bluesky
+    # 8. Bluesky post images
     bsky_link = entry.get("link")
     if bsky_link and "bsky.app/profile" in bsky_link:
-        img = get_image_urls(bsky_link)
-        if img:
-            return img[0]
+        try:
+            img = get_image_urls(bsky_link)
+            if img:
+                return img[0]
+        except Exception as e:
+            print(f"Warning: Failed to get Bluesky images from {bsky_link}: {e}")
     
     return None

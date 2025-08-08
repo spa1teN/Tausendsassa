@@ -1,4 +1,4 @@
-# Tausendsassa Discord Bot
+# Tausendsassa Discord Bot (this README is outdated, will fix)
 
 A flexible, modular Discord bot featuring map pinning and RSS feed cogs, plus comprehensive console, file, and webhook logging.
 

@@ -95,7 +95,7 @@ class WebhookLogHandler(logging.Handler):
             
             embed = {
                 "title": f"{emoji_map.get(record.levelname, '📝')} {record.levelname} - {record.name}",
-                "description": f"```\n{message[:2000]}\n```",
+                "description": f"{message[:2000]}\n",
                 "color": self.colors.get(record.levelname, 0x808080),
                 "timestamp": datetime.utcnow().isoformat(),
                 "fields": [
@@ -126,15 +126,16 @@ class WebhookLogHandler(logging.Handler):
                 "username": "Tausendsassa Logger",
                 "avatar_url": "https://cdn.discordapp.com/attachments/123456789/rss-icon.png"
             }
-            
-            async with self.session.post(
-                self.webhook_url,
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            ) as resp:
-                if resp.status not in (200, 204):
-                    print(f"Webhook failed with status {resp.status}")
-        
+
+            if record.levelname != 'INFO':
+                async with self.session.post(
+                        self.webhook_url,
+                        json=payload,
+                        headers={"Content-Type": "application/json"}
+                ) as resp:
+                    if resp.status not in (200, 204):
+                        print(f"Webhook failed with status {resp.status}")
+
         except Exception as e:
             print(f"Error sending webhook: {e}")
 
@@ -149,26 +150,21 @@ logging.basicConfig(
     datefmt=DATE_FORMAT,
     handlers=[
         logging.StreamHandler(),
-        RotatingFileHandler("rssbot.log", maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+        RotatingFileHandler("logs/tausendsassa.log", maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
     ]
 )
 
 # Main bot logger
-log = logging.getLogger("rssbot")
-
-# ─── Config ─────────────────────────────────────────────────────────────────
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
-with open(CONFIG_PATH, encoding="utf-8") as f:
-    CONFIG = yaml.safe_load(f)
+log = logging.getLogger("tausendsassa")
 
 # ─── Intents & COG-Liste ────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 
-COGS = ["cogs.feeds", "cogs.map"]
+COGS = ["cogs.feeds", "cogs.map", "cogs.monitor"]
 
 # ─── Enhanced Bot-Klasse ────────────────────────────────────────────────────
-class RSSBot(commands.Bot):
+class Tausendsassa(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
         
@@ -197,7 +193,7 @@ class RSSBot(commands.Bot):
     
     def get_cog_logger(self, cog_name: str) -> logging.Logger:
         """Get or create a logger for a specific cog"""
-        logger_name = f"rssbot.{cog_name}"
+        logger_name = f"tausendsassa.{cog_name}"
         
         if logger_name not in self.cog_loggers:
             logger = logging.getLogger(logger_name)
@@ -303,7 +299,7 @@ if __name__ == "__main__":
     else:
         log.info("ℹ️ No webhook URL provided - using file/console logging only")
     
-    bot = RSSBot()
+    bot = Tausendsassa()
     
     try:
         bot.run(token)

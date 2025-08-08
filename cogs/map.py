@@ -2,86 +2,513 @@ import json
 import asyncio
 import aiohttp
 import io
+import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Tuple, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFont
 import requests
 from io import BytesIO
+import geopandas as gpd
+from shapely.geometry import box, Point
+import math
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+IMAGE_WIDTH = 2200
+BOT_OWNER_ID = 485051896655249419
 
-class MapCog(commands.Cog):
+class LocationModal(discord.ui.Modal, title='Pin Location'):
+    def __init__(self, cog, map_region: str):
+        super().__init__()
+        self.cog = cog
+        self.map_region = map_region
+
+    location = discord.ui.TextInput(
+        label='Location',
+        placeholder='e.g. Berlin, Deutschland or Paris, France...',
+        required=True,
+        max_length=100
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await self.cog._handle_pin_location(interaction, self.location.value)
+
+class StateSelectionView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        
+        # German states
+        states = [
+            ("Baden-Württemberg", "Baden-Württemberg"),
+            ("Bayern", "Bayern"), 
+            ("Berlin", "Berlin"),
+            ("Brandenburg", "Brandenburg"),
+            ("Bremen", "Bremen"),
+            ("Hamburg", "Hamburg"),
+            ("Hessen", "Hessen"),
+            ("Mecklenburg-Vorpommern", "Mecklenburg-Vorpommern"),
+            ("Niedersachsen", "Niedersachsen"),
+            ("Nordrhein-Westfalen", "Nordrhein-Westfalen"),
+            ("Rheinland-Pfalz", "Rheinland-Pfalz"),
+            ("Saarland", "Saarland"),
+            ("Sachsen", "Sachsen"),
+            ("Sachsen-Anhalt", "Sachsen-Anhalt"),
+            ("Schleswig-Holstein", "Schleswig-Holstein"),
+            ("Thüringen", "Thüringen")
+        ]
+
+        state_select = discord.ui.Select(
+            placeholder="Choose a German state...",
+            options=[discord.SelectOption(label=name, value=value) for name, value in states[:16]]  # Discord limit
+        )
+        state_select.callback = self.state_selected
+        self.add_item(state_select)
+
+    async def state_selected(self, interaction: discord.Interaction):
+        selected_state = interaction.data['values'][0]
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Generate state close-up map
+            state_image = await self.cog._generate_state_closeup(self.guild_id, selected_state)
+            if state_image:
+                filename = f"state_{selected_state}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                await interaction.followup.send(
+                    f"📍 **Close-up view of {selected_state}**", 
+                    file=discord.File(state_image, filename=filename),
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    f"❌ Could not generate map for {selected_state}",
+                    ephemeral=True
+                )
+        except Exception as e:
+            self.cog.log.error(f"Error generating state map: {e}")
+            await interaction.followup.send("❌ Error generating state map", ephemeral=True)
+
+    
+class MapMenuView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', region: str, guild_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.region = region
+        self.guild_id = guild_id
+
+    @discord.ui.button(
+        label="Popular Locations",
+        style=discord.ButtonStyle.secondary,
+        emoji="📊"
+    )
+    async def popular_locations(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        map_data = self.cog.maps.get(str(self.guild_id), {})
+        pins = map_data.get('pins', {})
+        
+        if not pins:
+            await interaction.followup.send("📍 No pins on the map yet!", ephemeral=True)
+            return
+        
+        # Group pins by location
+        location_groups = {}
+        for user_id, pin_data in pins.items():
+            rounded_lat = round(pin_data['lat'], 3)
+            rounded_lng = round(pin_data['lng'], 3)
+            location_key = (rounded_lat, rounded_lng)
+            
+            if location_key not in location_groups:
+                location_groups[location_key] = {
+                    'count': 0,
+                    'display_name': pin_data.get('display_name', pin_data.get('location', 'Unknown location')),
+                    'users': []
+                }
+            location_groups[location_key]['count'] += 1
+            location_groups[location_key]['users'].append(pin_data.get('username', 'Unknown'))
+        
+        # Create embed with popular locations
+        embed = discord.Embed(
+            title="📊 Popular Locations",
+            description=f"Locations with member pins ({len(pins)} total pins)",
+            color=0x7289da
+        )
+        
+        # Sort by count
+        sorted_locations = sorted(location_groups.values(), key=lambda x: x['count'], reverse=True)
+        
+        for i, location_data in enumerate(sorted_locations[:10]):  # Top 10
+            location = location_data['display_name']
+            if len(location) > 40:
+                location = location[:37] + "..."
+            
+            count = location_data['count']
+            users = location_data['users']
+            user_list = ", ".join(users[:3])  # Show first 3 users
+            if len(users) > 3:
+                user_list += f" +{len(users) - 3} more"
+            
+            embed.add_field(
+                name=f"{i+1}. {location}",
+                value=f"👥 {count} member{'s' if count > 1 else ''}",
+                inline=False
+            )
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(
+        label="State Close-up",
+        style=discord.ButtonStyle.secondary,
+        emoji="🇩🇪"
+    )
+    async def state_closeup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only show for German maps
+        if self.region not in ["germany", "germanyPlain"]:
+            await interaction.response.send_message("❌ State close-up is only available for German maps.", ephemeral=True)
+            return
+        
+        view = StateSelectionView(self.cog, self.guild_id)
+        await interaction.response.edit_message(content="**🔍 Select a German state for close-up view:**", view=view, embed=None)
+
+class MapPinButtonView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', region: str, guild_id: int):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.region = region
+        self.guild_id = guild_id
+
+    @discord.ui.button(
+        label="📍 My Pin",
+        style=discord.ButtonStyle.primary,
+        custom_id="map_pin_button"
+    )
+    async def pin_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user already has a pin
+        guild_id = str(interaction.guild.id)
+        user_id = str(interaction.user.id)
+        
+        if guild_id in self.cog.maps and user_id in self.cog.maps[guild_id].get('pins', {}):
+            # User has a pin - show current location and options
+            user_pin = self.cog.maps[guild_id]['pins'][user_id]
+            current_location = user_pin.get('display_name', 'Unknown')
+            
+            embed = discord.Embed(
+                title="📍 Your Current Location",
+                description=f"**Location:** {current_location}\n"
+                           f"**Added:** {user_pin.get('timestamp', 'Unknown')}",
+                color=0x7289da
+            )
+            
+            view = UserPinOptionsView(self.cog, self.region)
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        else:
+            # User doesn't have a pin - show modal directly
+            await interaction.response.send_modal(LocationModal(self.cog, self.region))
+
+    @discord.ui.button(
+        label="...",
+        style=discord.ButtonStyle.secondary,
+        custom_id="map_menu_button"
+    )
+    async def menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = MapMenuView(self.cog, self.region, self.guild_id)
+        await interaction.response.send_message(content="**Select an option:**", view=view, ephemeral=True)
+
+class UserPinOptionsView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', region: str):
+        super().__init__(timeout=300)  # 5 minutes timeout
+        self.cog = cog
+        self.region = region
+
+    @discord.ui.button(
+        label="📍 Change",
+        style=discord.ButtonStyle.primary,
+        emoji="🔄"
+    )
+    async def change_location(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(LocationModal(self.cog, self.region))
+
+    @discord.ui.button(
+        label="🗑️ Remove ",
+        style=discord.ButtonStyle.danger,
+        emoji="❌"
+    )
+    async def remove_location(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        guild_id = str(interaction.guild.id)
+        user_id = str(interaction.user.id)
+        
+        if guild_id not in self.cog.maps:
+            await interaction.followup.send("❌ No map for this server.", ephemeral=True)
+            return
+
+        if user_id not in self.cog.maps[guild_id]['pins']:
+            await interaction.followup.send("❌ You don't have a pin on the map.", ephemeral=True)
+            return
+
+        old_location = self.cog.maps[guild_id]['pins'][user_id].get('display_name', 'Unknown')
+        del self.cog.maps[guild_id]['pins'][user_id]
+        await self.cog._save_data(guild_id)
+        
+        # Invalidate cache since pins changed
+        await self.cog._invalidate_map_cache(guild_id)
+        
+        channel_id = self.cog.maps[guild_id]['channel_id']
+        await self.cog._update_map(int(guild_id), channel_id)
+        await self.cog._update_global_overview()
+
+        await interaction.followup.send(
+            f"✅ Your pin has been removed from the map!\n"
+            f"📍 **Removed location:** {old_location}\n"
+            f"🗺️ The map has been updated in <#{channel_id}>.",
+            ephemeral=True
+        )
+
+
+class MapV2Cog(commands.Cog):
     """Cog for managing maps with user pins displayed as images."""
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.log = bot.get_cog_logger("map")
-        self.data_file = Path(__file__).parent.parent / "map_data.json"
-        self.maps = self._load_data()
         
-        # Map region configurations for static map API
+        # New data structure
+        self.data_dir = Path(__file__).parent.parent / "config"
+        self.data_dir.mkdir(exist_ok=True)
+        
+        self.cache_dir = Path(__file__).parent.parent / "data/map_cache"
+        self.cache_dir.mkdir(exist_ok=True)
+        
+        # Global overview config file
+        self.global_config_file = self.data_dir / "map_global_config.json"
+        self.global_config = self._load_global_config()
+        
+        self.maps = self._load_all_data()
+        
+        # In-memory cache for base maps - now unlimited time
+        self.base_map_cache = {}
+        
+        # Map region configurations
+        self.base_image_width = IMAGE_WIDTH
         self.map_configs = {
             "world": {
-                "center_lat": 20.0,
+                "center_lat": 0.0,
                 "center_lng": 0.0,
-                "zoom": 2,
-                "bounds": [[-85, -180], [85, 180]],
-                "width": 800,
-                "height": 400
+                "bounds": [[-65.0, -180.0], [85.0, 180.0]]
             },
             "europe": {
-                "center_lat": 54.5,
-                "center_lng": 15.0,
-                "zoom": 4,
-                "bounds": [[34.5, -25.0], [71.0, 40.0]],
-                "width": 800,
-                "height": 600
+                "center_lat": 57.5,
+                "center_lng": 12.0,
+                "bounds": [[34.5, -25.0], [73.0, 40.0]]
             },
             "germany": {
                 "center_lat": 51.1657,
                 "center_lng": 10.4515,
-                "zoom": 6,
-                "bounds": [[47.2701, 5.8663], [55.0583, 15.0419]],
-                "width": 600,
-                "height": 800
+                "bounds": [[47.2701, 5.8663], [55.0583, 15.0419]]
             }
         }
-        
-        # Pin colors for different users
-        self.pin_colors = [
-            "#FF4444", "#44FF44", "#4444FF", "#FFFF44", "#FF44FF",
-            "#44FFFF", "#FF8844", "#88FF44", "#4488FF", "#FF4488"
-        ]
 
-    def _load_data(self) -> Dict:
-        """Load map data from JSON file."""
+    def _load_global_config(self) -> Dict:
+        """Load global overview configuration."""
         try:
-            if self.data_file.exists():
-                with self.data_file.open('r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, dict):
-                        return data
-            self.log.info("No existing map data found, starting with empty maps")
+            if self.global_config_file.exists():
+                with self.global_config_file.open('r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            self.log.error(f"Failed to load global config: {e}")
+        return {}
+
+    async def _save_global_config(self):
+        """Save global overview configuration."""
+        try:
+            with self.global_config_file.open('w', encoding='utf-8') as f:
+                json.dump(self.global_config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self.log.error(f"Failed to save global config: {e}")
+
+    async def cog_load(self):
+        """Called when the cog is loaded. Re-register persistent views."""
+        try:
+            # Register all persistent views for existing maps
+            for guild_id, map_data in self.maps.items():
+                region = map_data.get('region', 'world')
+                view = MapPinButtonView(self, region, int(guild_id))
+                self.bot.add_view(view)
+                self.log.info(f"Re-registered persistent view for guild {guild_id}")
+        except Exception as e:
+            self.log.error(f"Error re-registering views: {e}")
+
+    def _get_cache_key(self, guild_id: int) -> str:
+        """Generate a cache key based on guild pins."""
+        map_data = self.maps.get(str(guild_id), {})
+        pins = map_data.get('pins', {})
+        region = map_data.get('region', 'world')
+        
+        # Create hash from pins and region
+        pin_data = {}
+        for user_id, pin in pins.items():
+            pin_data[user_id] = (pin['lat'], pin['lng'])
+        
+        cache_string = f"{region}:{json.dumps(pin_data, sort_keys=True)}"
+        return hashlib.md5(cache_string.encode()).hexdigest()
+
+    def _calculate_image_dimensions(self, region: str) -> Tuple[int, int]:
+        """Calculate image dimensions based on region bounds and fixed width."""
+        config = self.map_configs[region]
+        (lat0, lon0), (lat1, lon1) = config["bounds"]
+        
+        # Calculate aspect ratio from geographic bounds
+        lat_range = lat1 - lat0
+        lon_range = lon1 - lon0
+        
+        # Use Web Mercator projection for aspect ratio calculation
+        # Convert latitude to Web Mercator Y coordinates for proper scaling
+        import math
+        
+        def lat_to_mercator_y(lat):
+            return math.log(math.tan((90 + lat) * math.pi / 360))
+        
+        y0 = lat_to_mercator_y(lat0)
+        y1 = lat_to_mercator_y(lat1)
+        mercator_y_range = y1 - y0
+        
+        # Calculate height based on mercator projection ratio
+        aspect_ratio = mercator_y_range / (lon_range * math.pi / 180)
+        height = int(self.base_image_width * aspect_ratio)
+        
+        return self.base_image_width, height
+
+    def _get_base_map_cache_key(self, region: str) -> str:
+        """Generate cache key for base map (without pins)."""
+        width, height = self._calculate_image_dimensions(region)
+        return f"base_{region}_{width}_{height}"
+
+    async def _get_cached_base_map(self, region: str) -> Optional[Image.Image]:
+        """Get cached base map if available."""
+        cache_key = self._get_base_map_cache_key(region)
+        
+        # Check in-memory cache first
+        if cache_key in self.base_map_cache:
+            self.log.info(f"Using in-memory cached base map for {region}")
+            return self.base_map_cache[cache_key].copy()
+        
+        # Check disk cache - unlimited time now
+        cache_file = self.cache_dir / f"{cache_key}.png"
+        if cache_file.exists():
+            try:
+                image = Image.open(cache_file)
+                # Store in memory cache too
+                self.base_map_cache[cache_key] = image.copy()
+                self.log.info(f"Using disk cached base map for {region}")
+                return image.copy()
+            except Exception as e:
+                self.log.warning(f"Error loading cached base map: {e}")
+        
+        return None
+
+    async def _cache_base_map(self, region: str, image: Image.Image):
+        """Cache base map both in memory and on disk."""
+        cache_key = self._get_base_map_cache_key(region)
+        
+        # Store in memory
+        self.base_map_cache[cache_key] = image.copy()
+        
+        # Store on disk
+        try:
+            cache_file = self.cache_dir / f"{cache_key}.png"
+            image.save(cache_file, 'PNG', optimize=True)
+            self.log.info(f"Cached base map for {region}")
+        except Exception as e:
+            self.log.warning(f"Error caching base map to disk: {e}")
+
+    async def _get_cached_map(self, guild_id: int) -> Optional[discord.File]:
+        """Get cached final map if available - unlimited time now."""
+        cache_key = self._get_cache_key(guild_id)
+        cache_file = self.cache_dir / f"map_{guild_id}_{cache_key}.png"
+        
+        if cache_file.exists():
+            try:
+                filename = f"map_{cache_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                self.log.info(f"Using cached final map for guild {guild_id}")
+                return discord.File(cache_file, filename=filename)
+            except Exception as e:
+                self.log.warning(f"Error loading cached map: {e}")
+        
+        return None
+
+    async def _cache_map(self, guild_id: int, image_buffer: BytesIO):
+        """Cache the final map image."""
+        try:
+            cache_key = self._get_cache_key(guild_id)
+            cache_file = self.cache_dir / f"map_{guild_id}_{cache_key}.png"
+            
+            image_buffer.seek(0)
+            with open(cache_file, 'wb') as f:
+                f.write(image_buffer.read())
+            
+            self.log.info(f"Cached final map for guild {guild_id}")
+        except Exception as e:
+            self.log.warning(f"Error caching final map: {e}")
+
+    async def _invalidate_map_cache(self, guild_id: int):
+        """Invalidate cached maps for a guild."""
+        try:
+            # Remove all cached maps for this guild
+            cache_pattern = f"map_{guild_id}_*.png"
+            for cache_file in self.cache_dir.glob(cache_pattern):
+                cache_file.unlink()
+            self.log.info(f"Invalidated cache for guild {guild_id}")
+        except Exception as e:
+            self.log.warning(f"Error invalidating cache: {e}")
+
+    def _load_all_data(self) -> Dict:
+        """Load all guild map data from individual files."""
+        maps = {}
+        try:
+            for guild_dir in self.data_dir.iterdir():
+                if guild_dir.is_dir() and guild_dir.name.isdigit():
+                    guild_id = guild_dir.name
+                    map_file = guild_dir / "map.json"
+                    if map_file.exists():
+                        try:
+                            with map_file.open('r', encoding='utf-8') as f:
+                                maps[guild_id] = json.load(f)
+                        except Exception as e:
+                            self.log.error(f"Failed to load map data for guild {guild_id}: {e}")
         except Exception as e:
             self.log.error(f"Failed to load map data: {e}")
         
-        return {}
+        return maps
 
-    async def _save_data(self):
-        """Save map data to JSON file."""
+    async def _save_data(self, guild_id: str):
+        """Save map data for specific guild."""
         try:
-            if self.data_file.exists():
-                backup_file = self.data_file.with_suffix('.json.bak')
-                self.data_file.replace(backup_file)
+            guild_dir = self.data_dir / guild_id
+            guild_dir.mkdir(exist_ok=True)
             
-            with self.data_file.open('w', encoding='utf-8') as f:
-                json.dump(self.maps, f, indent=2, ensure_ascii=False)
+            map_file = guild_dir / "map.json"
+            
+            if guild_id in self.maps:
+                # Create backup if exists
+                if map_file.exists():
+                    backup_file = guild_dir / "map.json.bak"
+                    map_file.replace(backup_file)
+                
+                with map_file.open('w', encoding='utf-8') as f:
+                    json.dump(self.maps[guild_id], f, indent=2, ensure_ascii=False)
+            else:
+                # Remove file if guild data was deleted
+                if map_file.exists():
+                    map_file.unlink()
+                    
         except Exception as e:
-            self.log.error(f"Failed to save map data: {e}")
+            self.log.error(f"Failed to save map data for guild {guild_id}: {e}")
 
     async def _geocode_location(self, location: str) -> Optional[Tuple[float, float, str]]:
         """Geocode a location string to lat/lng coordinates and return display name."""
@@ -94,7 +521,7 @@ class MapCog(commands.Cog):
                 'addressdetails': 1
             }
             headers = {
-                'User-Agent': 'DiscordBot-MapPins/1.0'
+                'User-Agent': 'DiscordBot-MapPins/2.0'
             }
             
             async with aiohttp.ClientSession() as session:
@@ -114,245 +541,531 @@ class MapCog(commands.Cog):
             self.log.error(f"Geocoding failed for '{location}': {e}")
             return None
 
-    def _deg2num(self, lat_deg: float, lon_deg: float, zoom: int) -> Tuple[float, float]:
-        """Convert lat/lng to tile coordinates."""
-        import math
-        lat_rad = math.radians(lat_deg)
-        n = 2.0 ** zoom
-        xtile = (lon_deg + 180.0) / 360.0 * n
-        ytile = (1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n
-        return (xtile, ytile)
-
-    def _lat_lng_to_pixel(self, lat: float, lng: float, center_lat: float, center_lng: float, 
-                         zoom: int, width: int, height: int) -> Tuple[int, int]:
-        """Convert lat/lng coordinates to pixel coordinates on the map image."""
-        import math
-        
-        # Convert both the point and center to Web Mercator coordinates
-        def lat_lng_to_web_mercator(lat_deg, lng_deg):
-            lat_rad = math.radians(lat_deg)
-            x = lng_deg * 20037508.34 / 180
-            y = math.log(math.tan((90 + lat_deg) * math.pi / 360)) / (math.pi / 180)
-            y = y * 20037508.34 / 180
-            return x, y
-        
-        # Get Web Mercator coordinates
-        point_x, point_y = lat_lng_to_web_mercator(lat, lng)
-        center_x, center_y = lat_lng_to_web_mercator(center_lat, center_lng)
-        
-        # Calculate the scale for this zoom level
-        # At zoom level 0, the entire world (20037508.34 * 2 mercator units) fits in 256 pixels
-        scale = 256 * (2 ** zoom) / (20037508.34 * 2)
-        
-        # Convert to pixel offset from center
-        pixel_x = (point_x - center_x) * scale
-        pixel_y = (center_y - point_y) * scale  # Note: Y is inverted
-        
-        # Add to center of image
-        final_x = width // 2 + pixel_x
-        final_y = height // 2 + pixel_y
-        
-        return (int(final_x), int(final_y))
-
-    async def _download_map_tiles(self, center_lat: float, center_lng: float, zoom: int, 
-                                width: int, height: int) -> Optional[Image.Image]:
-        """Download and stitch map tiles from OpenStreetMap."""
+    async def _render_geopandas_map(self, region: str, width: int, height: int) -> Tuple[Image.Image, callable]:
+        """Render map using geopandas for all regions."""
         try:
-            import math
+            # Load shapefiles
+            base = Path(__file__).parent.parent / "data"
+            world = gpd.read_file(base / "ne_10m_admin_0_countries.shp")
+            states = gpd.read_file(base / "ne_10m_admin_1_states_provinces.shp") 
+            land = gpd.read_file(base / "ne_10m_land.shp")
+            lakes = gpd.read_file(base / "ne_10m_lakes.shp")
+            rivers = gpd.read_file(base / "ne_10m_rivers_lake_centerlines.shp")
             
-            # Calculate which tiles we need
-            center_x, center_y = self._deg2num(center_lat, center_lng, zoom)
+            # Get bounds based on region
+            config = self.map_configs[region]
+            (lat0, lon0), (lat1, lon1) = config["bounds"]
+            minx, miny, maxx, maxy = lon0, lat0, lon1, lat1
             
-            # Calculate tile bounds - we need enough tiles to cover the image
-            tiles_x = math.ceil(width / 256) + 2
-            tiles_y = math.ceil(height / 256) + 2
+            # For germany regions, try to get better bounds from actual data
+            if region in ["germany"]:
+                try:
+                    de = world[world["ADMIN"] == "Germany"].geometry.unary_union
+                    if de is not None:
+                        de_buf = de.buffer(0.1)  # Smaller buffer for better fit
+                        bounds = de_buf.bounds
+                        if all(math.isfinite(v) for v in bounds) and bounds[2] > bounds[0] and bounds[3] > bounds[1]:
+                            minx, miny, maxx, maxy = bounds
+                except Exception as e:
+                    self.log.warning(f"Could not get Germany bounds from data: {e}")
             
-            start_x = int(center_x - tiles_x // 2)
-            start_y = int(center_y - tiles_y // 2)
-            
+            bbox = box(minx, miny, maxx, maxy)
+
+            # Projection function
+            def to_px(lat, lon):
+                x = (lon - minx) / (maxx - minx) * width
+                y = (maxy - lat) / (maxy - miny) * height
+                return (int(x), int(y))
+
             # Create base image
-            tile_width = tiles_x * 256
-            tile_height = tiles_y * 256
-            base_image = Image.new('RGB', (tile_width, tile_height))
-            
-            # Store the actual center position in pixels for later coordinate conversion
-            actual_center_x = tiles_x // 2 * 256 + (center_x - int(center_x)) * 256
-            actual_center_y = tiles_y // 2 * 256 + (center_y - int(center_y)) * 256
-            
-            # Download and place tiles
-            async with aiohttp.ClientSession() as session:
-                for x_offset in range(tiles_x):
-                    for y_offset in range(tiles_y):
-                        tile_x = start_x + x_offset
-                        tile_y = start_y + y_offset
-                        
-                        # Skip invalid tile coordinates
-                        if tile_x < 0 or tile_y < 0 or tile_x >= (2 ** zoom) or tile_y >= (2 ** zoom):
-                            continue
-                        
-                        # OpenStreetMap tile URL
-                        url = f"https://tile.openstreetmap.org/{zoom}/{tile_x}/{tile_y}.png"
-                        
+            img = Image.new("RGB", (width, height), (168, 213, 242))  # Ocean blue
+            draw = ImageDraw.Draw(img)
+
+            # Draw land
+            for poly in land.geometry:
+                if not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 3:
+                            draw.polygon(pts, fill=(240, 240, 220), outline=None)
+                    except:
+                        continue
+
+            # Draw lakes
+            for poly in lakes.geometry:
+                if poly is None or not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 3:
+                            draw.polygon(pts, fill=(168, 213, 242))
+                    except:
+                        continue
+
+            # Determine line widths based on region and image size
+            if region == "world":
+                river_width = max(1, int(width / 3000))  # Very thin for world map
+                country_width = max(1, int(width / 1500))
+                #state_width = max(1, int(width / 3000))
+                state_width = 0
+            elif region == "europe":
+                river_width = max(1, int(width / 2000))
+                country_width = max(1, int(width / 1000))
+                #state_width = max(1, int(width / 2000))
+                state_width = 0
+            else:  # germany
+                river_width = max(2, int(width / 1200))
+                country_width = max(2, int(width / 600))
+                state_width = max(1, int(width / 1200))
+
+            # Draw rivers with appropriate width
+            for line in rivers.geometry:
+                if line is None or not line.intersects(bbox):
+                    continue
+                for seg in getattr(line, "geoms", [line]):
+                    try:
+                        pts = [to_px(y, x) for x, y in seg.coords]
+                        if len(pts) >= 2:
+                            draw.line(pts, fill=(60, 60, 200), width=river_width)
+                    except:
+                        continue
+
+            # Draw boundaries with appropriate widths
+            for layer, color, width_multiplier in [
+                (world.geometry, (0, 0, 0), country_width),
+                (states.geometry, (100, 100, 100), state_width),
+            ]:
+                for poly in layer:
+                    if poly is None or not poly.intersects(bbox):
+                        continue
+                    for ring in getattr(poly, "geoms", [poly]):
                         try:
-                            headers = {'User-Agent': 'DiscordBot-MapPins/1.0'}
-                            async with session.get(url, headers=headers, timeout=10) as response:
-                                if response.status == 200:
-                                    tile_data = await response.read()
-                                    tile_image = Image.open(BytesIO(tile_data))
-                                    
-                                    # Place tile in the base image
-                                    x_pos = x_offset * 256
-                                    y_pos = y_offset * 256
-                                    base_image.paste(tile_image, (x_pos, y_pos))
-                                else:
-                                    self.log.warning(f"Failed to download tile {tile_x}/{tile_y}: {response.status}")
-                        except Exception as e:
-                            self.log.warning(f"Error downloading tile {tile_x}/{tile_y}: {e}")
-                            # Fill with water color if tile fails
-                            tile_image = Image.new('RGB', (256, 256), color='#a8d5f2')
-                            x_pos = x_offset * 256
-                            y_pos = y_offset * 256
-                            base_image.paste(tile_image, (x_pos, y_pos))
-            
-            # Crop to desired size, centered on the actual center
-            crop_x = int(actual_center_x - width // 2)
-            crop_y = int(actual_center_y - height // 2)
-            
-            # Ensure crop coordinates are valid
-            crop_x = max(0, min(crop_x, tile_width - width))
-            crop_y = max(0, min(crop_y, tile_height - height))
-            
-            final_image = base_image.crop((crop_x, crop_y, crop_x + width, crop_y + height))
-            
-            return final_image
+                            pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                            if len(pts) >= 2:
+                                if width_multiplier != 0:
+                                    draw.line(pts, fill=color, width=width_multiplier)
+                        except:
+                            continue
+                
+            return img, to_px
             
         except Exception as e:
-            self.log.error(f"Failed to download map tiles: {e}")
-            # Return a simple colored background as fallback
-            return Image.new('RGB', (width, height), color='#a8d5f2')
+            self.log.error(f"Failed to render geopandas map for {region}: {e}")
+            # Fallback
+            img = Image.new("RGB", (width, height), (168, 213, 242))
+            
+            def fallback_projection(lat, lon):
+                x = (lon - minx) / (maxx - minx) * width
+                y = (maxy - lat) / (maxy - miny) * height
+                return (int(x), int(y))
+            
+            return img, fallback_projection
 
-    async def _generate_map_image(self, guild_id: int) -> Optional[discord.File]:
-        """Generate a map image with pins for the guild."""
+    async def _generate_state_closeup(self, guild_id: int, state_name: str) -> Optional[BytesIO]:
+        """Generate a close-up map of a German state."""
         try:
-            map_data = self.maps.get(str(guild_id), {})
-            region = map_data.get('region', 'world')
-            pins = map_data.get('pins', {})
-            config = self.map_configs[region]
+            # Load German states shapefile
+            base = Path(__file__).parent.parent / "data"
+            states = gpd.read_file(base / "ne_10m_admin_1_states_provinces.shp")
             
-            width, height = config['width'], config['height']
+            # Find the state - try different approaches for better matching
+            german_states = states[states["admin"] == "Germany"]
             
-            # Download real map tiles as base
-            base_map = await self._download_map_tiles(
-                config['center_lat'], config['center_lng'], 
-                config['zoom'], width, height
-            )
+            # Try exact match first
+            state_row = german_states[german_states["name"] == state_name]
             
-            if not base_map:
-                # Fallback to simple background
-                base_map = Image.new('RGB', (width, height), color='#a8d5f2')
+            # If no exact match, try case-insensitive contains
+            if state_row.empty:
+                state_row = german_states[german_states["name"].str.contains(state_name, case=False, na=False)]
             
-            draw = ImageDraw.Draw(base_map)
+            # Try alternative name matching
+            if state_row.empty:
+                # Some common alternatives
+                name_alternatives = {
+                    "Bayern": "Bavaria",
+                    "Nordrhein-Westfalen": "North Rhine-Westphalia",
+                    "Baden-Württemberg": "Baden-Wurttemberg",
+                    "Thüringen": "Thuringia"
+                }
+                alt_name = name_alternatives.get(state_name, state_name)
+                state_row = german_states[german_states["name"].str.contains(alt_name, case=False, na=False)]
             
-            # Group pins by location to count duplicates
-            location_groups = {}
-            for user_id, pin_data in pins.items():
-                # Round coordinates to group nearby pins (within ~1km)
-                rounded_lat = round(pin_data['lat'], 3)  # ~111m precision
-                rounded_lng = round(pin_data['lng'], 3)
-                location_key = (rounded_lat, rounded_lng)
-                
-                if location_key not in location_groups:
-                    location_groups[location_key] = {
-                        'count': 0,
-                        'display_name': pin_data.get('display_name', pin_data.get('location', 'Unknown')),
-                        'lat': pin_data['lat'],
-                        'lng': pin_data['lng']
-                    }
-                location_groups[location_key]['count'] += 1
+            if state_row.empty:
+                self.log.warning(f"State {state_name} not found. Available states: {list(german_states['name'].values)}")
+                return None
             
-            # Try to load fonts
+            # Get state geometry and bounds
+            state_geom = state_row.geometry.iloc[0]
+            bounds = state_geom.bounds
+            minx, miny, maxx, maxy = bounds
+            
+            # Add padding based on state size (proportional padding)
+            width_range = maxx - minx
+            height_range = maxy - miny
+            padding_x = width_range * 0.05  # 5% padding
+            padding_y = height_range * 0.05
+            
+            minx -= padding_x
+            maxx += padding_x
+            miny -= padding_y
+            maxy += padding_y
+            
+            bbox = box(minx, miny, maxx, maxy)
+            
+            # Calculate image dimensions maintaining aspect ratio
+            geo_width = maxx - minx
+            geo_height = maxy - miny
+
+            import math
+
+            def lat_to_mercator_y(lat):
+                return math.log(math.tan((90 + lat) * math.pi / 360))
+
+            y0 = lat_to_mercator_y(miny)
+            y1 = lat_to_mercator_y(maxy)
+            mercator_y_range = y1 - y0
+
+            lon_range_radians = geo_width * math.pi / 180
+            aspect_ratio = mercator_y_range / lon_range_radians
+
+            width = 1400
+            height = int(width * aspect_ratio)
+            
+            # Projection function
+            def to_px(lat, lon):
+                x = (lon - minx) / (maxx - minx) * width
+                y = (maxy - lat) / (maxy - miny) * height
+                return (int(x), int(y))
+
+            # Load additional data
+            world = gpd.read_file(base / "ne_10m_admin_0_countries.shp")
+            land = gpd.read_file(base / "ne_10m_land.shp")
+            lakes = gpd.read_file(base / "ne_10m_lakes.shp")
+            rivers = gpd.read_file(base / "ne_10m_rivers_lake_centerlines.shp")
+            
+            # Create image
+            img = Image.new("RGB", (width, height), (168, 213, 242))
+            draw = ImageDraw.Draw(img)
+
+            # Draw land - use standard land color
+            for poly in land.geometry:
+                if not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 3:
+                            draw.polygon(pts, fill=(240, 240, 220), outline=None)
+                    except:
+                        continue
+
+            # Draw lakes
+            for poly in lakes.geometry:
+                if poly is None or not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 3:
+                            draw.polygon(pts, fill=(168, 213, 242))
+                    except:
+                        continue
+
+            # Calculate appropriate line widths for state view
+            river_width = max(1, int(width / 800))
+            country_width = max(2, int(width / 400))
+            state_width = max(1, int(width / 800))
+
+            # Draw rivers
+            for line in rivers.geometry:
+                if line is None or not line.intersects(bbox):
+                    continue
+                for seg in getattr(line, "geoms", [line]):
+                    try:
+                        pts = [to_px(y, x) for x, y in seg.coords]
+                        if len(pts) >= 2:
+                            draw.line(pts, fill=(60, 60, 200), width=river_width)
+                    except:
+                        continue
+
+            # Draw boundaries
+            for layer, color, w in [
+                (world.geometry, (0, 0, 0), country_width),
+                (states.geometry, (100, 100, 100), state_width),
+            ]:
+                for poly in layer:
+                    if poly is None or not poly.intersects(bbox):
+                        continue
+                    for ring in getattr(poly, "geoms", [poly]):
+                        try:
+                            pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                            if len(pts) >= 2:
+                                draw.line(pts, fill=color, width=w)
+                        except:
+                            continue
+
+            # Highlight the selected state with a subtle color and border
             try:
-                pin_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
-                count_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
-            except:
-                try:
-                    pin_font = ImageFont.truetype("arial.ttf", 14)
-                    count_font = ImageFont.truetype("arial.ttf", 11)
-                except:
-                    pin_font = ImageFont.load_default()
-                    count_font = ImageFont.load_default()
+                if hasattr(state_geom, 'exterior'):
+                    # Single polygon
+                    coords_list = [state_geom.exterior.coords]
+                else:
+                    # MultiPolygon
+                    coords_list = [ring.exterior.coords for ring in state_geom.geoms]
+                
+                for coords in coords_list:
+                    pts = [to_px(y, x) for x, y in coords]
+                    if len(pts) >= 3:
+                        # Subtle highlight - slightly different land color
+                        draw.polygon(pts, fill=(250, 250, 200), outline=(200, 0, 0), width=3)
+            except Exception as e:
+                self.log.warning(f"Could not highlight state {state_name}: {e}")
+
+            # Draw pins for this guild in the state area
+            map_data = self.maps.get(str(guild_id), {})
+            pins = map_data.get('pins', {})
             
-            # Draw pins for each unique location
-            for location_key, location_data in location_groups.items():
-                lat, lng = location_data['lat'], location_data['lng']
-                count = location_data['count']
+            # Calculate pin size based on image height
+            base_pin_size = int(height * 16 / 2400)  # Scale based on image height
+            
+            # Group overlapping pins
+            pin_groups = self._group_overlapping_pins(pins, to_px, base_pin_size)
+            
+            for group in pin_groups:
+                x, y = group['position']
+                count = group['count']
                 
-                # Convert coordinates to pixel position
-                x, y = self._lat_lng_to_pixel(
-                    lat, lng, 
-                    config['center_lat'], config['center_lng'],
-                    config['zoom'], width, height
-                )
-                
-                # Skip if pin is outside the image
-                if x < 10 or x >= width-10 or y < 10 or y >= height-10:
+                # Skip if outside image bounds
+                if x < base_pin_size or x >= width - base_pin_size or y < base_pin_size or y >= height - base_pin_size:
                     continue
                 
-                # Pin size varies by count (more people = bigger pin)
-                base_pin_size = 8
-                pin_size = min(base_pin_size + (count - 1) * 2, 20)  # Max size 20
-                
-                # Pin color - red for single, darker red for multiple
-                pin_color = '#FF4444' if count == 1 else '#CC0000'
+                # Calculate pin size based on count
+                pin_size = base_pin_size + (count - 1) * 3
+                pin_color = '#FF4444'
                 
                 # Draw pin shadow
                 shadow_offset = 2
                 draw.ellipse([
-                    x - pin_size + shadow_offset, 
-                    y - pin_size + shadow_offset, 
-                    x + pin_size + shadow_offset, 
+                    x - pin_size + shadow_offset,
+                    y - pin_size + shadow_offset,
+                    x + pin_size + shadow_offset,
                     y + pin_size + shadow_offset
                 ], fill='#00000080')
                 
                 # Draw pin
-                draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size], 
+                draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
                            fill=pin_color, outline='white', width=2)
                 
-                # Draw count if more than 1 person
+                # Draw count if multiple pins
                 if count > 1:
-                    count_text = str(count)
-                    
-                    # Get text dimensions
-                    bbox = draw.textbbox((0, 0), count_text, font=count_font)
-                    text_width = bbox[2] - bbox[0]
-                    text_height = bbox[3] - bbox[1]
-                    
-                    # Position count label above the pin
-                    text_x = x - text_width // 2
-                    text_y = y - pin_size - text_height - 5
-                    
-                    # Ensure text stays within bounds
-                    text_x = max(2, min(text_x, width - text_width - 2))
-                    text_y = max(2, text_y)
-                    
-                    # Draw text background (rounded rectangle)
-                    bg_padding = 3
-                    bg_rect = [
-                        text_x - bg_padding, 
-                        text_y - bg_padding,
-                        text_x + text_width + bg_padding, 
-                        text_y + text_height + bg_padding
-                    ]
-                    draw.rounded_rectangle(bg_rect, radius=8, fill='white', outline='black', width=1)
-                    
-                    # Draw count text
-                    draw.text((text_x, text_y), count_text, fill='black', font=count_font)
+                    try:
+                        # Try to load a font, fallback to default
+                        try:
+                            font = ImageFont.truetype("arial.ttf", pin_size)
+                        except:
+                            font = ImageFont.load_default()
+                        
+                        text = str(count)
+                        bbox = draw.textbbox((0, 0), text, font=font)
+                        text_width = bbox[2] - bbox[0]
+                        text_height = bbox[3] - bbox[1]
+                        text_x = x - text_width // 2
+                        text_y = y - text_height // 2
+                        draw.text((text_x, text_y), text, fill='white', font=font)
+                    except:
+                        # Fallback without font
+                        draw.text((x-5, y-5), str(count), fill='white')
+
+            # Convert to BytesIO
+            img_buffer = BytesIO()
+            img.save(img_buffer, format='PNG', optimize=True)
+            img_buffer.seek(0)
+            return img_buffer
+            
+        except Exception as e:
+            self.log.error(f"Failed to generate state closeup for {state_name}: {e}")
+            return None
+        
+    def _group_overlapping_pins(self, pins: Dict, projection_func: callable, base_pin_size: int) -> List[Dict]:
+        """Group overlapping pins together."""
+        if not pins:
+            return []
+        
+        # Convert pins to pixel coordinates
+        pin_positions = []
+        for user_id, pin_data in pins.items():
+            lat, lng = pin_data['lat'], pin_data['lng']
+            x, y = projection_func(lat, lng)
+            pin_positions.append({
+                'user_id': user_id,
+                'position': (x, y),
+                'data': pin_data
+            })
+        
+        # Group pins that are close together
+        groups = []
+        used_pins = set()
+        overlap_threshold = base_pin_size * 2  # Pins closer than this will be grouped
+        
+        for i, pin in enumerate(pin_positions):
+            if i in used_pins:
+                continue
+                
+            group = {
+                'position': pin['position'],
+                'count': 1,
+                'pins': [pin]
+            }
+            used_pins.add(i)
+            
+            # Find nearby pins
+            for j, other_pin in enumerate(pin_positions):
+                if j in used_pins or j == i:
+                    continue
+                
+                # Calculate distance
+                dx = pin['position'][0] - other_pin['position'][0]
+                dy = pin['position'][1] - other_pin['position'][1]
+                distance = math.sqrt(dx*dx + dy*dy)
+                
+                if distance < overlap_threshold:
+                    group['pins'].append(other_pin)
+                    group['count'] += 1
+                    used_pins.add(j)
+            
+            # Calculate center position for grouped pins
+            if group['count'] > 1:
+                center_x = sum(p['position'][0] for p in group['pins']) // group['count']
+                center_y = sum(p['position'][1] for p in group['pins']) // group['count']
+                group['position'] = (center_x, center_y)
+            
+            groups.append(group)
+        
+        return groups
+
+    async def _generate_map_image(self, guild_id: int) -> Optional[discord.File]:
+        """Generate a map image with pins for the guild."""
+        try:
+            # Check for cached final map first
+            cached_map = await self._get_cached_map(guild_id)
+            if cached_map:
+                return cached_map
+
+            map_data = self.maps.get(str(guild_id), {})
+            region = map_data.get('region', 'world')
+            pins = map_data.get('pins', {})
+            
+            # Calculate dimensions based on region
+            width, height = self._calculate_image_dimensions(region)
+            if region == "world" or region == "europe":
+                height = int(height * 0.8)
+            
+            # Try to get cached base map first
+            base_map = await self._get_cached_base_map(region)
+            projection_func = None
+            
+            if not base_map:
+                # Generate new base map using geopandas for all regions
+                base_map, projection_func = await self._render_geopandas_map(region, width, height)
+                
+                if base_map:
+                    # Cache the new base map
+                    await self._cache_base_map(region, base_map)
+                else:
+                    # Fallback to simple background
+                    base_map = Image.new('RGB', (width, height), color=(168, 213, 242))
+            else:
+                # For cached maps, recreate the projection function
+                config = self.map_configs[region]
+                (lat0, lon0), (lat1, lon1) = config["bounds"]
+                minx, miny, maxx, maxy = lon0, lat0, lon1, lat1
+                
+                # For germany regions, try to get better bounds
+                if region in ["germany"]:
+                    try:
+                        base_path = Path(__file__).parent.parent / "data"
+                        world = gpd.read_file(base_path / "ne_10m_admin_0_countries.shp")
+                        de = world[world["ADMIN"] == "Germany"].geometry.unary_union
+                        if de is not None:
+                            de_buf = de.buffer(0.1)  # Smaller buffer
+                            bounds = de_buf.bounds
+                            if all(math.isfinite(v) for v in bounds) and bounds[2] > bounds[0] and bounds[3] > bounds[1]:
+                                minx, miny, maxx, maxy = bounds
+                    except Exception as e:
+                        self.log.warning(f"Could not recreate Germany bounds: {e}")
+                
+                def to_px(lat, lon):
+                    x = (lon - minx) / (maxx - minx) * width
+                    y = (maxy - lat) / (maxy - miny) * height
+                    return (int(x), int(y))
+                
+                projection_func = to_px
+            
+            # Calculate pin size based on image height
+            base_pin_size = int(height * 16 / 2400)  # Scale based on original germany map ratio
+            
+            # Group overlapping pins
+            pin_groups = self._group_overlapping_pins(pins, projection_func, base_pin_size)
+            
+            # Draw pins on the map
+            draw = ImageDraw.Draw(base_map)
+            
+            for group in pin_groups:
+                x, y = group['position']
+                count = group['count']
+                
+                # Skip if pin is outside the image
+                if x < base_pin_size or x >= width - base_pin_size or y < base_pin_size or y >= height - base_pin_size:
+                    continue
+                
+                # Calculate pin size based on count
+                pin_size = base_pin_size + (count - 1) * 3
+                pin_color = '#FF4444'
+                
+                # Draw pin shadow
+                shadow_offset = 2
+                draw.ellipse([
+                    x - pin_size + shadow_offset,
+                    y - pin_size + shadow_offset,
+                    x + pin_size + shadow_offset,
+                    y + pin_size + shadow_offset
+                ], fill='#00000080')
+                
+                # Draw pin
+                draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
+                           fill=pin_color, outline='white', width=2)
+                
+                # Draw count if multiple pins
+                if count > 1:
+                    try:
+                        # Try to load a font, fallback to default
+                        try:
+                            font = ImageFont.truetype("arial.ttf", pin_size)
+                        except:
+                            font = ImageFont.load_default()
+                        
+                        text = str(count)
+                        bbox = draw.textbbox((0, 0), text, font=font)
+                        text_width = bbox[2] - bbox[0]
+                        text_height = bbox[3] - bbox[1]
+                        text_x = x - text_width // 2
+                        text_y = y - text_height // 2
+                        draw.text((text_x, text_y), text, fill='white', font=font)
+                    except:
+                        # Fallback without font
+                        draw.text((x-5, y-5), str(count), fill='white')
             
             # Convert PIL image to Discord file
             img_buffer = BytesIO()
             base_map.save(img_buffer, format='PNG', optimize=True)
-            img_buffer.seek(0)
             
+            # Cache the final image
+            await self._cache_map(guild_id, img_buffer)
+            
+            img_buffer.seek(0)
             filename = f"map_{region}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
             return discord.File(img_buffer, filename=filename)
             
@@ -368,85 +1081,146 @@ class MapCog(commands.Cog):
                 self.log.error(f"Channel {channel_id} not found")
                 return
 
-            # Generate map image
+            # Generate map image (uses caching internally)
             map_file = await self._generate_map_image(guild_id)
             if not map_file:
                 self.log.error("Failed to generate map image")
                 return
 
-            # Get map data for embed info
+            # Get map data for view
             map_data = self.maps.get(str(guild_id), {})
-            pins = map_data.get('pins', {})
             region = map_data.get('region', 'world')
-
-            # Create embed with map info
-            embed = discord.Embed(
-                title=f"🗺️ Server Map - {region.title()}",
-                description=f"Member location map\n\n"
-                           f"📍 **{len(pins)} members** have pinned their location\n"
-                           f"🌍 **Region:** {region.title()}",
-                color=0x7289da,
-                timestamp=datetime.now()
-            )
-            
-            
-            if pins:
-                # Count unique locations for display
-                location_groups = {}
-                for user_id, pin_data in pins.items():
-                    rounded_lat = round(pin_data['lat'], 3)
-                    rounded_lng = round(pin_data['lng'], 3)
-                    location_key = (rounded_lat, rounded_lng)
-                    
-                    if location_key not in location_groups:
-                        location_groups[location_key] = {
-                            'count': 0,
-                            'display_name': pin_data.get('display_name', pin_data.get('location', 'Unknown location'))
-                        }
-                    location_groups[location_key]['count'] += 1
-                
-                # Show locations with multiple pins
-                multi_locations = [(data['display_name'], data['count']) for data in location_groups.values() if data['count'] > 1]
-                if multi_locations:
-                    multi_locations.sort(key=lambda x: x[1], reverse=True)  # Sort by count
-                    location_list = []
-                    for location, count in multi_locations[:3]:  # Show top 3
-                        if len(location) > 35:
-                            location = location[:32] + "..."
-                        location_list.append(f"📍 **{location}**: {count} members")
-                    
-                    embed.add_field(
-                        name="Popular Locations",
-                        value="\n".join(location_list) if location_list else "No shared locations",
-                        inline=False
-                    )
-
-            embed.set_image(url=f"attachment://{map_file.filename}")
-            embed.set_footer(text="Use /pin_on_map to add your location!")
+        
+            # Button with persistent view - no embed, just image
+            view = MapPinButtonView(self, region, guild_id)
 
             # Check if there's an existing map message to edit
             existing_message_id = map_data.get('message_id')
             if existing_message_id:
                 try:
                     message = await channel.fetch_message(existing_message_id)
-                    await message.edit(embed=embed, attachments=[map_file])
+                    await message.edit(content=None, attachments=[map_file], view=view)
                     return
                 except discord.NotFound:
                     self.log.info(f"Previous map message {existing_message_id} not found, creating new one")
                 except Exception as e:
                     self.log.warning(f"Failed to edit existing map message: {e}")
 
-            # Send new message
-            message = await channel.send(embed=embed, file=map_file)
+            # Send new message - just image with buttons
+            message = await channel.send(file=map_file, view=view)
             
             # Update message ID in data
             if str(guild_id) not in self.maps:
                 self.maps[str(guild_id)] = {}
             self.maps[str(guild_id)]['message_id'] = message.id
-            await self._save_data()
+            await self._save_data(str(guild_id))
 
         except Exception as e:
             self.log.error(f"Failed to update map: {e}")
+
+    async def _update_global_overview(self):
+        """Update global overview of all maps."""
+        try:
+            if not self.global_config.get('enabled', False):
+                return
+                
+            overview_channel_id = self.global_config.get('channel_id')
+            if not overview_channel_id:
+                return
+            
+            channel = self.bot.get_channel(overview_channel_id)
+            if not channel:
+                self.log.error(f"Global overview channel {overview_channel_id} not found")
+                return
+            
+            # Create overview embed
+            embed = discord.Embed(
+                title="🗺️ Global Map Overview",
+                description="Overview of all server maps across Discord",
+                color=0x7289da,
+                timestamp=datetime.now()
+            )
+            
+            total_pins = 0
+            active_maps = 0
+            
+            # Group by region
+            region_stats = {}
+            
+            for guild_id, map_data in self.maps.items():
+                try:
+                    guild = self.bot.get_guild(int(guild_id))
+                    if not guild:
+                        continue
+                        
+                    pins = map_data.get('pins', {})
+                    region = map_data.get('region', 'world')
+                    pin_count = len(pins)
+                    
+                    if pin_count > 0:
+                        active_maps += 1
+                        total_pins += pin_count
+                        
+                        if region not in region_stats:
+                            region_stats[region] = {'servers': 0, 'pins': 0}
+                        
+                        region_stats[region]['servers'] += 1
+                        region_stats[region]['pins'] += pin_count
+                        
+                        # Add server info
+                        guild_name = guild.name
+                        if len(guild_name) > 25:
+                            guild_name = guild_name[:22] + "..."
+                            
+                        embed.add_field(
+                            name=f"🏴 {guild_name}",
+                            value=f"📍 {pin_count} pins • 🌍 {region.title()}",
+                            inline=True
+                        )
+                except Exception as e:
+                    self.log.warning(f"Error processing guild {guild_id} for overview: {e}")
+            
+            # Add summary
+            embed.insert_field_at(
+                0,
+                name="📊 Summary",
+                value=f"🗺️ **{active_maps}** active maps\n📍 **{total_pins}** total pins",
+                inline=False
+            )
+            
+            # Add region breakdown
+            if region_stats:
+                region_text = []
+                for region, stats in sorted(region_stats.items()):
+                    region_text.append(f"🌍 **{region.title()}**: {stats['servers']} servers, {stats['pins']} pins")
+                
+                embed.add_field(
+                    name="🌍 By Region",
+                    value="\n".join(region_text),
+                    inline=False
+                )
+            
+            embed.set_footer(text="Updated automatically")
+            
+            # Update existing message or create new one
+            existing_message_id = self.global_config.get('message_id')
+            if existing_message_id:
+                try:
+                    message = await channel.fetch_message(existing_message_id)
+                    await message.edit(embed=embed)
+                    return
+                except discord.NotFound:
+                    self.log.info("Previous global overview message not found, creating new one")
+                except Exception as e:
+                    self.log.warning(f"Failed to edit global overview message: {e}")
+            
+            # Send new message
+            message = await channel.send(embed=embed)
+            self.global_config['message_id'] = message.id
+            await self._save_global_config()
+            
+        except Exception as e:
+            self.log.error(f"Failed to update global overview: {e}")
 
     @app_commands.command(name="create_map", description="Create a map for the server")
     @app_commands.describe(
@@ -458,7 +1232,7 @@ class MapCog(commands.Cog):
         app_commands.Choice(name="Europe", value="europe"),
         app_commands.Choice(name="Germany", value="germany"),
     ])
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(administrator=True)
     async def create_map(
         self,
         interaction: discord.Interaction,
@@ -481,18 +1255,19 @@ class MapCog(commands.Cog):
             'created_by': interaction.user.id
         }
 
-        await self._save_data()
+        await self._save_data(guild_id)
         await self._update_map(interaction.guild.id, channel.id)
+        await self._update_global_overview()
 
         await interaction.followup.send(
             f"✅ Map created successfully in {channel.mention}!\n"
             f"🗺️ Region: **{region.title()}**\n"
-            f"📍 Users can now use `/pin_on_map` to add their location.",
+            f"📍 Users can now add their location.",
             ephemeral=True
         )
 
     @app_commands.command(name="remove_map", description="Remove the server map")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(administrator=True)
     async def remove_map(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -502,20 +1277,53 @@ class MapCog(commands.Cog):
             await interaction.followup.send("❌ No map exists for this server.", ephemeral=True)
             return
 
-        pin_count = len(self.maps[guild_id].get('pins', {}))
+        map_data = self.maps[guild_id]
+        pin_count = len(map_data.get('pins', {}))
+        
+        # Try to delete the map message
+        channel_id = map_data.get('channel_id')
+        message_id = map_data.get('message_id')
+        
+        if channel_id and message_id:
+            try:
+                channel = self.bot.get_channel(channel_id)
+                if channel:
+                    message = await channel.fetch_message(message_id)
+                    await message.delete()
+                    self.log.info(f"Deleted map message {message_id} in channel {channel_id}")
+            except discord.NotFound:
+                self.log.info(f"Map message {message_id} already deleted")
+            except Exception as e:
+                self.log.warning(f"Could not delete map message: {e}")
+        
+        # Invalidate cache when removing map
+        await self._invalidate_map_cache(int(guild_id))
+        
         del self.maps[guild_id]
-        await self._save_data()
+        await self._save_data(guild_id)  # This will remove the file since guild_id not in maps
+        await self._update_global_overview()
 
         await interaction.followup.send(
             f"✅ Map removed successfully!\n"
-            f"📍 {pin_count} user pin(s) were also removed.",
+            f"📍 {pin_count} user pin(s) were also removed.\n"
+            f"🗑️ Map message has been deleted.",
             ephemeral=True
         )
 
     @app_commands.command(name="pin_on_map", description="Pin your location on the server map")
-    @app_commands.describe(location="Your location (e.g., 'Berlin, Germany' or 'New York, USA')")
-    async def pin_on_map(self, interaction: discord.Interaction, location: str):
-        await interaction.response.defer(ephemeral=True)
+    async def pin_on_map_v2(self, interaction: discord.Interaction):
+        guild_id = str(interaction.guild.id)
+
+        if guild_id not in self.maps:
+            await interaction.response.send_message("❌ No map exists for this server. Ask an admin to create one with `/create_map`.", ephemeral=True)
+            return
+
+        region = self.maps[guild_id]['region']
+        modal = LocationModal(self, region)
+        await interaction.response.send_modal(modal)
+
+    async def _handle_pin_location(self, interaction: discord.Interaction, location: str):
+        """Handle the actual pin location logic."""
 
         guild_id = str(interaction.guild.id)
         
@@ -557,11 +1365,15 @@ class MapCog(commands.Cog):
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
 
-        await self._save_data()
+        await self._save_data(guild_id)
         
-        # Update the map
+        # Invalidate cache since pins changed
+        await self._invalidate_map_cache(int(guild_id))
+        
+        # Update the map and global overview
         channel_id = self.maps[guild_id]['channel_id']
         await self._update_map(interaction.guild.id, channel_id)
+        await self._update_global_overview()
 
         await interaction.followup.send(
             f"✅ Your location has been pinned on the map!\n"
@@ -587,10 +1399,14 @@ class MapCog(commands.Cog):
 
         old_location = self.maps[guild_id]['pins'][user_id].get('display_name', 'Unknown')
         del self.maps[guild_id]['pins'][user_id]
-        await self._save_data()
+        await self._save_data(guild_id)
+        
+        # Invalidate cache since pins changed
+        await self._invalidate_map_cache(int(guild_id))
         
         channel_id = self.maps[guild_id]['channel_id']
         await self._update_map(interaction.guild.id, channel_id)
+        await self._update_global_overview()
 
         await interaction.followup.send(
             f"✅ Your pin has been removed from the map!\n"
@@ -650,10 +1466,76 @@ class MapCog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.command(name="setup_global_overview", description="Setup global map overview (Bot Owner only)")
+    @app_commands.describe(channel="Channel for global overview")
+    async def setup_global_overview(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        # Check if user is bot owner
+        #app_info = await self.bot.application_info()
+        if interaction.user.id != BOT_OWNER_ID:
+            await interaction.response.send_message("❌ This command is only available to the bot owner.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        
+        self.global_config['enabled'] = True
+        self.global_config['channel_id'] = channel.id
+        await self._save_global_config()
+        
+        # Create initial overview
+        await self._update_global_overview()
+        
+        await interaction.followup.send(
+            f"✅ Global map overview has been set up in {channel.mention}!\n"
+            f"📊 The overview will be automatically updated when maps change.",
+            ephemeral=True
+        )
+
+    @app_commands.command(name="clear_map_cache", description="Clear cached map images (Admin only)")
+    @app_commands.default_permissions(administrator=True)
+    async def clear_cache(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Clear in-memory cache
+            self.base_map_cache.clear()
+            
+            # Clear disk cache
+            cache_files = list(self.cache_dir.glob("*.png"))
+            for cache_file in cache_files:
+                cache_file.unlink()
+            
+            await interaction.followup.send(
+                f"✅ Cache cleared successfully!\n"
+                f"🗑️ Removed {len(cache_files)} cached images.",
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            self.log.error(f"Error clearing cache: {e}")
+            await interaction.followup.send("❌ Error clearing cache.", ephemeral=True)
+
+    @app_commands.command(name="refresh_global_overview", description="Manually refresh global overview (Bot Owner only)")
+    async def refresh_global_overview(self, interaction: discord.Interaction):
+        # Check if user is bot owner
+        #app_info = await self.bot.application_info()
+        if interaction.user.id != 485051896655249419:
+            await interaction.response.send_message("❌ This command is only available to the bot owner.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            await self._update_global_overview()
+            await interaction.followup.send("✅ Global overview has been refreshed!", ephemeral=True)
+        except Exception as e:
+            self.log.error(f"Error refreshing global overview: {e}")
+            await interaction.followup.send("❌ Error refreshing global overview.", ephemeral=True)
+
     def cog_unload(self):
         """Clean up when cog is unloaded."""
-        asyncio.create_task(self._save_data())
-
-
+        # Save all guild data
+        for guild_id in self.maps.keys():
+            asyncio.create_task(self._save_data(guild_id))
+        
 async def setup(bot: commands.Bot):
-    await bot.add_cog(MapCog(bot))
+    await bot.add_cog(MapV2Cog(bot))
