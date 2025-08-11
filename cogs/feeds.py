@@ -15,7 +15,7 @@ from core import rss
 
 # Configuration constants
 POLL_INTERVAL_MINUTES = 1.0
-MAX_POST_AGE_SECONDS = 60
+MAX_POST_AGE_SECONDS = 1800
 RATE_LIMIT_SECONDS = 30
 FAILURE_THRESHOLD = 3
 AUTHORIZED_USERS = [485051896655249419, 506551160354766848, 703896034820096000]
@@ -293,7 +293,7 @@ class FeedCog(commands.Cog):
                 # Crosspost batch if enabled
                 if feed_cfg.get("crosspost") and msgs:
                     try:
-                        await msgs[0].publish()
+                        #await msgs[0].publish()
                         self.log.info("🚀 Published batch of %d messages", len(msgs))
                     except discord.HTTPException as exc:
                         self.log.warning("Publish failed: %s", exc)
@@ -452,7 +452,7 @@ class FeedCog(commands.Cog):
         )
 
     # ---- Slash Commands ----
-
+    
     @app_commands.command(
         name="ping",
         description="Test if the bot is responsive"
@@ -463,7 +463,7 @@ class FeedCog(commands.Cog):
         )
 
     @app_commands.command(
-        name="poll_now",
+        name="owner_poll_now",
         description="Run the RSS poll immediately (authorized users only)"
     )
     async def slash_poll_now(self, interaction: discord.Interaction):
@@ -655,19 +655,7 @@ class FeedCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(
-        name="webhook_clear_cache",
-        description="Clear the webhook cache (force recreation)"
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def slash_webhook_clear_cache(self, interaction: discord.Interaction):
-        self.webhook_cache.clear()
-        self._save_webhook_cache()
-        await interaction.response.send_message(
-            "✅ Webhook cache cleared.", ephemeral=True
-        )
-
-    @app_commands.command(
-        name="webhook_status",
+        name="feeds_webhook_status",
         description="Show webhook status for all channels"
     )
     async def slash_webhook_status(self, interaction: discord.Interaction):

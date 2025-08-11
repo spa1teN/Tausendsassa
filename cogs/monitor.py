@@ -764,7 +764,7 @@ class Monitor(commands.Cog):
             bytes_value /= 1024.0
         return f"{bytes_value:.1f} PB"
     
-    @app_commands.command(name="monitor", description="Display comprehensive bot and system monitoring information")
+    @app_commands.command(name="owner_monitor", description="Display comprehensive bot and system monitoring information")
     async def monitor_command(self, interaction: discord.Interaction):
         if interaction.user.id != BOT_OWNER_ID:
             await interaction.response.send_message("Only available to owner.", ephemeral=True)
@@ -826,7 +826,7 @@ class Monitor(commands.Cog):
             )
             await interaction.followup.send(embed=error_embed, ephemeral=True)
     
-    @app_commands.command(name="monitor_config", description="Configure monitor settings")
+    @app_commands.command(name="owner_monitor_config", description="Configure monitor settings")
     @app_commands.describe(
         auto_update_interval="Auto-update interval in seconds (0 to disable)",
         clear_messages="Clear all stored monitor message IDs"

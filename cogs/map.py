@@ -94,7 +94,7 @@ class StateSelectionView(discord.ui.View):
             await interaction.followup.send("❌ Error generating state map", ephemeral=True)
 
     
-class MapMenuView(discord.ui.View):
+class MapMenuViewGer(discord.ui.View):
     def __init__(self, cog: 'MapV2Cog', region: str, guild_id: int):
         super().__init__(timeout=300)
         self.cog = cog
@@ -175,6 +175,75 @@ class MapMenuView(discord.ui.View):
         view = StateSelectionView(self.cog, self.guild_id)
         await interaction.response.edit_message(content="**🔍 Select a German state for close-up view:**", view=view, embed=None)
 
+class MapMenuView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', region: str, guild_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.region = region
+        self.guild_id = guild_id
+
+    @discord.ui.button(
+        label="Popular Locations",
+        style=discord.ButtonStyle.secondary,
+        emoji="📊"
+    )
+    async def popular_locations(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        map_data = self.cog.maps.get(str(self.guild_id), {})
+        pins = map_data.get('pins', {})
+        
+        if not pins:
+            await interaction.followup.send("📍 No pins on the map yet!", ephemeral=True)
+            return
+        
+        # Group pins by location
+        location_groups = {}
+        for user_id, pin_data in pins.items():
+            rounded_lat = round(pin_data['lat'], 3)
+            rounded_lng = round(pin_data['lng'], 3)
+            location_key = (rounded_lat, rounded_lng)
+            
+            if location_key not in location_groups:
+                location_groups[location_key] = {
+                    'count': 0,
+                    'display_name': pin_data.get('display_name', pin_data.get('location', 'Unknown location')),
+                    'users': []
+                }
+            location_groups[location_key]['count'] += 1
+            location_groups[location_key]['users'].append(pin_data.get('username', 'Unknown'))
+        
+        # Create embed with popular locations
+        embed = discord.Embed(
+            title="📊 Popular Locations",
+            description=f"Locations with member pins ({len(pins)} total pins)",
+            color=0x7289da
+        )
+        
+        # Sort by count
+        sorted_locations = sorted(location_groups.values(), key=lambda x: x['count'], reverse=True)
+        
+        for i, location_data in enumerate(sorted_locations[:10]):  # Top 10
+            location = location_data['display_name']
+            if len(location) > 40:
+                location = location[:37] + "..."
+            
+            count = location_data['count']
+            users = location_data['users']
+            user_list = ", ".join(users[:3])  # Show first 3 users
+            if len(users) > 3:
+                user_list += f" +{len(users) - 3} more"
+            
+            embed.add_field(
+                name=f"{i+1}. {location} ({count} member{'s' if count > 1 else ''})",
+                value=f"👥 {user_list}",
+                inline=False
+            )
+        
+        view = PopularLocationsView(self.cog, self.guild_id)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        
+
 class MapPinButtonView(discord.ui.View):
     def __init__(self, cog: 'MapV2Cog', region: str, guild_id: int):
         super().__init__(timeout=None)
@@ -216,9 +285,12 @@ class MapPinButtonView(discord.ui.View):
         custom_id="map_menu_button"
     )
     async def menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = MapMenuView(self.cog, self.region, self.guild_id)
+        if self.region != "germany":
+            view = MapMenuView(self.cog, self.region, self.guild_id)
+        else:
+            view = MapMenuViewGer(self.cog, self.region, self.guild_id)
         await interaction.response.send_message(content="**Select an option:**", view=view, ephemeral=True)
-
+            
 class UserPinOptionsView(discord.ui.View):
     def __init__(self, cog: 'MapV2Cog', region: str):
         super().__init__(timeout=300)  # 5 minutes timeout
@@ -311,6 +383,24 @@ class MapV2Cog(commands.Cog):
                 "center_lat": 51.1657,
                 "center_lng": 10.4515,
                 "bounds": [[47.2701, 5.8663], [55.0583, 15.0419]]
+            },
+            "asia": {
+                "bounds": [[-8.0, 24.0], [82.0, 180.0]] 
+            },
+            "northamerica": {
+                "bounds": [[5.0, -180.0], [82.0, -50.0]]
+            },
+            "southamerica": {
+                "bounds": [[-60.0, -85.0], [20.0, -33.0]]
+            },
+            "africa": {
+                "bounds": [[-40.0, -20.0], [40.0, 60.0]]
+            },
+            "australia": {
+                "bounds": [[-45.0, 110.0], [-10.0, 155.0]]
+            },
+            "usmainland": {
+                "bounds": [[24.0, -126.0], [51.0, -66.0]]
             }
         }
 
@@ -622,34 +712,36 @@ class MapV2Cog(commands.Cog):
                 state_width = max(1, int(width / 1200))
 
             # Draw rivers with appropriate width
-            for line in rivers.geometry:
-                if line is None or not line.intersects(bbox):
-                    continue
-                for seg in getattr(line, "geoms", [line]):
-                    try:
-                        pts = [to_px(y, x) for x, y in seg.coords]
-                        if len(pts) >= 2:
-                            draw.line(pts, fill=(60, 60, 200), width=river_width)
-                    except:
+            if region != "world":
+                for line in rivers.geometry:
+                    if line is None or not line.intersects(bbox):
                         continue
-
-            # Draw boundaries with appropriate widths
-            for layer, color, width_multiplier in [
-                (world.geometry, (0, 0, 0), country_width),
-                (states.geometry, (100, 100, 100), state_width),
-            ]:
-                for poly in layer:
-                    if poly is None or not poly.intersects(bbox):
-                        continue
-                    for ring in getattr(poly, "geoms", [poly]):
+                    for seg in getattr(line, "geoms", [line]):
                         try:
-                            pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                            pts = [to_px(y, x) for x, y in seg.coords]
                             if len(pts) >= 2:
-                                if width_multiplier != 0:
-                                    draw.line(pts, fill=color, width=width_multiplier)
+                                draw.line(pts, fill=(60, 60, 200), width=river_width)
                         except:
                             continue
-                
+                    
+            # Draw boundaries with appropriate widths
+            if region != "world":
+                for layer, color, width_multiplier in [
+                        (world.geometry, (0, 0, 0), country_width),
+                        (states.geometry, (100, 100, 100), state_width),
+                ]:
+                    for poly in layer:
+                        if poly is None or not poly.intersects(bbox):
+                            continue
+                        for ring in getattr(poly, "geoms", [poly]):
+                            try:
+                                pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                                if len(pts) >= 2:
+                                    if width_multiplier != 0:
+                                        draw.line(pts, fill=color, width=width_multiplier)
+                            except:
+                                continue
+                            
             return img, to_px
             
         except Exception as e:
@@ -818,9 +910,9 @@ class MapV2Cog(commands.Cog):
                 
                 for coords in coords_list:
                     pts = [to_px(y, x) for x, y in coords]
-                    if len(pts) >= 3:
+                    #if len(pts) >= 3:
                         # Subtle highlight - slightly different land color
-                        draw.polygon(pts, fill=(250, 250, 200), outline=(200, 0, 0), width=3)
+                        #draw.polygon(pts, fill=(250, 250, 200), outline=(200, 0, 0), width=3)
             except Exception as e:
                 self.log.warning(f"Could not highlight state {state_name}: {e}")
 
@@ -960,7 +1052,7 @@ class MapV2Cog(commands.Cog):
             
             # Calculate dimensions based on region
             width, height = self._calculate_image_dimensions(region)
-            if region == "world" or region == "europe":
+            if region != "germany" and region != "usmainland":
                 height = int(height * 0.8)
             
             # Try to get cached base map first
@@ -1222,15 +1314,21 @@ class MapV2Cog(commands.Cog):
         except Exception as e:
             self.log.error(f"Failed to update global overview: {e}")
 
-    @app_commands.command(name="create_map", description="Create a map for the server")
+    @app_commands.command(name="map_create", description="Create a map for the server")
     @app_commands.describe(
         channel="Channel where the map will be posted",
-        region="Map region (world, europe, or germany)"
+        region="Map region (world by default)"
     )
     @app_commands.choices(region=[
         app_commands.Choice(name="World", value="world"),
         app_commands.Choice(name="Europe", value="europe"),
         app_commands.Choice(name="Germany", value="germany"),
+        app_commands.Choice(name="Asia", value="asia"),
+        app_commands.Choice(name="Africa", value="africa"),
+        app_commands.Choice(name="North America", value="northamerica"),
+        app_commands.Choice(name="South America", value="southamerica"),
+        app_commands.Choice(name="Australia", value="australia"),
+        app_commands.Choice(name="US-Mainland", value="usmainland"),
     ])
     @app_commands.default_permissions(administrator=True)
     async def create_map(
@@ -1244,7 +1342,7 @@ class MapV2Cog(commands.Cog):
         guild_id = str(interaction.guild.id)
         
         if guild_id in self.maps:
-            await interaction.followup.send("❌ A map already exists for this server. Use `/remove_map` first to create a new one.", ephemeral=True)
+            await interaction.followup.send("❌ A map already exists for this server. Use `/map_remove` first to create a new one.", ephemeral=True)
             return
 
         self.maps[guild_id] = {
@@ -1266,7 +1364,7 @@ class MapV2Cog(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(name="remove_map", description="Remove the server map")
+    @app_commands.command(name="map_remove", description="Remove the server map")
     @app_commands.default_permissions(administrator=True)
     async def remove_map(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -1310,7 +1408,7 @@ class MapV2Cog(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(name="pin_on_map", description="Pin your location on the server map")
+    @app_commands.command(name="map_pin", description="Pin your location on the server map")
     async def pin_on_map_v2(self, interaction: discord.Interaction):
         guild_id = str(interaction.guild.id)
 
@@ -1382,7 +1480,7 @@ class MapV2Cog(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(name="unpin_on_map", description="Remove your pin from the server map")
+    @app_commands.command(name="map_unpin", description="Remove your pin from the server map")
     async def unpin_on_map(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -1466,7 +1564,7 @@ class MapV2Cog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="setup_global_overview", description="Setup global map overview (Bot Owner only)")
+    @app_commands.command(name="owner_setup_map_overview", description="Setup global map overview (Bot Owner only)")
     @app_commands.describe(channel="Channel for global overview")
     async def setup_global_overview(self, interaction: discord.Interaction, channel: discord.TextChannel):
         # Check if user is bot owner
@@ -1490,7 +1588,7 @@ class MapV2Cog(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(name="clear_map_cache", description="Clear cached map images (Admin only)")
+    @app_commands.command(name="map_clear_cache", description="Clear cached map images (Admin only)")
     @app_commands.default_permissions(administrator=True)
     async def clear_cache(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -1514,7 +1612,7 @@ class MapV2Cog(commands.Cog):
             self.log.error(f"Error clearing cache: {e}")
             await interaction.followup.send("❌ Error clearing cache.", ephemeral=True)
 
-    @app_commands.command(name="refresh_global_overview", description="Manually refresh global overview (Bot Owner only)")
+    @app_commands.command(name="owner_refresh_map_overview", description="Manually refresh global overview (Bot Owner only)")
     async def refresh_global_overview(self, interaction: discord.Interaction):
         # Check if user is bot owner
         #app_info = await self.bot.application_info()

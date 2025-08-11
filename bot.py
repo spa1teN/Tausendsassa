@@ -160,8 +160,9 @@ log = logging.getLogger("tausendsassa")
 # ─── Intents & COG-Liste ────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
-COGS = ["cogs.feeds", "cogs.map", "cogs.monitor"]
+COGS = ["cogs.feeds", "cogs.map", "cogs.monitor", "cogs.moderation", "cogs.whenistrumpgone", "cogs.help"]
 
 # ─── Enhanced Bot-Klasse ────────────────────────────────────────────────────
 class Tausendsassa(commands.Bot):
@@ -176,7 +177,7 @@ class Tausendsassa(commands.Bot):
         # Setup webhook logging if URL is provided
         if self.webhook_url:
             self.setup_webhook_logging()
-    
+            
     def setup_webhook_logging(self):
         """Setup webhook logging handler"""
         if self.webhook_url:
@@ -252,7 +253,7 @@ class Tausendsassa(commands.Bot):
         status = discord.Status.online
         activity = discord.Activity(
             type=discord.ActivityType.listening,
-            name="spa1teN"
+            name="/help"
         )
         await self.change_presence(status=status, activity=activity)
         log.info(f"🤖 Logged in as {self.user} (ID: {self.user.id})")
