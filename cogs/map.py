@@ -93,87 +93,63 @@ class StateSelectionView(discord.ui.View):
             self.cog.log.error(f"Error generating state map: {e}")
             await interaction.followup.send("❌ Error generating state map", ephemeral=True)
 
-    
-class MapMenuViewGer(discord.ui.View):
-    def __init__(self, cog: 'MapV2Cog', region: str, guild_id: int):
+class ContinentSelectionView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int):
         super().__init__(timeout=300)
         self.cog = cog
-        self.region = region
         self.guild_id = guild_id
+        
+        # Kontinente für Weltkarten-Close-ups
+        continents = [
+            ("North America", "northamerica"),
+            ("South America", "southamerica"),
+            ("Europe", "europe"),
+            ("Africa", "africa"),
+            ("Asia", "asia"),
+            ("Australia", "australia")
+        ]
 
-    @discord.ui.button(
-        label="Popular Locations",
-        style=discord.ButtonStyle.secondary,
-        emoji="📊"
-    )
-    async def popular_locations(self, interaction: discord.Interaction, button: discord.ui.Button):
+        continent_select = discord.ui.Select(
+            placeholder="Choose a continent for close-up...",
+            options=[discord.SelectOption(label=name, value=value) for name, value in continents]
+        )
+        continent_select.callback = self.continent_selected
+        self.add_item(continent_select)
+
+    async def continent_selected(self, interaction: discord.Interaction):
+        selected_continent = interaction.data['values'][0]
         await interaction.response.defer(ephemeral=True)
         
-        map_data = self.cog.maps.get(str(self.guild_id), {})
-        pins = map_data.get('pins', {})
-        
-        if not pins:
-            await interaction.followup.send("📍 No pins on the map yet!", ephemeral=True)
-            return
-        
-        # Group pins by location
-        location_groups = {}
-        for user_id, pin_data in pins.items():
-            rounded_lat = round(pin_data['lat'], 3)
-            rounded_lng = round(pin_data['lng'], 3)
-            location_key = (rounded_lat, rounded_lng)
-            
-            if location_key not in location_groups:
-                location_groups[location_key] = {
-                    'count': 0,
-                    'display_name': pin_data.get('display_name', pin_data.get('location', 'Unknown location')),
-                    'users': []
+        try:
+            # Generiere Kontinent-Close-up mit existierenden Karten-Konfigurationen
+            continent_image = await self.cog._generate_continent_closeup(self.guild_id, selected_continent)
+            if continent_image:
+                continent_names = {
+                    "northamerica": "North America",
+                    "southamerica": "South America", 
+                    "europe": "Europe",
+                    "africa": "Africa",
+                    "asia": "Asia",
+                    "australia": "Australia"
                 }
-            location_groups[location_key]['count'] += 1
-            location_groups[location_key]['users'].append(pin_data.get('username', 'Unknown'))
-        
-        # Create embed with popular locations
-        embed = discord.Embed(
-            title="📊 Popular Locations",
-            description=f"Locations with member pins ({len(pins)} total pins)",
-            color=0x7289da
-        )
-        
-        # Sort by count
-        sorted_locations = sorted(location_groups.values(), key=lambda x: x['count'], reverse=True)
-        
-        for i, location_data in enumerate(sorted_locations[:10]):  # Top 10
-            location = location_data['display_name']
-            if len(location) > 40:
-                location = location[:37] + "..."
-            
-            count = location_data['count']
-            users = location_data['users']
-            user_list = ", ".join(users[:3])  # Show first 3 users
-            if len(users) > 3:
-                user_list += f" +{len(users) - 3} more"
-            
-            embed.add_field(
-                name=f"{i+1}. {location}",
-                value=f"👥 {count} member{'s' if count > 1 else ''}",
-                inline=False
-            )
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    @discord.ui.button(
-        label="State Close-up",
-        style=discord.ButtonStyle.secondary,
-        emoji="🇩🇪"
-    )
-    async def state_closeup(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Only show for German maps
-        if self.region not in ["germany", "germanyPlain"]:
-            await interaction.response.send_message("❌ State close-up is only available for German maps.", ephemeral=True)
-            return
-        
-        view = StateSelectionView(self.cog, self.guild_id)
-        await interaction.response.edit_message(content="**🔍 Select a German state for close-up view:**", view=view, embed=None)
+                
+                name = continent_names.get(selected_continent, selected_continent.title())
+                filename = f"continent_{selected_continent}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                
+                await interaction.followup.send(
+                    f"🌍 **Close-up view of {name}**", 
+                    file=discord.File(continent_image, filename=filename),
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    f"❌ Could not generate map for {selected_continent}",
+                    ephemeral=True
+                )
+        except Exception as e:
+            self.cog.log.error(f"Error generating continent map: {e}")
+            await interaction.followup.send("❌ Error generating continent map", ephemeral=True)
+                
 
 class MapMenuView(discord.ui.View):
     def __init__(self, cog: 'MapV2Cog', region: str, guild_id: int):
@@ -183,65 +159,23 @@ class MapMenuView(discord.ui.View):
         self.guild_id = guild_id
 
     @discord.ui.button(
-        label="Popular Locations",
+        label="Region Close-up",
         style=discord.ButtonStyle.secondary,
-        emoji="📊"
+        emoji="🔍"
     )
-    async def popular_locations(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        
-        map_data = self.cog.maps.get(str(self.guild_id), {})
-        pins = map_data.get('pins', {})
-        
-        if not pins:
-            await interaction.followup.send("📍 No pins on the map yet!", ephemeral=True)
-            return
-        
-        # Group pins by location
-        location_groups = {}
-        for user_id, pin_data in pins.items():
-            rounded_lat = round(pin_data['lat'], 3)
-            rounded_lng = round(pin_data['lng'], 3)
-            location_key = (rounded_lat, rounded_lng)
-            
-            if location_key not in location_groups:
-                location_groups[location_key] = {
-                    'count': 0,
-                    'display_name': pin_data.get('display_name', pin_data.get('location', 'Unknown location')),
-                    'users': []
-                }
-            location_groups[location_key]['count'] += 1
-            location_groups[location_key]['users'].append(pin_data.get('username', 'Unknown'))
-        
-        # Create embed with popular locations
-        embed = discord.Embed(
-            title="📊 Popular Locations",
-            description=f"Locations with member pins ({len(pins)} total pins)",
-            color=0x7289da
-        )
-        
-        # Sort by count
-        sorted_locations = sorted(location_groups.values(), key=lambda x: x['count'], reverse=True)
-        
-        for i, location_data in enumerate(sorted_locations[:10]):  # Top 10
-            location = location_data['display_name']
-            if len(location) > 40:
-                location = location[:37] + "..."
-            
-            count = location_data['count']
-            users = location_data['users']
-            user_list = ", ".join(users[:3])  # Show first 3 users
-            if len(users) > 3:
-                user_list += f" +{len(users) - 3} more"
-            
-            embed.add_field(
-                name=f"{i+1}. {location} ({count} member{'s' if count > 1 else ''})",
-                value=f"👥 {user_list}",
-                inline=False
-            )
-        
-        view = PopularLocationsView(self.cog, self.guild_id)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    async def region_closeup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.region == "world":
+            # Zeige Kontinent-Auswahl für Weltkarten
+            view = ContinentSelectionView(self.cog, self.guild_id)
+            await interaction.response.edit_message(content="**🌍 Select a continent for close-up view:**", view=view, embed=None)
+        elif self.region == "germany":
+            # Zeige Bundesland-Auswahl für Deutschland-Karten
+            view = StateSelectionView(self.cog, self.guild_id)
+            await interaction.response.edit_message(content="**🔍 Select a German state for close-up view:**", view=view, embed=None)
+        else:
+            # Kein Close-up für andere Regionen
+            await interaction.response.send_message("❌ Region close-up is not available for this map type.", ephemeral=True)
+
         
 
 class MapPinButtonView(discord.ui.View):
@@ -285,10 +219,7 @@ class MapPinButtonView(discord.ui.View):
         custom_id="map_menu_button"
     )
     async def menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.region != "germany":
-            view = MapMenuView(self.cog, self.region, self.guild_id)
-        else:
-            view = MapMenuViewGer(self.cog, self.region, self.guild_id)
+        view = MapMenuView(self.cog, self.region, self.guild_id)
         await interaction.response.send_message(content="**Select an option:**", view=view, ephemeral=True)
             
 class UserPinOptionsView(discord.ui.View):
@@ -756,6 +687,76 @@ class MapV2Cog(commands.Cog):
             
             return img, fallback_projection
 
+    async def _generate_continent_closeup(self, guild_id: int, continent: str) -> Optional[BytesIO]:
+        """Generate a close-up map of a continent using existing map configs."""
+        try:
+            if continent not in self.map_configs:
+                self.log.warning(f"Continent {continent} not in map configurations")
+                return None
+        
+            # Verwende existierende Karten-Generierung
+            width, height = self._calculate_image_dimensions(continent)
+            base_map, projection_func = await self._render_geopandas_map(continent, width, height)
+        
+            if not base_map or not projection_func:
+                return None
+        
+            # Zeichne Pins für diese Guild
+            map_data = self.maps.get(str(guild_id), {})
+            pins = map_data.get('pins', {})
+            
+            base_pin_size = int(height * 16 / 2400)
+            pin_groups = self._group_overlapping_pins(pins, projection_func, base_pin_size)
+        
+            draw = ImageDraw.Draw(base_map)
+            
+            for group in pin_groups:
+                x, y = group['position']
+                count = group['count']
+            
+                if x < base_pin_size or x >= width - base_pin_size or y < base_pin_size or y >= height - base_pin_size:
+                    continue
+            
+                pin_size = base_pin_size + (count - 1) * 3
+                pin_color = '#FF4444'
+            
+                # Pin Shadow
+                shadow_offset = 2
+                draw.ellipse([
+                    x - pin_size + shadow_offset,
+                    y - pin_size + shadow_offset,
+                    x + pin_size + shadow_offset,
+                    y + pin_size + shadow_offset
+                ], fill='#00000080')
+            
+                # Pin
+                draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
+                             fill=pin_color, outline='white', width=2)
+            
+                # Anzahl
+                if count > 1:
+                    try:
+                        font = ImageFont.load_default()
+                        text = str(count)
+                        bbox = draw.textbbox((0, 0), text, font=font)
+                        text_width = bbox[2] - bbox[0]
+                        text_height = bbox[3] - bbox[1]
+                        text_x = x - text_width // 2
+                        text_y = y - text_height // 2
+                        draw.text((text_x, text_y), text, fill='white', font=font)
+                    except:
+                        draw.text((x-5, y-5), str(count), fill='white')
+
+            # Convert to BytesIO
+            img_buffer = BytesIO()
+            base_map.save(img_buffer, format='PNG', optimize=True)
+            img_buffer.seek(0)
+            return img_buffer
+        
+        except Exception as e:
+            self.log.error(f"Failed to generate continent closeup for {continent}: {e}")
+            return None
+        
     async def _generate_state_closeup(self, guild_id: int, state_name: str) -> Optional[BytesIO]:
         """Generate a close-up map of a German state."""
         try:

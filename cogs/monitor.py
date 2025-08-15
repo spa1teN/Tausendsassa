@@ -473,11 +473,15 @@ class Monitor(commands.Cog):
         cog_info = []
         
         for name, cog in self.bot.cogs.items():
+            app_commands = 0
+            if hasattr(cog, '__cog_app_commands__'):
+                app_commands = len(cog.__cog_app_commands__)
+            
             cog_info.append({
                 'name': name,
                 'active': True,
                 'class_name': cog.__class__.__name__,
-                'commands': len([cmd for cmd in cog.get_commands()])
+                'commands': app_commands
             })
         
         return cog_info

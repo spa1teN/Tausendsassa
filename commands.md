@@ -18,4 +18,4 @@
 - `/clear`: deletes a given number of messages from the channel (Admin only)
 ### Miscellaneous
 - `/ping`: test bot responsiveness
-- `/when_is_trump_gone`: outputs time until the orange fuck pisses off
+- `/when_is_trump_gone`: time until he's finally gone
