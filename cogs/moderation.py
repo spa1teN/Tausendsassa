@@ -81,7 +81,6 @@ class ModerationCog(commands.Cog):
             color=0xff0000,  # Red for leaves
             timestamp=datetime.now(timezone.utc)
         )
-        embed.set_author(name="Member Left", icon_url=member.display_avatar.url)
         embed.set_thumbnail(url=member.display_avatar.url)
         
         if duration:

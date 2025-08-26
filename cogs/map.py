@@ -149,7 +149,88 @@ class ContinentSelectionView(discord.ui.View):
         except Exception as e:
             self.cog.log.error(f"Error generating continent map: {e}")
             await interaction.followup.send("❌ Error generating continent map", ephemeral=True)
+
+class ProximityView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        
+        # Distance options
+        distances = [
+            ("5 km", 5),
+            ("10 km", 10),
+            ("25 km", 25),
+            ("50 km", 50),
+            ("100 km", 100)
+        ]
+
+        distance_select = discord.ui.Select(
+            placeholder="Choose search radius...",
+            options=[discord.SelectOption(label=name, value=str(value)) for name, value in distances]
+        )
+        distance_select.callback = self.distance_selected
+        self.add_item(distance_select)
+
+    async def distance_selected(self, interaction: discord.Interaction):
+        selected_distance = int(interaction.data['values'][0])
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            proximity_result = await self.cog._generate_proximity_map(
+                interaction.user.id, self.guild_id, selected_distance
+            )
+            
+            if proximity_result:
+                image_buffer, nearby_users = proximity_result
                 
+                embed = discord.Embed(
+                    title=f"Nearby Members ({selected_distance}km radius)",
+                    description=f"Found {len(nearby_users)} member(s) within {selected_distance}km",
+                    color=0x7289da
+                )
+                
+                if nearby_users:
+                    user_list = []
+                    for user_data in nearby_users[:10]:  # Max 10 users
+                        distance_km = user_data['distance']
+                        username = user_data['username']
+                        location = user_data['location']
+                        user_list.append(f"**{username}** - {distance_km:.1f}km ({location})")
+                    
+                    embed.add_field(
+                        name="Nearby Members",
+                        value="\n".join(user_list),
+                        inline=False
+                    )
+                
+                filename = f"proximity_{selected_distance}km_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                await interaction.followup.send(
+                    embed=embed,
+                    file=discord.File(image_buffer, filename=filename),
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    "You need to pin your location first to use proximity search!",
+                    ephemeral=True
+                )
+        except Exception as e:
+            self.cog.log.error(f"Error generating proximity map: {e}")
+            await interaction.followup.send("Error generating proximity map", ephemeral=True)
+
+    @discord.ui.button(
+        label="Back",
+        style=discord.ButtonStyle.secondary,
+        emoji="⬅️",
+        row=1
+    )
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        map_data = self.cog.maps.get(str(self.guild_id), {})
+        region = map_data.get('region', 'world')
+        main_view = MapMenuView(self.cog, region, self.guild_id)
+        await interaction.response.edit_message(content="Select an option:", view=main_view, embed=None)
+            
 
 class MapMenuView(discord.ui.View):
     def __init__(self, cog: 'MapV2Cog', region: str, guild_id: int):
@@ -176,6 +257,37 @@ class MapMenuView(discord.ui.View):
             # Kein Close-up für andere Regionen
             await interaction.response.send_message("❌ Region close-up is not available for this map type.", ephemeral=True)
 
+    @discord.ui.button(
+        label="Nearby Members",
+        style=discord.ButtonStyle.secondary,
+        emoji="📍"
+    )
+    async def nearby_members(self, interaction: discord.Interaction, button: discord.ui.Button):
+        map_data = self.cog.maps.get(str(self.guild_id), {})
+    
+        # Check if proximity is enabled
+        if not map_data.get('allow_proximity', False):
+            await interaction.response.send_message(
+                "Proximity search is disabled for this map.", 
+                ephemeral=True
+            )
+            return
+    
+        # Check if user has a pin
+        user_id = str(interaction.user.id)
+        if user_id not in map_data.get('pins', {}):
+            await interaction.response.send_message(
+                "You need to pin your location first to search for nearby members!",
+                ephemeral=True
+            )
+            return
+        
+        view = ProximityView(self.cog, self.guild_id)
+        await interaction.response.edit_message(
+            content="**📍 Select search radius to find nearby members:**", 
+            view=view, 
+            embed=None
+        )
         
 
 class MapPinButtonView(discord.ui.View):
@@ -361,6 +473,20 @@ class MapV2Cog(commands.Cog):
                 region = map_data.get('region', 'world')
                 view = MapPinButtonView(self, region, int(guild_id))
                 self.bot.add_view(view)
+
+                #Update existing map messages with correct view
+                channel_id = map_data.get('channel_id')
+                message_id = map_data.get('message_id')
+                if channel_id and message_id:
+                    try:
+                        channel = self.bot.get_channel(channel_id)
+                        if channel:
+                            message = await channel.fetch_message(message_id)
+                            await message.edit(view=view)
+                            self.log.info(f"Updated view for guild {guild_id} with region {region}")
+                    except Exception as e:
+                        self.log.warning(f"Could not update view for guild {guild_id}: {e}")
+
                 self.log.info(f"Re-registered persistent view for guild {guild_id}")
         except Exception as e:
             self.log.error(f"Error re-registering views: {e}")
@@ -687,6 +813,187 @@ class MapV2Cog(commands.Cog):
             
             return img, fallback_projection
 
+
+    async def _render_geopandas_map_bounds(self, minx: float, miny: float, maxx: float, maxy: float, width: int, height: int) -> Tuple[Image.Image, callable]:
+        """Render map using geopandas for custom bounds."""
+        try:
+            # Load shapefiles
+            base = Path(__file__).parent.parent / "data"
+            land = gpd.read_file(base / "ne_10m_land.shp")
+            lakes = gpd.read_file(base / "ne_10m_lakes.shp")
+            rivers = gpd.read_file(base / "ne_10m_rivers_lake_centerlines.shp")
+            
+            bbox = box(minx, miny, maxx, maxy)
+            
+            # Projection function
+            def to_px(lat, lon):
+                x = (lon - minx) / (maxx - minx) * width
+                y = (maxy - lat) / (maxy - miny) * height
+                return (int(x), int(y))
+
+            # Create base image
+            img = Image.new("RGB", (width, height), (168, 213, 242))  # Ocean blue
+            draw = ImageDraw.Draw(img)
+            
+            # Draw land
+            for poly in land.geometry:
+                if not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 3:
+                            draw.polygon(pts, fill=(240, 240, 220), outline=None)
+                    except:
+                        continue
+
+            # Draw lakes
+            for poly in lakes.geometry:
+                if poly is None or not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 3:
+                            draw.polygon(pts, fill=(168, 213, 242))
+                    except:
+                        continue
+
+            # Draw rivers (thin for proximity maps)
+            river_width = max(1, int(width / 800))
+            for line in rivers.geometry:
+                if line is None or not line.intersects(bbox):
+                    continue
+                for seg in getattr(line, "geoms", [line]):
+                    try:
+                        pts = [to_px(y, x) for x, y in seg.coords]
+                        if len(pts) >= 2:
+                            draw.line(pts, fill=(60, 60, 200), width=river_width)
+                    except:
+                        continue
+                    
+            return img, to_px
+        
+        except Exception as e:
+            self.log.error(f"Failed to render geopandas map for bounds: {e}")
+            # Fallback
+            img = Image.new("RGB", (width, height), (168, 213, 242))
+            
+            def fallback_projection(lat, lon):
+                x = (lon - minx) / (maxx - minx) * width
+                y = (maxy - lat) / (maxy - miny) * height
+                return (int(x), int(y))
+        
+            return img, fallback_projection
+
+    async def _generate_proximity_map(self, user_id: int, guild_id: int, distance_km: int) -> Optional[Tuple[BytesIO, List[Dict]]]:
+        """Generate proximity map showing nearby users."""
+        try:
+            map_data = self.maps.get(str(guild_id), {})
+            pins = map_data.get('pins', {})
+            user_id_str = str(user_id)
+            
+            if user_id_str not in pins:
+                return None
+            
+            user_pin = pins[user_id_str]
+            user_lat, user_lng = user_pin['lat'], user_pin['lng']
+            
+            # Calculate nearby users
+            nearby_users = []
+            for other_user_id, other_pin in pins.items():
+                if other_user_id == user_id_str:
+                    continue
+                
+                other_lat, other_lng = other_pin['lat'], other_pin['lng']
+                distance = self._calculate_distance(user_lat, user_lng, other_lat, other_lng)
+                
+                if distance <= distance_km:
+                    nearby_users.append({
+                        'user_id': other_user_id,
+                        'username': other_pin.get('username', 'Unknown'),
+                        'location': other_pin.get('display_name', 'Unknown'),
+                        'lat': other_lat,
+                        'lng': other_lng,
+                        'distance': distance
+                    })
+                    
+            # Sort by distance
+            nearby_users.sort(key=lambda x: x['distance'])
+            
+            # Calculate map bounds around user location
+            lat_offset = distance_km / 111.0  # Rough conversion: 1 degree ≈ 111 km
+            lng_offset = distance_km / (111.0 * math.cos(math.radians(user_lat)))
+            
+            minx = user_lng - lng_offset
+            maxx = user_lng + lng_offset
+            miny = user_lat - lat_offset
+            maxy = user_lat + lat_offset
+            
+            # Generate map
+            width, height = 1200, 900
+            
+            def to_px(lat, lon):
+                x = (lon - minx) / (maxx - minx) * width
+                y = (maxy - lat) / (maxy - miny) * height
+                return (int(x), int(y))
+        
+            # Create base map (simplified version)
+            base_map, _ = await self._render_geopandas_map_bounds(minx, miny, maxx, maxy, width, height)
+            
+            if not base_map:
+                base_map = Image.new('RGB', (width, height), color=(168, 213, 242))
+        
+            draw = ImageDraw.Draw(base_map)
+            
+            # Draw radius circle
+            center_x, center_y = to_px(user_lat, user_lng)
+            radius_pixels = int((distance_km / 111.0) / (maxx - minx) * width)  # Approximate
+            draw.ellipse([
+                center_x - radius_pixels, center_y - radius_pixels,
+                center_x + radius_pixels, center_y + radius_pixels
+            ], outline='#FF0000', width=3)
+        
+            # Draw user pin (larger, different color)
+            user_pin_size = 12
+            draw.ellipse([
+                center_x - user_pin_size, center_y - user_pin_size,
+                center_x + user_pin_size, center_y + user_pin_size
+            ], fill='#00FF00', outline='white', width=3)
+        
+            # Draw nearby user pins
+            for user_data in nearby_users:
+                x, y = to_px(user_data['lat'], user_data['lng'])
+                pin_size = 8
+                draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
+                             fill='#FF4444', outline='white', width=2)
+        
+            # Convert to BytesIO
+            img_buffer = BytesIO()
+            base_map.save(img_buffer, format='PNG', optimize=True)
+            img_buffer.seek(0)
+        
+            return img_buffer, nearby_users
+        
+        except Exception as e:
+            self.log.error(f"Failed to generate proximity map: {e}")
+            return None
+
+    def _calculate_distance(self, lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+        """Calculate distance between two points using Haversine formula (in km)."""
+        R = 6371  # Earth's radius in km
+        
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        delta_lat = math.radians(lat2 - lat1)
+        delta_lng = math.radians(lng2 - lng1)
+        
+        a = (math.sin(delta_lat / 2) ** 2 +
+             math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lng / 2) ** 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        
+        return R * c
+        
     async def _generate_continent_closeup(self, guild_id: int, continent: str) -> Optional[BytesIO]:
         """Generate a close-up map of a continent using existing map configs."""
         try:
@@ -1315,10 +1622,35 @@ class MapV2Cog(commands.Cog):
         except Exception as e:
             self.log.error(f"Failed to update global overview: {e}")
 
+    @commands.Cog.listener()
+    async def on_member_remove(self, member):
+        """Remove user's pin when they leave the server"""
+        try:
+            guild_id = str(member.guild.id)
+            user_id = str(member.id)
+
+            if guild_id in self.maps and user_id in self.maps[guild_id].get('pins', {}):
+                # Remove the pin
+                old_location = self.maps[guild_id]['pins'][user_id].get('display_name', 'Unknown')
+                del self.maps[guild_id]['pins'][user_id]
+                await self._save_data(guild_id)
+
+                # Invalidate Cache and update map
+                await self._invalidate_map_cache(int(guild_id))
+                channel_id = self.maps[guild_id]['channel_id']
+                await self._update_map(int(guild_id), channel_id)
+                await self._update_global_overview()
+
+                self.log.info(f"Removed pin for user {member.display_name} ({user_id}) who left guild {guild_id}")
+
+        except Exception as e:
+            self.log.info(f"Error removing pin for leaving member: {e}")
+
     @app_commands.command(name="map_create", description="Create a map for the server")
     @app_commands.describe(
         channel="Channel where the map will be posted",
-        region="Map region (world by default)"
+        region="Map region (world by default)",
+        allow_proximity="Allow users to see nearby members"
     )
     @app_commands.choices(region=[
         app_commands.Choice(name="World", value="world"),
@@ -1336,7 +1668,8 @@ class MapV2Cog(commands.Cog):
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel,
-        region: str = "world"
+        region: str = "world",
+        allow_proximity: bool = True
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -1350,6 +1683,7 @@ class MapV2Cog(commands.Cog):
             'channel_id': channel.id,
             'region': region,
             'pins': {},
+            'allow_proximity': allow_proximity,
             'created_at': datetime.now().isoformat(),
             'created_by': interaction.user.id
         }
