@@ -168,12 +168,13 @@ class ModerationCog(commands.Cog):
         config = self.get_guild_config(guild_id)
         webhook_url = config.get('member_log_webhook')
         username = "Member Logger"
+        avatar_url = "https://cdn.discordapp.com/attachments/1398436953422037013/1409705617131835434/17800528-benutzer-einfache-flache-symbolvektorillustration-vektor.jpg?ex=68ae5a2a&is=68ad08aa&hm=e36a3fc3f8c38417ae251ed852deceec54f1aabe867119c64200d1393fa7870e&"
         
         if webhook_url:
             try:
                 async with aiohttp.ClientSession() as session:
                     webhook = discord.Webhook.from_url(webhook_url, session=session)
-                    await webhook.send(username=username, embed=embed)
+                    await webhook.send(username=username, avatar_url=avatar_url, embed=embed)
             except (discord.HTTPException, aiohttp.ClientError):
                 self.log.error("Failed to send mod-log embed")
                 pass  # Fail silently if webhook is invalid

@@ -124,7 +124,7 @@ class WebhookLogHandler(logging.Handler):
             payload = {
                 "embeds": [embed],
                 "username": "Tausendsassa Logger",
-                "avatar_url": "https://cdn.discordapp.com/attachments/123456789/rss-icon.png"
+                "avatar_url": "https://cdn.discordapp.com/attachments/1398436953422037013/1409705616817127556/1473097.png?ex=68ae5a2a&is=68ad08aa&hm=7b30d4675929866f2a09c7acec96785443aede3912a92c8745fc69ae703a132e&"
             }
 
             if record.levelname != 'INFO':
