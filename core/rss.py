@@ -41,6 +41,12 @@ def _entry_published(entry) -> datetime | None:
         return datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
     return None
 
+def mark_entry_posted(guild_id: int, guid: str, message_id: int, channel_id: int):
+    """Mark an entry as posted with message information"""
+    state = _get_guild_state(guild_id)
+    state.mark_sent(guid, message_id, channel_id, datetime.now(timezone.utc))
+    state.save()
+
 # Remove HTML tags from text
 _REMOVE_TAGS = re.compile(r'<[^>]+>')
 def _strip_html(text: str) -> str:

@@ -1,23 +1,24 @@
 # core/state.py
 """
-Enhanced state management with timestamps and automatic cleanup.
-Tracks which GUIDs have been posted and when, with weekly cleanup of old entries.
+Enhanced state management with timestamps, message tracking and automatic cleanup.
+Tracks which GUIDs have been posted, when, and the corresponding Discord message IDs
+for update functionality.
 """
 
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Set
+from typing import Dict, Optional, Tuple
 
 class State:
     def __init__(self, path: Path):
         self.path = path
-        # Changed from Set[str] to Dict[str, str] to store timestamps
-        self._entries: Dict[str, str] = {}
+        # Changed to store: {guid: {"timestamp": str, "message_id": int, "channel_id": int}}
+        self._entries: Dict[str, dict] = {}
         self._load_state()
 
     def _load_state(self):
-        """Load state from file, handling both old and new format"""
+        """Load state from file, handling old, intermediate and new formats"""
         if not self.path.exists():
             return
             
@@ -28,13 +29,32 @@ class State:
             if isinstance(data, list):
                 # Convert old format to new format with current timestamp
                 current_time = datetime.now(timezone.utc).isoformat()
-                self._entries = {guid: current_time for guid in data}
+                self._entries = {
+                    guid: {
+                        "timestamp": current_time,
+                        "message_id": None,
+                        "channel_id": None
+                    } for guid in data
+                }
                 # Save in new format immediately
                 self.save()
             
-            # Handle new format (dict with timestamps)
+            # Handle intermediate format (dict with timestamps only)
             elif isinstance(data, dict):
-                self._entries = data
+                # Check if it's the old timestamp-only format
+                if data and isinstance(next(iter(data.values())), str):
+                    # Convert timestamp-only format to full format
+                    self._entries = {
+                        guid: {
+                            "timestamp": timestamp,
+                            "message_id": None,
+                            "channel_id": None
+                        } for guid, timestamp in data.items()
+                    }
+                    self.save()
+                else:
+                    # Already in new format
+                    self._entries = data
             
         except Exception as e:
             # Corrupted file, start fresh
@@ -46,11 +66,31 @@ class State:
         """Check if GUID has already been sent"""
         return guid in self._entries
 
-    def mark_sent(self, guid: str, timestamp: datetime = None) -> None:
-        """Mark GUID as sent with optional timestamp"""
+    def get_message_info(self, guid: str) -> Optional[Tuple[int, int]]:
+        """Get message_id and channel_id for a GUID if available"""
+        entry = self._entries.get(guid)
+        if entry and entry.get("message_id") and entry.get("channel_id"):
+            return entry["message_id"], entry["channel_id"]
+        return None
+
+    def mark_sent(self, guid: str, message_id: int = None, channel_id: int = None, timestamp: datetime = None) -> None:
+        """Mark GUID as sent with message info and timestamp"""
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
-        self._entries[guid] = timestamp.isoformat()
+        
+        # If entry exists, update it; otherwise create new
+        if guid in self._entries:
+            self._entries[guid].update({
+                "timestamp": timestamp.isoformat(),
+                "message_id": message_id,
+                "channel_id": channel_id
+            })
+        else:
+            self._entries[guid] = {
+                "timestamp": timestamp.isoformat(),
+                "message_id": message_id,
+                "channel_id": channel_id
+            }
 
     def save(self) -> None:
         """Save state to file"""
@@ -70,9 +110,9 @@ class State:
         
         # Filter out old entries
         self._entries = {
-            guid: timestamp 
-            for guid, timestamp in self._entries.items()
-            if timestamp > cutoff_iso
+            guid: entry 
+            for guid, entry in self._entries.items()
+            if entry.get("timestamp", "") > cutoff_iso
         }
         
         new_count = len(self._entries)
@@ -92,8 +132,10 @@ class State:
         day_ago = now - timedelta(days=1)
         week_ago = now - timedelta(days=7)
         
-        day_count = sum(1 for ts in self._entries.values() if ts > day_ago.isoformat())
-        week_count = sum(1 for ts in self._entries.values() if ts > week_ago.isoformat())
+        day_count = sum(1 for entry in self._entries.values() 
+                       if entry.get("timestamp", "") > day_ago.isoformat())
+        week_count = sum(1 for entry in self._entries.values() 
+                        if entry.get("timestamp", "") > week_ago.isoformat())
         
         return {
             "total": len(self._entries),

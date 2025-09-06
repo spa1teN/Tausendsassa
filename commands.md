@@ -7,6 +7,7 @@
 ### RSS-feeds
 - `/feeds_add`: add a feed to the server (Admin only)
 - `/feeds_remove`: remove a feed (Admin only)
+- `/feed_configure`: configure aesthetics of the embed
 - `/feeds_list`: list all feeds on your server
 - `/feeds_status`: display health status of feeds
 ### Moderation
@@ -19,3 +20,5 @@
 ### Miscellaneous
 - `/ping`: test bot responsiveness
 - `/when_is_trump_gone`: time until he's finally gone
+
+*note: all commands starting in `/owner...` can only be used by the bot-owner*

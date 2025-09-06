@@ -195,9 +195,12 @@ def find_thumbnail(entry: Any) -> Optional[str]:
     bsky_link = entry.get("link")
     if bsky_link and "bsky.app/profile" in bsky_link:
         try:
-            img = get_image_urls(bsky_link)
-            if img:
-                return img[0]
+            images = get_image_urls(bsky_link)
+            if images:
+                print(f"Debug: Found {len(images)} Bluesky images for post: {bsky_link}")
+                return images[0]
+            else:
+                print(f"Debug: No images found in Bluesky post: {bsky_link}")
         except Exception as e:
             print(f"Warning: Failed to get Bluesky images from {bsky_link}: {e}")
     

@@ -3,6 +3,7 @@
 import os
 import yaml
 import asyncio
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, List
@@ -20,6 +21,195 @@ RATE_LIMIT_SECONDS = 30
 FAILURE_THRESHOLD = 3
 AUTHORIZED_USERS = [485051896655249419, 506551160354766848, 703896034820096000]
 GLOBAL_MONITOR_CHANNEL_ID = 1403336394801414234
+
+# Predefined color choices for easier selection
+COLOR_CHOICES = [
+    app_commands.Choice(name="Blue", value="3498DB"),
+    app_commands.Choice(name="Green", value="2ECC71"),
+    app_commands.Choice(name="Red", value="E74C3C"),
+    app_commands.Choice(name="Orange", value="F39C12"),
+    app_commands.Choice(name="Purple", value="9B59B6"),
+    app_commands.Choice(name="Cyan", value="1ABC9C"),
+    app_commands.Choice(name="Yellow", value="F1C40F"),
+    app_commands.Choice(name="Pink", value="E91E63"),
+    app_commands.Choice(name="Dark Blue", value="2C3E50"),
+    app_commands.Choice(name="Gray", value="95A5A6")
+]
+
+class FeedRemoveView(discord.ui.View):
+    """View for feed removal with dropdown selection"""
+    def __init__(self, feeds: List[dict], cog, guild_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        
+        # Create dropdown options
+        options = []
+        for feed in feeds[:25]:  # Discord limit
+            options.append(discord.SelectOption(
+                label=feed["name"],
+                description=f"URL: {feed['feed_url'][:50]}..." if len(feed['feed_url']) > 50 else feed['feed_url'],
+                value=feed["name"]
+            ))
+        
+        if options:
+            select = FeedRemoveSelect(options, cog, guild_id)
+            self.add_item(select)
+
+class FeedRemoveSelect(discord.ui.Select):
+    """Select dropdown for feed removal"""
+    def __init__(self, options: List[discord.SelectOption], cog, guild_id: int):
+        super().__init__(
+            placeholder="Choose a feed to remove...",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+        self.cog = cog
+        self.guild_id = guild_id
+    
+    async def callback(self, interaction: discord.Interaction):
+        feed_name = self.values[0]
+        
+        # Remove the feed
+        config = self.cog._load_guild_config(self.guild_id)
+        old_feeds = config.get("feeds", [])
+        new_feeds = [f for f in old_feeds if f.get("name") != feed_name]
+        
+        config["feeds"] = new_feeds
+        self.cog._save_guild_config(self.guild_id, config)
+        
+        # Update runtime config and stats
+        self.cog.guild_configs[self.guild_id] = config
+        if self.guild_id in self.cog.stats:
+            self.cog.stats[self.guild_id].pop(feed_name, None)
+        
+        self.cog.poll_loop.restart()
+        
+        await interaction.response.edit_message(
+            content=f"✅ Feed **{feed_name}** removed from this server.",
+            view=None
+        )
+
+class FeedConfigureView(discord.ui.View):
+    """View for feed configuration with dropdown selection"""
+    def __init__(self, feeds: List[dict], cog, guild_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        
+        # Create dropdown options
+        options = []
+        for feed in feeds[:25]:  # Discord limit
+            options.append(discord.SelectOption(
+                label=feed["name"],
+                description=f"Channel: #{feed.get('channel_name', 'unknown')}",
+                value=feed["name"]
+            ))
+        
+        if options:
+            select = FeedConfigureSelect(options, cog, guild_id)
+            self.add_item(select)
+
+class FeedConfigureSelect(discord.ui.Select):
+    """Select dropdown for feed configuration"""
+    def __init__(self, options: List[discord.SelectOption], cog, guild_id: int):
+        super().__init__(
+            placeholder="Choose a feed to configure...",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+        self.cog = cog
+        self.guild_id = guild_id
+    
+    async def callback(self, interaction: discord.Interaction):
+        feed_name = self.values[0]
+        
+        # Find the feed config
+        config = self.cog._load_guild_config(self.guild_id)
+        feeds = config.get("feeds", [])
+        feed_config = next((f for f in feeds if f.get("name") == feed_name), None)
+        
+        if not feed_config:
+            await interaction.response.edit_message(
+                content="❌ Feed not found.",
+                view=None
+            )
+            return
+        
+        # Create configuration modal
+        modal = FeedConfigModal(feed_config, self.cog, self.guild_id)
+        await interaction.response.send_modal(modal)
+
+class FeedConfigModal(discord.ui.Modal):
+    """Modal for configuring feed settings"""
+    def __init__(self, feed_config: dict, cog, guild_id: int):
+        self.feed_config = feed_config
+        self.cog = cog
+        self.guild_id = guild_id
+        
+        super().__init__(title=f"Configure Feed: {feed_config['name']}")
+        
+        # Add input fields
+        self.name_input = discord.ui.TextInput(
+            label="Feed Name",
+            default=feed_config.get("name", ""),
+            max_length=100
+        )
+        
+        self.avatar_input = discord.ui.TextInput(
+            label="Avatar URL (optional)",
+            default=feed_config.get("avatar_url", ""),
+            required=False,
+            max_length=500
+        )
+        
+        current_color = feed_config.get("embed_template", {}).get("color", 0x3498DB)
+        self.color_input = discord.ui.TextInput(
+            label="Color (hex without #, e.g. 3498DB)",
+            default=f"{current_color:06X}",
+            max_length=6
+        )
+        
+        self.add_item(self.name_input)
+        self.add_item(self.avatar_input)
+        self.add_item(self.color_input)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validate color
+        try:
+            color_hex = int(self.color_input.value.lstrip("#"), 16)
+        except ValueError:
+            await interaction.response.send_message(
+                f"❌ Invalid color: {self.color_input.value}", ephemeral=True
+            )
+            return
+        
+        # Update feed config
+        config = self.cog._load_guild_config(self.guild_id)
+        feeds = config.get("feeds", [])
+        
+        for feed in feeds:
+            if feed.get("name") == self.feed_config["name"]:
+                old_name = feed["name"]
+                feed["name"] = self.name_input.value
+                feed["avatar_url"] = self.avatar_input.value or None
+                feed["embed_template"]["color"] = color_hex
+                feed["embed_template"]["footer"]["text"] = self.name_input.value
+                
+                # Update stats if name changed
+                if old_name != self.name_input.value and self.guild_id in self.cog.stats:
+                    if old_name in self.cog.stats[self.guild_id]:
+                        self.cog.stats[self.guild_id][self.name_input.value] = self.cog.stats[self.guild_id].pop(old_name)
+                break
+        
+        self.cog._save_guild_config(self.guild_id, config)
+        self.cog.guild_configs[self.guild_id] = config
+        
+        await interaction.response.send_message(
+            f"✅ Feed **{self.name_input.value}** updated successfully!", ephemeral=True
+        )
 
 class FeedCog(commands.Cog):
     """Cog for polling RSS feeds, posting embeds, buttons, health monitoring
@@ -75,6 +265,16 @@ class FeedCog(commands.Cog):
         except Exception as e:
             self.log.error(f"Failed to save config for guild {guild_id}: {e}")
 
+    def _remove_guild_config(self, guild_id: int):
+        """Remove all configuration for a guild"""
+        guild_dir = self.config_base / str(guild_id)
+        if guild_dir.exists():
+            try:
+                shutil.rmtree(guild_dir)
+                self.log.info(f"Removed config directory for guild {guild_id}")
+            except Exception as e:
+                self.log.error(f"Failed to remove config for guild {guild_id}: {e}")
+
     def _load_all_guild_configs(self):
         """Load all guild configurations"""
         self.guild_configs.clear()
@@ -83,6 +283,11 @@ class FeedCog(commands.Cog):
         for guild_dir in self.config_base.iterdir():
             if guild_dir.is_dir() and guild_dir.name.isdigit():
                 guild_id = int(guild_dir.name)
+                # Check if guild still exists
+                if not self.bot.get_guild(guild_id):
+                    self.log.info(f"Guild {guild_id} no longer accessible, skipping config load")
+                    continue
+                    
                 config = self._load_guild_config(guild_id)
                 self.guild_configs[guild_id] = config
                 
@@ -222,9 +427,30 @@ class FeedCog(commands.Cog):
             self.log.info("▶ Starting monitor_update_loop...")
             self.monitor_update_loop.start()
 
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild):
+        """Handle bot being removed from a guild"""
+        guild_id = guild.id
+        self.log.info(f"Bot removed from guild {guild.name} (ID: {guild_id})")
+        
+        # Remove guild config and state
+        self._remove_guild_config(guild_id)
+        
+        # Remove from runtime configs
+        self.guild_configs.pop(guild_id, None)
+        self.stats.pop(guild_id, None)
+        
+        # Remove webhooks for this guild's channels
+        guild_channels = [channel.id for channel in guild.channels if hasattr(channel, 'id')]
+        for channel_id in guild_channels:
+            self.webhook_cache.pop(channel_id, None)
+        self._save_webhook_cache()
+        
+        self.log.info(f"Cleaned up all data for removed guild {guild_id}")
+
     @tasks.loop(minutes=POLL_INTERVAL_MINUTES, reconnect=True)
     async def poll_loop(self):
-        """Main polling loop for all guild feeds"""
+        """Main polling loop for all guild feeds with message update support"""
         now = datetime.utcnow()
         total_feeds = sum(len(config.get("feeds", [])) for config in self.guild_configs.values())
         self.log.info(f"🔄 Running poll_loop for {total_feeds} feeds across {len(self.guild_configs)} guilds")
@@ -266,43 +492,90 @@ class FeedCog(commands.Cog):
                                 feed_cfg["channel_id"], name, guild_id)
                     continue
 
-                # Get or create webhook
-                webhook = await self._get_or_create_webhook(channel, name)
-                if not webhook:
-                    self.log.warning("⚠️ No webhook available for %s, using bot posting", name)
-                    await self._post_via_bot(channel, embeds, feed_cfg, name)
-                    continue
-                
-                # Post via webhook
-                msgs = []
+                # Process embeds (new posts and updates)
                 for e in embeds:
                     try:
                         embed = discord.Embed.from_dict(e)
+                        is_update = e.get("is_update", False)
+                        message_info = e.get("message_info")
+                        guid = e.get("guid")
                         
-                        msg = await webhook.send(
-                            embed=embed,
-                            username=feed_cfg.get("username", name),
-                            avatar_url=feed_cfg.get("avatar_url"),
-                            wait=True
-                        )
-                        self.log.info("✅ Posted embed via webhook to channel <#%s>", channel.id)
-                        msgs.append(msg)
+                        if is_update and message_info:
+                            # Try to update existing message
+                            message_id, old_channel_id = message_info
+                            if old_channel_id == channel.id:
+                                try:
+                                    old_message = await channel.fetch_message(message_id)
+                                    await old_message.edit(embed=embed)
+                                    self.log.info("✅ Updated existing message for %s", name)
+                                    # Update timestamp in state
+                                    rss.mark_entry_posted(guild_id, guid, message_id, channel.id)
+                                    continue
+                                except discord.NotFound:
+                                    self.log.info("Original message not found, posting new one for %s", name)
+                                except Exception as ex:
+                                    self.log.warning("Failed to update message for %s: %s", name, ex)
+                        
+                        # Post new message (either new entry or failed update)
+                        webhook = await self._get_or_create_webhook(channel, name)
+                        if webhook:
+                            msg = await webhook.send(
+                                embed=embed,
+                                username=name,  # Use feed name as username
+                                avatar_url=feed_cfg.get("avatar_url"),
+                                wait=True
+                            )
+                            self.log.info("✅ Posted embed via webhook to channel <#%s>", channel.id)
+                        else:
+                            # Fallback to bot posting
+                            msg = await self._post_via_bot_single(channel, embed, feed_cfg, name)
+                        
+                        if msg:
+                            # Mark as posted with message info
+                            rss.mark_entry_posted(guild_id, guid, msg.id, channel.id)
+                            
+                            # Handle crosspost
+                            if feed_cfg.get("crosspost"):
+                                try:
+                                    await msg.publish()
+                                    self.log.info("🚀 Published message")
+                                except discord.HTTPException as exc:
+                                    self.log.warning("Publish failed: %s", exc)
+                                    
                     except Exception:
-                        self.log.exception("❌ Failed to post embed for %s", name)
+                        self.log.exception("❌ Failed to process embed for %s", name)
 
-                # Crosspost batch if enabled
-                if feed_cfg.get("crosspost") and msgs:
-                    try:
-                        #await msgs[0].publish()
-                        self.log.info("🚀 Published batch of %d messages", len(msgs))
-                    except discord.HTTPException as exc:
-                        self.log.warning("Publish failed: %s", exc)
+    async def _post_via_bot_single(self, channel, embed, feed_cfg, name) -> Optional[discord.Message]:
+        """Post single embed via bot with thread button"""
+        try:
+            # Add author icon and name
+            author_name = name
+            author_icon = feed_cfg.get("avatar_url")
+            if author_name or author_icon:
+                embed.set_author(
+                    name=author_name or discord.Embed.Empty,
+                    icon_url=author_icon or discord.Embed.Empty
+                )
+            
+            # Add thread creation button
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(
+                label="Start Thread",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"thread_{name}_{hash(embed.url or embed.title or 'unknown')}"
+            ))
+
+            msg = await channel.send(embed=embed, view=view)
+            self.log.info("✅ Posted embed via bot to channel <#%s>", channel.id)
+            return msg
+        except Exception:
+            self.log.exception("❌ Failed to post embed for %s", name)
+            return None
 
     @tasks.loop(hours=168)  # Weekly cleanup
     async def cleanup_loop(self):
         """Weekly cleanup of old posted entries"""
         self.log.info("🧹 Running weekly cleanup of posted entries")
-        # The actual cleanup is handled in the rss module per guild
         for guild_id in self.guild_configs.keys():
             try:
                 rss.cleanup_old_entries(guild_id)
@@ -314,43 +587,6 @@ class FeedCog(commands.Cog):
         """Update the global feed monitor"""
         await self._update_global_monitor()
 
-    async def _post_via_bot(self, channel, embeds, feed_cfg, name):
-        """Fallback method for normal bot posting when webhook unavailable"""
-        msgs = []
-        for e in embeds:
-            try:
-                embed = discord.Embed.from_dict(e)
-                # Add author icon and name
-                author_name = feed_cfg.get("username")
-                author_icon = feed_cfg.get("avatar_url")
-                if author_name or author_icon:
-                    embed.set_author(
-                        name=author_name or discord.Embed.Empty,
-                        icon_url=author_icon or discord.Embed.Empty
-                    )
-                
-                # Add thread creation button
-                view = discord.ui.View()
-                view.add_item(discord.ui.Button(
-                    label="Start Thread",
-                    style=discord.ButtonStyle.primary,
-                    custom_id=f"thread_{name}_{e.get('guid', 'unknown')}"
-                ))
-
-                msg = await channel.send(embed=embed, view=view)
-                self.log.info("✅ Posted embed via bot to channel <#%s>", channel.id)
-                msgs.append(msg)
-            except Exception:
-                self.log.exception("❌ Failed to post embed for %s", name)
-
-        # Crosspost batch if enabled
-        if feed_cfg.get("crosspost") and msgs:
-            try:
-                await msgs[0].publish()
-                self.log.info("🚀 Published batch of %d messages", len(msgs))
-            except discord.HTTPException as exc:
-                self.log.warning("Publish failed: %s", exc)
-                    
     @poll_loop.before_loop
     async def before_poll(self):
         await self.bot.wait_until_ready()
@@ -528,6 +764,15 @@ class FeedCog(commands.Cog):
         name="feeds_add",
         description="Add a new RSS feed to this server"
     )
+    @app_commands.describe(
+        name="Name of the RSS feed",
+        feed_url="URL of the RSS feed",
+        channel="Channel where posts will be sent",
+        crosspost="Whether to crosspost (for announcement channels)",
+        color="Color for the embed",
+        avatar_url="Avatar URL for the webhook"
+    )
+    @app_commands.choices(color=COLOR_CHOICES)
     @app_commands.default_permissions(administrator=True)
     async def slash_feeds_add(
         self,
@@ -535,33 +780,27 @@ class FeedCog(commands.Cog):
         name: str,
         feed_url: str,
         channel: discord.TextChannel,
-        max_items: int = 3,
         crosspost: bool = False,
-        color: str = None,
-        user_name: str = None,
+        color: app_commands.Choice[str] = None,
         avatar_url: str = None
     ):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild.id
         
-        # Parse color hex
+        # Parse color
         default_hex = 0x3498DB
         if color:
-            c = color.lstrip("#")
             try:
-                default_hex = int(c, 16)
+                default_hex = int(color.value, 16)
             except ValueError:
-                return await interaction.followup.send(
-                    f"❌ `{color}` is not a valid hex color.", ephemeral=True
-                )
+                default_hex = 0x3498DB
         
         new_feed = {
             "name": name,
             "feed_url": feed_url,
             "channel_id": channel.id,
-            "max_items": max_items,
+            "max_items": 3,  # Fixed to 3
             "crosspost": crosspost,
-            "username": user_name,
             "avatar_url": avatar_url,
             "embed_template": {
                 "title": "{title}",
@@ -592,37 +831,23 @@ class FeedCog(commands.Cog):
 
     @app_commands.command(
         name="feeds_remove",
-        description="Remove an RSS feed from this server by name"
+        description="Remove an RSS feed from this server"
     )
     @app_commands.default_permissions(administrator=True)
-    async def slash_feeds_remove(
-        self,
-        interaction: discord.Interaction,
-        name: str
-    ):
-        await interaction.response.defer(ephemeral=True)
+    async def slash_feeds_remove(self, interaction: discord.Interaction):
         guild_id = interaction.guild.id
-        
         config = self._load_guild_config(guild_id)
-        old_feeds = config.get("feeds", [])
-        new_feeds = [f for f in old_feeds if f.get("name") != name]
+        feeds = config.get("feeds", [])
         
-        if len(new_feeds) == len(old_feeds):
-            return await interaction.followup.send(
-                f"❌ No feed named **{name}** found on this server.", ephemeral=True
+        if not feeds:
+            await interaction.response.send_message(
+                "No feeds configured for this server.", ephemeral=True
             )
+            return
         
-        config["feeds"] = new_feeds
-        self._save_guild_config(guild_id, config)
-        
-        # Update runtime config and stats
-        self.guild_configs[guild_id] = config
-        if guild_id in self.stats:
-            self.stats[guild_id].pop(name, None)
-        
-        self.poll_loop.restart()
-        await interaction.followup.send(
-            f"✅ Feed **{name}** removed from this server.", ephemeral=True
+        view = FeedRemoveView(feeds, self, guild_id)
+        await interaction.response.send_message(
+            "Select a feed to remove:", view=view, ephemeral=True
         )
 
     @app_commands.command(
@@ -653,6 +878,32 @@ class FeedCog(commands.Cog):
             color=0x00ADEF
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="feeds_configure",
+        description="Configure settings for an existing RSS feed"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def slash_feeds_configure(self, interaction: discord.Interaction):
+        guild_id = interaction.guild.id
+        config = self._load_guild_config(guild_id)
+        feeds = config.get("feeds", [])
+        
+        if not feeds:
+            await interaction.response.send_message(
+                "No feeds configured for this server.", ephemeral=True
+            )
+            return
+        
+        # Add channel names to feeds for better display
+        for feed in feeds:
+            channel = self.bot.get_channel(feed.get("channel_id"))
+            feed["channel_name"] = channel.name if channel else "unknown"
+        
+        view = FeedConfigureView(feeds, self, guild_id)
+        await interaction.response.send_message(
+            "Select a feed to configure:", view=view, ephemeral=True
+        )
 
     @app_commands.command(
         name="feeds_webhook_status",
