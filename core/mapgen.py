@@ -20,7 +20,7 @@ class MapGenerator:
         self.log = logger
         
         # Map region configurations
-        self.base_image_width = 2200
+        self.base_image_width = 1500
         self.map_configs = {
             "world": {
                 "center_lat": 0.0,
@@ -208,18 +208,20 @@ class MapGenerator:
         try:
             # Load shapefiles
             base = self.data_dir.parent / "data"
+            world = gpd.read_file(base / "ne_10m_admin_0_countries.shp")
+            states = gpd.read_file(base / "ne_10m_admin_1_states_provinces.shp") 
             land = gpd.read_file(base / "ne_10m_land.shp")
             lakes = gpd.read_file(base / "ne_10m_lakes.shp")
             rivers = gpd.read_file(base / "ne_10m_rivers_lake_centerlines.shp")
-            
+        
             bbox = box(minx, miny, maxx, maxy)
-            
+        
             # Projection function
             def to_px(lat, lon):
                 x = (lon - minx) / (maxx - minx) * width
                 y = (maxy - lat) / (maxy - miny) * height
                 return (int(x), int(y))
-
+            
             # Create base image
             img = Image.new("RGB", (width, height), (168, 213, 242))  # Ocean blue
             draw = ImageDraw.Draw(img)
@@ -247,9 +249,13 @@ class MapGenerator:
                             draw.polygon(pts, fill=(168, 213, 242))
                     except:
                         continue
-
-            # Draw rivers (thin for proximity maps)
+                    
+            # Calculate line widths for proximity maps
             river_width = max(1, int(width / 800))
+            country_width = max(2, int(width / 400))
+            state_width = max(1, int(width / 800))
+
+            # Draw rivers
             for line in rivers.geometry:
                 if line is None or not line.intersects(bbox):
                     continue
@@ -260,19 +266,43 @@ class MapGenerator:
                             draw.line(pts, fill=(60, 60, 200), width=river_width)
                     except:
                         continue
-                    
+
+            # NEW: Draw country boundaries (thick black lines)
+            for poly in world.geometry:
+                if poly is None or not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 2:
+                            draw.line(pts, fill=(0, 0, 0), width=country_width)
+                    except:
+                        continue
+
+            # NEW: Draw state boundaries (gray lines) 
+            for poly in states.geometry:
+                if poly is None or not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 2:
+                            draw.line(pts, fill=(100, 100, 100), width=state_width)
+                    except:
+                        continue
+                
             return img, to_px
-        
+    
         except Exception as e:
             self.log.error(f"Failed to render geopandas map for bounds: {e}")
             # Fallback
             img = Image.new("RGB", (width, height), (168, 213, 242))
-            
+        
             def fallback_projection(lat, lon):
                 x = (lon - minx) / (maxx - minx) * width
                 y = (maxy - lat) / (maxy - miny) * height
                 return (int(x), int(y))
-        
+    
             return img, fallback_projection
 
     def group_overlapping_pins(self, pins: Dict, projection_func: Callable, base_pin_size: int) -> List[Dict]:

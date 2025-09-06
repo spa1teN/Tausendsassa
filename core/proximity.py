@@ -1,4 +1,4 @@
-"""Proximity calculation utilities for the Discord Map Bot."""
+"""Proximity calculation utilities for the Discord Map Bot - FIXED VERSION."""
 
 import math
 from typing import Dict, List, Tuple, Optional
@@ -55,8 +55,13 @@ class ProximityCalculator:
 
     def calculate_map_bounds(self, user_lat: float, user_lng: float, distance_km: int) -> Tuple[float, float, float, float]:
         """Calculate map bounds around user location for given distance."""
-        lat_offset = distance_km / 111.0  # Rough conversion: 1 degree ≈ 111 km
+        # FIXED: More accurate conversion considering latitude
+        lat_offset = distance_km / 111.0  # 1 degree latitude ≈ 111 km
         lng_offset = distance_km / (111.0 * math.cos(math.radians(user_lat)))
+
+        buffer_factor = 1.2
+        lat_offset *= buffer_factor
+        lng_offset *= buffer_factor
         
         minx = user_lng - lng_offset
         maxx = user_lng + lng_offset
@@ -64,6 +69,17 @@ class ProximityCalculator:
         maxy = user_lat + lat_offset
         
         return minx, miny, maxx, maxy
+
+    def calculate_radius_pixels(self, distance_km: int, user_lat: float, minx: float, maxx: float, width: int) -> int:
+        """Calculate accurate radius in pixels for drawing the circle."""
+        # Calculate longitude offset for the given distance at this latitude
+        lng_offset_for_distance = distance_km / (111.0 * math.cos(math.radians(user_lat)))
+        
+        # Convert to pixel space
+        lng_range = maxx - minx
+        radius_pixels = int((lng_offset_for_distance / lng_range) * width)
+        
+        return radius_pixels
 
     async def generate_proximity_map(self, user_id: int, guild_id: int, distance_km: int, maps: Dict) -> Optional[Tuple[BytesIO, List[Dict]]]:
         """Generate proximity map showing nearby users."""
@@ -92,7 +108,7 @@ class ProximityCalculator:
                 y = (maxy - lat) / (maxy - miny) * height
                 return (int(x), int(y))
         
-            # Create base map
+            # Create base map - FIXED: Now includes boundaries
             base_map, _ = await self.map_generator.render_geopandas_map_bounds(minx, miny, maxx, maxy, width, height)
             
             if not base_map:
@@ -100,9 +116,11 @@ class ProximityCalculator:
         
             draw = ImageDraw.Draw(base_map)
             
-            # Draw radius circle
+            # FIXED: Draw radius circle with accurate calculation
             center_x, center_y = to_px(user_lat, user_lng)
-            radius_pixels = int((distance_km / 111.0) / (maxx - minx) * width)  # Approximate
+            radius_pixels = self.calculate_radius_pixels(distance_km, user_lat, minx, maxx, width)
+            
+            # Draw circle outline
             draw.ellipse([
                 center_x - radius_pixels, center_y - radius_pixels,
                 center_x + radius_pixels, center_y + radius_pixels
@@ -115,12 +133,16 @@ class ProximityCalculator:
                 center_x + user_pin_size, center_y + user_pin_size
             ], fill='#00FF00', outline='white', width=3)
         
-            # Draw nearby user pins
+            # Draw nearby user pins - FIXED: Only draw pins that are visible on map
             for user_data in nearby_users:
-                x, y = to_px(user_data['lat'], user_data['lng'])
-                pin_size = 8
-                draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
-                             fill='#FF4444', outline='white', width=2)
+                pin_lat, pin_lng = user_data['lat'], user_data['lng']
+                
+                # Check if pin is within map bounds (visible area)
+                if minx <= pin_lng <= maxx and miny <= pin_lat <= maxy:
+                    x, y = to_px(pin_lat, pin_lng)
+                    pin_size = 8
+                    draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
+                                 fill='#FF4444', outline='white', width=2)
         
             # Convert to BytesIO
             img_buffer = BytesIO()

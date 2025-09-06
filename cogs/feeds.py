@@ -36,6 +36,22 @@ COLOR_CHOICES = [
     app_commands.Choice(name="Gray", value="95A5A6")
 ]
 
+def _is_bluesky_feed_url(url: str) -> bool:
+    """Check if the given URL is a Bluesky profile feed"""
+    return "bsky.app/profile/" in url
+
+def _create_bluesky_embed_template(name: str, default_color: int) -> dict:
+    """Create a specialized embed template for Bluesky feeds"""
+    return {
+        "title": f"{name} just posted on Bluesky",  # Static title for all Bluesky posts
+        "description": "{summary}",  # Show post content in description
+        "url": "{link}",
+        "color": default_color,
+        "timestamp": "{published_custom}",
+        "footer": {"text": name},
+        "image": {"url": "{thumbnail}"}
+    }
+
 class FeedRemoveView(discord.ui.View):
     """View for feed removal with dropdown selection"""
     def __init__(self, feeds: List[dict], cog, guild_id: int):
@@ -197,6 +213,11 @@ class FeedConfigModal(discord.ui.Modal):
                 feed["avatar_url"] = self.avatar_input.value or None
                 feed["embed_template"]["color"] = color_hex
                 feed["embed_template"]["footer"]["text"] = self.name_input.value
+                
+                # Update title for Bluesky feeds if name changed
+                if _is_bluesky_feed_url(feed["feed_url"]):
+                    feed["embed_template"]["title"] = f"{self.name_input.value} just posted on Bluesky"
+                    feed["embed_template"]["author"]["name"] = self.name_input.value
                 
                 # Update stats if name changed
                 if old_name != self.name_input.value and self.guild_id in self.cog.stats:
@@ -590,17 +611,17 @@ class FeedCog(commands.Cog):
     @poll_loop.before_loop
     async def before_poll(self):
         await self.bot.wait_until_ready()
-        self.log.info("✔ poll_loop is ready")
+        self.log.info("✓ poll_loop is ready")
 
     @cleanup_loop.before_loop
     async def before_cleanup(self):
         await self.bot.wait_until_ready()
-        self.log.info("✔ cleanup_loop is ready")
+        self.log.info("✓ cleanup_loop is ready")
 
     @monitor_update_loop.before_loop
     async def before_monitor_update(self):
         await self.bot.wait_until_ready()
-        self.log.info("✔ monitor_update_loop is ready")
+        self.log.info("✓ monitor_update_loop is ready")
 
     async def _maybe_alert(self, guild_id: int, feed_name: str, failures: int, monitor_channel_id: Optional[int]):
         """Send alert if failure threshold reached"""
@@ -714,53 +735,6 @@ class FeedCog(commands.Cog):
         await interaction.followup.send("✅ Poll executed.", ephemeral=True)
 
     @app_commands.command(
-        name="feeds_reload",
-        description="Reload feed configuration and restart polling"
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def slash_feeds_reload(self, interaction: discord.Interaction):
-        self._load_all_guild_configs()
-        self.poll_loop.restart()
-        await interaction.response.send_message(
-            "✅ Feeds reloaded.", ephemeral=True
-        )
-
-    @app_commands.command(
-        name="feeds_status",
-        description="Show health status of RSS feeds for this server"
-    )
-    async def slash_status(self, interaction: discord.Interaction):
-        guild_id = interaction.guild.id
-        guild_stats = self.stats.get(guild_id, {})
-        
-        if not guild_stats:
-            await interaction.response.send_message(
-                "No feeds configured for this server.", ephemeral=True
-            )
-            return
-            
-        embed = discord.Embed(
-            title="📊 RSS Feed Health Status",
-            color=0x00FF00,
-            timestamp=datetime.utcnow()
-        )
-        
-        for name, st in guild_stats.items():
-            lr = st["last_run"].strftime("%Y-%m-%d %H:%M:%S") if st["last_run"] else "-"
-            ls = st["last_success"].strftime("%Y-%m-%d %H:%M:%S") if st["last_success"] else "-"
-            fv = st["failures"]
-            embed.add_field(
-                name=name,
-                value=(f"Last Run: `{lr}`\n"
-                       f"Last Success: `{ls}`\n"
-                       f"Consecutive Failures: `{fv}`"),
-                inline=False
-            )
-        await interaction.response.send_message(
-            embed=embed, ephemeral=True
-        )
-
-    @app_commands.command(
         name="feeds_add",
         description="Add a new RSS feed to this server"
     )
@@ -795,14 +769,12 @@ class FeedCog(commands.Cog):
             except ValueError:
                 default_hex = 0x3498DB
         
-        new_feed = {
-            "name": name,
-            "feed_url": feed_url,
-            "channel_id": channel.id,
-            "max_items": 3,  # Fixed to 3
-            "crosspost": crosspost,
-            "avatar_url": avatar_url,
-            "embed_template": {
+        # Check if this is a Bluesky feed and use appropriate template
+        if _is_bluesky_feed_url(feed_url):
+            embed_template = _create_bluesky_embed_template(name, default_hex)
+        else:
+            # Standard template for normal RSS feeds
+            embed_template = {
                 "title": "{title}",
                 "description": "{description}",
                 "url": "{link}",
@@ -811,6 +783,15 @@ class FeedCog(commands.Cog):
                 "footer": {"text": name},
                 "image": {"url": "{thumbnail}"}
             }
+        
+        new_feed = {
+            "name": name,
+            "feed_url": feed_url,
+            "channel_id": channel.id,
+            "max_items": 3,  # Fixed to 3
+            "crosspost": crosspost,
+            "avatar_url": avatar_url,
+            "embed_template": embed_template
         }
         
         # Load and update guild config
@@ -825,9 +806,16 @@ class FeedCog(commands.Cog):
         self.stats[guild_id][name] = {"last_run": None, "last_success": None, "failures": 0}
         
         self.poll_loop.restart()
-        await interaction.followup.send(
-            f"✅ Feed **{name}** added to this server.", ephemeral=True
-        )
+        
+        # Special confirmation message for Bluesky feeds
+        if _is_bluesky_feed_url(feed_url):
+            await interaction.followup.send(
+                f"✅ Bluesky feed **{name}** added to this server with custom title format.", ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                f"✅ Feed **{name}** added to this server.", ephemeral=True
+            )
 
     @app_commands.command(
         name="feeds_remove",
@@ -868,12 +856,13 @@ class FeedCog(commands.Cog):
         lines = []
         for f in feeds:
             col = f["embed_template"].get("color", 0)
+            feed_type = "🦋 Bluesky" if _is_bluesky_feed_url(f["feed_url"]) else "📰 RSS"
             lines.append(
-                f"• **{f['name']}** – <{f['feed_url']}> in <#{f['channel_id']}>"
-                f" – Color: `#{col:06X}`"
+                f"• **{f['name']}** {feed_type} — <{f['feed_url']}> in <#{f['channel_id']}>"
+                f" — Color: `#{col:06X}`"
             )
         embed = discord.Embed(
-            title="📑 Current RSS Feeds",
+            title="📋 Current RSS Feeds",
             description="\n".join(lines),
             color=0x00ADEF
         )
@@ -905,32 +894,6 @@ class FeedCog(commands.Cog):
             "Select a feed to configure:", view=view, ephemeral=True
         )
 
-    @app_commands.command(
-        name="feeds_webhook_status",
-        description="Show webhook status for all channels"
-    )
-    async def slash_webhook_status(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title="🔗 Webhook Status",
-            color=0x00ADEF,
-            timestamp=datetime.utcnow()
-        )
-        
-        # Show cached webhooks
-        for channel_id, webhook in self.webhook_cache.items():
-            channel = self.bot.get_channel(channel_id)
-            channel_name = f"#{channel.name}" if channel else f"ID:{channel_id}"
-            embed.add_field(
-                name=channel_name,
-                value=f"Webhook: `{webhook.name}`\nID: `{webhook.id}`",
-                inline=True
-            )
 
-        if not self.webhook_cache:
-            embed.description = "No webhook cache available."
-            
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        
 async def setup(bot: commands.Bot):
     await bot.add_cog(FeedCog(bot))

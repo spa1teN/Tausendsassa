@@ -5,11 +5,13 @@ import geopandas as gpd
 from pathlib import Path
 from typing import Optional, Dict, Tuple, List
 from datetime import datetime
-from PIL import Image
+from PIL import Image, ImageDraw
 from io import BytesIO
 import discord
 from discord import app_commands
 from discord.ext import commands
+import math
+from shapely.geometry import box
 
 # Import our modular components
 from core.mapgen import MapGenerator
@@ -18,7 +20,7 @@ from core.proximity import ProximityCalculator
 from core.views import MapPinButtonView, LocationModal
 
 # Constants
-IMAGE_WIDTH = 2200
+IMAGE_WIDTH = 1500
 BOT_OWNER_ID = 485051896655249419
 
 
@@ -253,25 +255,29 @@ class MapV2Cog(commands.Cog):
             return None
 
     async def _generate_state_closeup(self, guild_id: int, state_name: str) -> Optional[BytesIO]:
-        """Generate a close-up map of a German state with correct dimensions."""
+        """Generate a close-up map of a German state with borders."""
         try:
-            # Load German states shapefile
+            # Import required modules
+            import math
+            from shapely.geometry import box
+            from PIL import Image, ImageDraw
+            
+            # Load shapefiles
             base = Path(__file__).parent.parent / "data"
             states = gpd.read_file(base / "ne_10m_admin_1_states_provinces.shp")
+            world = gpd.read_file(base / "ne_10m_admin_0_countries.shp")
+            land = gpd.read_file(base / "ne_10m_land.shp")
+            lakes = gpd.read_file(base / "ne_10m_lakes.shp")
+            rivers = gpd.read_file(base / "ne_10m_rivers_lake_centerlines.shp")
             
-            # Find the state - try different approaches for better matching
+            # Find the state
             german_states = states[states["admin"] == "Germany"]
-            
-            # Try exact match first
             state_row = german_states[german_states["name"] == state_name]
             
-            # If no exact match, try case-insensitive contains
             if state_row.empty:
                 state_row = german_states[german_states["name"].str.contains(state_name, case=False, na=False)]
             
-            # Try alternative name matching
             if state_row.empty:
-                # Some common alternatives
                 name_alternatives = {
                     "Bayern": "Bavaria",
                     "Nordrhein-Westfalen": "North Rhine-Westphalia",
@@ -285,15 +291,14 @@ class MapV2Cog(commands.Cog):
                 self.log.warning(f"State {state_name} not found")
                 return None
             
-            # Get state geometry and bounds
+            # Get bounds and add padding
             state_geom = state_row.geometry.iloc[0]
             bounds = state_geom.bounds
             minx, miny, maxx, maxy = bounds
             
-            # Add padding based on state size
             width_range = maxx - minx
             height_range = maxy - miny
-            padding_x = width_range * 0.05  # 5% padding
+            padding_x = width_range * 0.05
             padding_y = height_range * 0.05
             
             minx -= padding_x
@@ -301,9 +306,9 @@ class MapV2Cog(commands.Cog):
             miny -= padding_y
             maxy += padding_y
             
-            # Calculate dimensions using Web Mercator projection like other maps
-            import math
+            bbox = box(minx, miny, maxx, maxy)
             
+            # Calculate dimensions using Web Mercator
             def lat_to_mercator_y(lat):
                 return math.log(math.tan((90 + lat) * math.pi / 360))
             
@@ -314,31 +319,112 @@ class MapV2Cog(commands.Cog):
             lon_range_radians = (maxx - minx) * math.pi / 180
             aspect_ratio = mercator_y_range / lon_range_radians
             
-            # Use consistent width with other map types
             width = 1400
             height = int(width * aspect_ratio)
-            
-            # Ensure reasonable height bounds
             height = max(600, min(height, 2000))
             
-            # Generate base map with custom bounds
-            base_map, projection_func = await self.map_generator.render_geopandas_map_bounds(minx, miny, maxx, maxy, width, height)
-            
-            if not base_map or not projection_func:
-                return None
-            
+            # Projection function
+            def to_px(lat, lon):
+                x = (lon - minx) / (maxx - minx) * width
+                y = (maxy - lat) / (maxy - miny) * height
+                return (int(x), int(y))
+
+            # Create base image
+            img = Image.new("RGB", (width, height), (168, 213, 242))  # Ocean blue
+            draw = ImageDraw.Draw(img)
+
+            # Draw land
+            for poly in land.geometry:
+                if not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 3:
+                            draw.polygon(pts, fill=(240, 240, 220), outline=None)
+                    except:
+                        continue
+
+            # Draw lakes
+            for poly in lakes.geometry:
+                if poly is None or not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 3:
+                            draw.polygon(pts, fill=(168, 213, 242))
+                    except:
+                        continue
+
+            # Calculate line widths for state view
+            river_width = max(1, int(width / 800))
+            country_width = max(2, int(width / 400))
+            state_width = max(1, int(width / 800))
+
+            # Draw rivers
+            for line in rivers.geometry:
+                if line is None or not line.intersects(bbox):
+                    continue
+                for seg in getattr(line, "geoms", [line]):
+                    try:
+                        pts = [to_px(y, x) for x, y in seg.coords]
+                        if len(pts) >= 2:
+                            draw.line(pts, fill=(60, 60, 200), width=river_width)
+                    except:
+                        continue
+
+            # Draw country boundaries (thick black lines)
+            for poly in world.geometry:
+                if poly is None or not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 2:
+                            draw.line(pts, fill=(0, 0, 0), width=country_width)
+                    except:
+                        continue
+
+            # Draw state boundaries (gray lines)
+            for poly in states.geometry:
+                if poly is None or not poly.intersects(bbox):
+                    continue
+                for ring in getattr(poly, "geoms", [poly]):
+                    try:
+                        pts = [to_px(y, x) for x, y in ring.exterior.coords]
+                        if len(pts) >= 2:
+                            draw.line(pts, fill=(100, 100, 100), width=state_width)
+                    except:
+                        continue
+
+            # Highlight the selected state with a subtle border
+            try:
+                if hasattr(state_geom, 'exterior'):
+                    coords_list = [state_geom.exterior.coords]
+                else:
+                    coords_list = [ring.exterior.coords for ring in state_geom.geoms]
+                
+                for coords in coords_list:
+                    pts = [to_px(y, x) for x, y in coords]
+                    if len(pts) >= 2:
+                        # Thicker red border for selected state
+                        draw.line(pts, fill=(200, 0, 0), width=max(2, state_width + 1))
+            except Exception as e:
+                self.log.warning(f"Could not highlight state {state_name}: {e}")
+
             # Draw pins for this guild
             map_data = self.maps.get(str(guild_id), {})
             pins = map_data.get('pins', {})
             
             base_pin_size = int(height * 16 / 2400)
-            pin_groups = self.map_generator.group_overlapping_pins(pins, projection_func, base_pin_size)
+            pin_groups = self.map_generator.group_overlapping_pins(pins, to_px, base_pin_size)
             
-            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size)
+            self.map_generator.draw_pins_on_map(img, pin_groups, width, height, base_pin_size)
 
             # Convert to BytesIO
             img_buffer = BytesIO()
-            base_map.save(img_buffer, format='PNG', optimize=True)
+            img.save(img_buffer, format='PNG', optimize=True)
             img_buffer.seek(0)
             return img_buffer
             
@@ -930,6 +1016,8 @@ class MapV2Cog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+
+    """
     @app_commands.command(name="owner_setup_map_overview", description="Setup global map overview (Bot Owner only)")
     @app_commands.describe(channel="Channel for global overview")
     async def setup_global_overview(self, interaction: discord.Interaction, channel: discord.TextChannel):
@@ -951,10 +1039,14 @@ class MapV2Cog(commands.Cog):
             f"📊 The overview will be automatically updated when maps change.",
             ephemeral=True
         )
-
-    @app_commands.command(name="map_clear_cache", description="Clear cached map images (Admin only)")
+    """
+    @app_commands.command(name="owner_clear_map_cache", description="Clear cached map images (bot owner only)")
     @app_commands.default_permissions(administrator=True)
     async def clear_cache(self, interaction: discord.Interaction):
+        if interaction.user.id != BOT_OWNER_ID:
+            await interaction.response.send_message("❌ This command is only available to the bot owner.", ephemeral=True)
+            return
+            
         await interaction.response.defer(ephemeral=True)
         
         try:
@@ -969,7 +1061,7 @@ class MapV2Cog(commands.Cog):
         except Exception as e:
             self.log.error(f"Error clearing cache: {e}")
             await interaction.followup.send("❌ Error clearing cache.", ephemeral=True)
-
+    """
     @app_commands.command(name="owner_refresh_map_overview", description="Manually refresh global overview (Bot Owner only)")
     async def refresh_global_overview(self, interaction: discord.Interaction):
         if interaction.user.id != BOT_OWNER_ID:
@@ -984,7 +1076,7 @@ class MapV2Cog(commands.Cog):
         except Exception as e:
             self.log.error(f"Error refreshing global overview: {e}")
             await interaction.followup.send("❌ Error refreshing global overview.", ephemeral=True)
-
+    """
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(MapV2Cog(bot))

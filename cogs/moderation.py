@@ -292,6 +292,8 @@ class ModerationCog(commands.Cog):
                 embed = self.create_timeout_embed(after, duration, moderator, reason)
                 await self.send_log_message(after.guild.id, embed)
 
+
+    """
     @app_commands.command(name="owner_give_role", description="Give role to user (owner only)")
     @app_commands.describe(
         user="User to give role to",
@@ -323,6 +325,7 @@ class ModerationCog(commands.Cog):
                 f"❌ Error: {str(e)}", 
                 ephemeral=True
             )
+    """
                 
     @app_commands.command(name="mod_dashboard", description="View current moderation configuration")
     @app_commands.default_permissions(administrator=True)

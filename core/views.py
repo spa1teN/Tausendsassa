@@ -170,7 +170,7 @@ class MapMenuView(discord.ui.View):
 
     def _add_proximity_button(self):
         proximity_button = discord.ui.Button(
-            label="Nearby Members",
+            label="Nearby",
             style=discord.ButtonStyle.secondary,
             emoji="📍"
         )
@@ -179,7 +179,7 @@ class MapMenuView(discord.ui.View):
 
     def _add_closeup_button(self):
         closeup_button = discord.ui.Button(
-            label="Region Close-up",
+            label="Close-up",
             style=discord.ButtonStyle.secondary,
             emoji="🔍"
         )
@@ -309,7 +309,7 @@ class UserPinOptionsView(discord.ui.View):
         self._original_response = None  # Store original response for updating
 
     @discord.ui.button(
-        label="🔄 Change",
+        label="Change",
         style=discord.ButtonStyle.primary,
         emoji="🔄"
     )
@@ -321,9 +321,9 @@ class UserPinOptionsView(discord.ui.View):
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(
-        label="🗑️ Remove ",
+        label="Remove ",
         style=discord.ButtonStyle.danger,
-        emoji="❌"
+        emoji="🗑️"
     )
     async def remove_location(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
