@@ -59,6 +59,7 @@ class ProximityCalculator:
         lat_offset = distance_km / 111.0  # 1 degree latitude ≈ 111 km
         lng_offset = distance_km / (111.0 * math.cos(math.radians(user_lat)))
 
+        # Add buffer so the complete circle is visible
         buffer_factor = 1.2
         lat_offset *= buffer_factor
         lng_offset *= buffer_factor
@@ -108,15 +109,17 @@ class ProximityCalculator:
                 y = (maxy - lat) / (maxy - miny) * height
                 return (int(x), int(y))
         
-            # Create base map - FIXED: Now includes boundaries
-            base_map, _ = await self.map_generator.render_geopandas_map_bounds(minx, miny, maxx, maxy, width, height)
+            # Create base map with custom colors and boundaries
+            base_map, _ = await self.map_generator.render_geopandas_map_bounds(minx, miny, maxx, maxy, width, height, str(guild_id), maps)
             
             if not base_map:
-                base_map = Image.new('RGB', (width, height), color=(168, 213, 242))
+                # Fallback with custom water color
+                land_color, water_color = self.map_generator.get_map_colors(str(guild_id), maps)
+                base_map = Image.new('RGB', (width, height), color=water_color)
         
             draw = ImageDraw.Draw(base_map)
             
-            # FIXED: Draw radius circle with accurate calculation
+            # Draw radius circle with accurate calculation
             center_x, center_y = to_px(user_lat, user_lng)
             radius_pixels = self.calculate_radius_pixels(distance_km, user_lat, minx, maxx, width)
             
@@ -133,7 +136,9 @@ class ProximityCalculator:
                 center_x + user_pin_size, center_y + user_pin_size
             ], fill='#00FF00', outline='white', width=3)
         
-            # Draw nearby user pins - FIXED: Only draw pins that are visible on map
+            # Draw nearby user pins with custom pin color
+            pin_color, _ = self.map_generator.get_pin_settings(str(guild_id), maps)
+            
             for user_data in nearby_users:
                 pin_lat, pin_lng = user_data['lat'], user_data['lng']
                 
@@ -142,7 +147,7 @@ class ProximityCalculator:
                     x, y = to_px(pin_lat, pin_lng)
                     pin_size = 8
                     draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
-                                 fill='#FF4444', outline='white', width=2)
+                                 fill=pin_color, outline='white', width=2)
         
             # Convert to BytesIO
             img_buffer = BytesIO()

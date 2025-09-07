@@ -9,7 +9,6 @@
 > - `/feeds_remove`: remove a feed **(Admin only)**
 > - `/feed_configure`: configure aesthetics of the embed
 > - `/feeds_list`: list all feeds on your server
-> - `/feeds_status`: display health status of feeds
 ### **Moderation Features**
 > - `/mod_dashboard`: show all mod-settings by this bot **(Admin only)**
 > - `/mod_joinrole_setup`: automatically assign a role to new members **(Admin only)**
@@ -20,5 +19,6 @@
 ### **Miscellaneous**
 > - `/ping`: test bot responsiveness
 > - `/when_is_trump_gone`: liberation day
+
 
 -# *note: all commands starting in `/owner_...` can only be used by the bot-owner!*

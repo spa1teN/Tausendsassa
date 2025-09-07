@@ -11,6 +11,43 @@ from shapely.geometry import box
 import aiohttp
 
 
+class MapConfig:
+    """Central configuration for map appearance and behavior."""
+    
+    def __init__(self):
+        # Line widths (consistent across all map types)
+        self.RIVER_WIDTH_BASE = 1
+        self.COUNTRY_WIDTH_BASE = 2
+        self.STATE_WIDTH_BASE = 1
+        
+        # Default colors
+        self.DEFAULT_LAND_COLOR = (240, 240, 220)
+        self.DEFAULT_WATER_COLOR = (168, 213, 242)
+        self.DEFAULT_PIN_COLOR = '#FF4444'
+        self.DEFAULT_PIN_SIZE = 16  # Base size for scaling
+    
+    def get_line_widths(self, width: int, map_type: str = "default"):
+        """Calculate line widths based on image width and map type."""
+        if map_type == "world":
+            river_width = max(1, int(width / 3000)) * self.RIVER_WIDTH_BASE
+            country_width = max(1, int(width / 1500)) * self.COUNTRY_WIDTH_BASE
+            state_width = 0
+        elif map_type == "europe":
+            river_width = max(1, int(width / 2000)) * self.RIVER_WIDTH_BASE
+            country_width = max(1, int(width / 1000)) * self.COUNTRY_WIDTH_BASE
+            state_width = 0
+        elif map_type == "proximity":
+            river_width = max(1, int(width / 800)) * self.RIVER_WIDTH_BASE
+            country_width = max(2, int(width / 400)) * self.COUNTRY_WIDTH_BASE
+            state_width = max(1, int(width / 800)) * self.STATE_WIDTH_BASE
+        else:  # germany, closeups
+            river_width = max(2, int(width / 1200)) * self.RIVER_WIDTH_BASE
+            country_width = max(2, int(width / 600)) * self.COUNTRY_WIDTH_BASE
+            state_width = max(1, int(width / 1200)) * self.STATE_WIDTH_BASE
+        
+        return river_width, country_width, state_width
+
+
 class MapGenerator:
     """Handles map generation and rendering."""
     
@@ -18,6 +55,7 @@ class MapGenerator:
         self.data_dir = data_dir
         self.cache_dir = cache_dir
         self.log = logger
+        self.map_config = MapConfig()
         
         # Map region configurations
         self.base_image_width = 1500
@@ -57,6 +95,28 @@ class MapGenerator:
             }
         }
 
+    def get_map_colors(self, guild_id: str, maps: Dict) -> Tuple[tuple, tuple]:
+        """Get custom colors for land and water from map settings."""
+        map_data = maps.get(guild_id, {})
+        settings = map_data.get('settings', {})
+        colors = settings.get('colors', {})
+        
+        land_color = colors.get('land', self.map_config.DEFAULT_LAND_COLOR)
+        water_color = colors.get('water', self.map_config.DEFAULT_WATER_COLOR)
+        
+        return land_color, water_color
+    
+    def get_pin_settings(self, guild_id: str, maps: Dict) -> Tuple[str, int]:
+        """Get custom pin color and size from map settings."""
+        map_data = maps.get(guild_id, {})
+        settings = map_data.get('settings', {})
+        pins = settings.get('pins', {})
+        
+        pin_color = pins.get('color', self.map_config.DEFAULT_PIN_COLOR)
+        pin_size = pins.get('size', self.map_config.DEFAULT_PIN_SIZE)
+        
+        return pin_color, pin_size
+
     def calculate_image_dimensions(self, region: str) -> Tuple[int, int]:
         """Calculate image dimensions based on region bounds and fixed width."""
         config = self.map_configs[region]
@@ -80,9 +140,16 @@ class MapGenerator:
         
         return self.base_image_width, height
 
-    async def render_geopandas_map(self, region: str, width: int, height: int) -> Tuple[Image.Image, Callable]:
+    async def render_geopandas_map(self, region: str, width: int, height: int, guild_id: str = None, maps: Dict = None) -> Tuple[Image.Image, Callable]:
         """Render map using geopandas for all regions."""
         try:
+            # Get custom colors if guild_id provided
+            if guild_id and maps:
+                land_color, water_color = self.get_map_colors(guild_id, maps)
+            else:
+                land_color = self.map_config.DEFAULT_LAND_COLOR
+                water_color = self.map_config.DEFAULT_WATER_COLOR
+            
             # Load shapefiles
             base = self.data_dir.parent / "data"
             world = gpd.read_file(base / "ne_10m_admin_0_countries.shp")
@@ -116,11 +183,11 @@ class MapGenerator:
                 y = (maxy - lat) / (maxy - miny) * height
                 return (int(x), int(y))
 
-            # Create base image
-            img = Image.new("RGB", (width, height), (168, 213, 242))  # Ocean blue
+            # Create base image with custom water color
+            img = Image.new("RGB", (width, height), water_color)
             draw = ImageDraw.Draw(img)
 
-            # Draw land
+            # Draw land with custom land color
             for poly in land.geometry:
                 if not poly.intersects(bbox):
                     continue
@@ -128,11 +195,11 @@ class MapGenerator:
                     try:
                         pts = [to_px(y, x) for x, y in ring.exterior.coords]
                         if len(pts) >= 3:
-                            draw.polygon(pts, fill=(240, 240, 220), outline=None)
+                            draw.polygon(pts, fill=land_color, outline=None)
                     except:
                         continue
 
-            # Draw lakes
+            # Draw lakes with custom water color
             for poly in lakes.geometry:
                 if poly is None or not poly.intersects(bbox):
                     continue
@@ -140,23 +207,13 @@ class MapGenerator:
                     try:
                         pts = [to_px(y, x) for x, y in ring.exterior.coords]
                         if len(pts) >= 3:
-                            draw.polygon(pts, fill=(168, 213, 242))
+                            draw.polygon(pts, fill=water_color)
                     except:
                         continue
 
-            # Determine line widths based on region and image size
-            if region == "world":
-                river_width = max(1, int(width / 3000))  # Very thin for world map
-                country_width = max(1, int(width / 1500))
-                state_width = 0
-            elif region == "europe":
-                river_width = max(1, int(width / 2000))
-                country_width = max(1, int(width / 1000))
-                state_width = 0
-            else:  # germany
-                river_width = max(2, int(width / 1200))
-                country_width = max(2, int(width / 600))
-                state_width = max(1, int(width / 1200))
+            # Get line widths using new config system
+            map_type = "world" if region == "world" else "europe" if region == "europe" else "default"
+            river_width, country_width, state_width = self.map_config.get_line_widths(width, map_type)
 
             # Draw rivers with appropriate width
             if region != "world":
@@ -194,7 +251,8 @@ class MapGenerator:
         except Exception as e:
             self.log.error(f"Failed to render geopandas map for {region}: {e}")
             # Fallback
-            img = Image.new("RGB", (width, height), (168, 213, 242))
+            water_color = self.map_config.DEFAULT_WATER_COLOR if not (guild_id and maps) else self.get_map_colors(guild_id, maps)[1]
+            img = Image.new("RGB", (width, height), water_color)
             
             def fallback_projection(lat, lon):
                 x = (lon - minx) / (maxx - minx) * width
@@ -203,9 +261,16 @@ class MapGenerator:
             
             return img, fallback_projection
 
-    async def render_geopandas_map_bounds(self, minx: float, miny: float, maxx: float, maxy: float, width: int, height: int) -> Tuple[Image.Image, Callable]:
+    async def render_geopandas_map_bounds(self, minx: float, miny: float, maxx: float, maxy: float, width: int, height: int, guild_id: str = None, maps: Dict = None) -> Tuple[Image.Image, Callable]:
         """Render map using geopandas for custom bounds."""
         try:
+            # Get custom colors if guild_id provided
+            if guild_id and maps:
+                land_color, water_color = self.get_map_colors(guild_id, maps)
+            else:
+                land_color = self.map_config.DEFAULT_LAND_COLOR
+                water_color = self.map_config.DEFAULT_WATER_COLOR
+            
             # Load shapefiles
             base = self.data_dir.parent / "data"
             world = gpd.read_file(base / "ne_10m_admin_0_countries.shp")
@@ -222,11 +287,11 @@ class MapGenerator:
                 y = (maxy - lat) / (maxy - miny) * height
                 return (int(x), int(y))
             
-            # Create base image
-            img = Image.new("RGB", (width, height), (168, 213, 242))  # Ocean blue
+            # Create base image with custom water color
+            img = Image.new("RGB", (width, height), water_color)
             draw = ImageDraw.Draw(img)
             
-            # Draw land
+            # Draw land with custom land color
             for poly in land.geometry:
                 if not poly.intersects(bbox):
                     continue
@@ -234,11 +299,11 @@ class MapGenerator:
                     try:
                         pts = [to_px(y, x) for x, y in ring.exterior.coords]
                         if len(pts) >= 3:
-                            draw.polygon(pts, fill=(240, 240, 220), outline=None)
+                            draw.polygon(pts, fill=land_color, outline=None)
                     except:
                         continue
 
-            # Draw lakes
+            # Draw lakes with custom water color
             for poly in lakes.geometry:
                 if poly is None or not poly.intersects(bbox):
                     continue
@@ -246,14 +311,12 @@ class MapGenerator:
                     try:
                         pts = [to_px(y, x) for x, y in ring.exterior.coords]
                         if len(pts) >= 3:
-                            draw.polygon(pts, fill=(168, 213, 242))
+                            draw.polygon(pts, fill=water_color)
                     except:
                         continue
                     
-            # Calculate line widths for proximity maps
-            river_width = max(1, int(width / 800))
-            country_width = max(2, int(width / 400))
-            state_width = max(1, int(width / 800))
+            # Calculate line widths for proximity maps using config system
+            river_width, country_width, state_width = self.map_config.get_line_widths(width, "proximity")
 
             # Draw rivers
             for line in rivers.geometry:
@@ -267,7 +330,7 @@ class MapGenerator:
                     except:
                         continue
 
-            # NEW: Draw country boundaries (thick black lines)
+            # Draw country boundaries (thick black lines)
             for poly in world.geometry:
                 if poly is None or not poly.intersects(bbox):
                     continue
@@ -279,7 +342,7 @@ class MapGenerator:
                     except:
                         continue
 
-            # NEW: Draw state boundaries (gray lines) 
+            # Draw state boundaries (gray lines) 
             for poly in states.geometry:
                 if poly is None or not poly.intersects(bbox):
                     continue
@@ -296,7 +359,8 @@ class MapGenerator:
         except Exception as e:
             self.log.error(f"Failed to render geopandas map for bounds: {e}")
             # Fallback
-            img = Image.new("RGB", (width, height), (168, 213, 242))
+            water_color = self.map_config.DEFAULT_WATER_COLOR if not (guild_id and maps) else self.get_map_colors(guild_id, maps)[1]
+            img = Image.new("RGB", (width, height), water_color)
         
             def fallback_projection(lat, lon):
                 x = (lon - minx) / (maxx - minx) * width
@@ -362,9 +426,17 @@ class MapGenerator:
         
         return groups
 
-    def draw_pins_on_map(self, image: Image.Image, pin_groups: List[Dict], width: int, height: int, base_pin_size: int):
-        """Draw pin groups on the map image."""
+    def draw_pins_on_map(self, image: Image.Image, pin_groups: List[Dict], width: int, height: int, base_pin_size: int, guild_id: str = None, maps: Dict = None):
+        """Draw pin groups on the map image with custom colors and sizes."""
         draw = ImageDraw.Draw(image)
+        
+        # Get custom pin settings if guild_id provided
+        if guild_id and maps:
+            pin_color, custom_pin_size = self.get_pin_settings(guild_id, maps)
+            # Scale the custom size based on image height
+            base_pin_size = int(height * custom_pin_size / 2400)
+        else:
+            pin_color = self.map_config.DEFAULT_PIN_COLOR
         
         for group in pin_groups:
             x, y = group['position']
@@ -376,7 +448,6 @@ class MapGenerator:
             
             # Calculate pin size based on count
             pin_size = base_pin_size + (count - 1) * 3
-            pin_color = '#FF4444'
             
             # Draw pin shadow
             shadow_offset = 2
@@ -387,7 +458,7 @@ class MapGenerator:
                 y + pin_size + shadow_offset
             ], fill='#00000080')
             
-            # Draw pin
+            # Draw pin with custom color
             draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
                        fill=pin_color, outline='white', width=2)
             

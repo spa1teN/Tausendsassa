@@ -309,7 +309,7 @@ class FeedCog(commands.Cog):
             return
         
         fetch_time = (datetime.utcnow() - start_time).total_seconds()
-        self.log.info(f"⚡ Completed feed fetching for {total_feeds} feeds across {len(self.guild_configs)} guilds in {fetch_time:.1f}s")
+        #self.log.info(f"⚡ Completed feed fetching for {total_feeds} feeds across {len(self.guild_configs)} guilds in {fetch_time:.1f}s")
         
         # Process results and post embeds
         posts_made = 0
@@ -359,7 +359,7 @@ class FeedCog(commands.Cog):
                             avatar_url=feed_cfg.get("avatar_url"),
                             wait=True
                         )
-                        self.log.debug("✅ Posted embed for %s", name)
+                        self.log.info("✅ Posted embed for %s", name)
                     else:
                         # Fallback to bot posting
                         msg = await self._post_via_bot_single(channel, embed, feed_cfg, name)
