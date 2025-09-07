@@ -1,9 +1,8 @@
 # cogs/feeds.py
 
-import os
-import yaml
 import asyncio
 import shutil
+import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, List
@@ -12,225 +11,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from core import rss
-
-# Configuration constants
-POLL_INTERVAL_MINUTES = 1.0
-MAX_POST_AGE_SECONDS = 120
-RATE_LIMIT_SECONDS = 30
-FAILURE_THRESHOLD = 3
-AUTHORIZED_USERS = [485051896655249419, 506551160354766848, 703896034820096000]
-GLOBAL_MONITOR_CHANNEL_ID = 1403336394801414234
-
-# Predefined color choices for easier selection
-COLOR_CHOICES = [
-    app_commands.Choice(name="Blue", value="3498DB"),
-    app_commands.Choice(name="Green", value="2ECC71"),
-    app_commands.Choice(name="Red", value="E74C3C"),
-    app_commands.Choice(name="Orange", value="F39C12"),
-    app_commands.Choice(name="Purple", value="9B59B6"),
-    app_commands.Choice(name="Cyan", value="1ABC9C"),
-    app_commands.Choice(name="Yellow", value="F1C40F"),
-    app_commands.Choice(name="Pink", value="E91E63"),
-    app_commands.Choice(name="Dark Blue", value="2C3E50"),
-    app_commands.Choice(name="Gray", value="95A5A6")
-]
-
-def _is_bluesky_feed_url(url: str) -> bool:
-    """Check if the given URL is a Bluesky profile feed"""
-    return "bsky.app/profile/" in url
-
-def _create_bluesky_embed_template(name: str, default_color: int) -> dict:
-    """Create a specialized embed template for Bluesky feeds"""
-    return {
-        "title": f"{name} just posted on Bluesky",  # Static title for all Bluesky posts
-        "description": "{summary}",  # Show post content in description
-        "url": "{link}",
-        "color": default_color,
-        "timestamp": "{published_custom}",
-        "footer": {"text": name},
-        "image": {"url": "{thumbnail}"}
-    }
-
-class FeedRemoveView(discord.ui.View):
-    """View for feed removal with dropdown selection"""
-    def __init__(self, feeds: List[dict], cog, guild_id: int):
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.guild_id = guild_id
-        
-        # Create dropdown options
-        options = []
-        for feed in feeds[:25]:  # Discord limit
-            options.append(discord.SelectOption(
-                label=feed["name"],
-                description=f"URL: {feed['feed_url'][:50]}..." if len(feed['feed_url']) > 50 else feed['feed_url'],
-                value=feed["name"]
-            ))
-        
-        if options:
-            select = FeedRemoveSelect(options, cog, guild_id)
-            self.add_item(select)
-
-class FeedRemoveSelect(discord.ui.Select):
-    """Select dropdown for feed removal"""
-    def __init__(self, options: List[discord.SelectOption], cog, guild_id: int):
-        super().__init__(
-            placeholder="Choose a feed to remove...",
-            options=options,
-            min_values=1,
-            max_values=1
-        )
-        self.cog = cog
-        self.guild_id = guild_id
-    
-    async def callback(self, interaction: discord.Interaction):
-        feed_name = self.values[0]
-        
-        # Remove the feed
-        config = self.cog._load_guild_config(self.guild_id)
-        old_feeds = config.get("feeds", [])
-        new_feeds = [f for f in old_feeds if f.get("name") != feed_name]
-        
-        config["feeds"] = new_feeds
-        self.cog._save_guild_config(self.guild_id, config)
-        
-        # Update runtime config and stats
-        self.cog.guild_configs[self.guild_id] = config
-        if self.guild_id in self.cog.stats:
-            self.cog.stats[self.guild_id].pop(feed_name, None)
-        
-        self.cog.poll_loop.restart()
-        
-        await interaction.response.edit_message(
-            content=f"✅ Feed **{feed_name}** removed from this server.",
-            view=None
-        )
-
-class FeedConfigureView(discord.ui.View):
-    """View for feed configuration with dropdown selection"""
-    def __init__(self, feeds: List[dict], cog, guild_id: int):
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.guild_id = guild_id
-        
-        # Create dropdown options
-        options = []
-        for feed in feeds[:25]:  # Discord limit
-            options.append(discord.SelectOption(
-                label=feed["name"],
-                description=f"Channel: #{feed.get('channel_name', 'unknown')}",
-                value=feed["name"]
-            ))
-        
-        if options:
-            select = FeedConfigureSelect(options, cog, guild_id)
-            self.add_item(select)
-
-class FeedConfigureSelect(discord.ui.Select):
-    """Select dropdown for feed configuration"""
-    def __init__(self, options: List[discord.SelectOption], cog, guild_id: int):
-        super().__init__(
-            placeholder="Choose a feed to configure...",
-            options=options,
-            min_values=1,
-            max_values=1
-        )
-        self.cog = cog
-        self.guild_id = guild_id
-    
-    async def callback(self, interaction: discord.Interaction):
-        feed_name = self.values[0]
-        
-        # Find the feed config
-        config = self.cog._load_guild_config(self.guild_id)
-        feeds = config.get("feeds", [])
-        feed_config = next((f for f in feeds if f.get("name") == feed_name), None)
-        
-        if not feed_config:
-            await interaction.response.edit_message(
-                content="❌ Feed not found.",
-                view=None
-            )
-            return
-        
-        # Create configuration modal
-        modal = FeedConfigModal(feed_config, self.cog, self.guild_id)
-        await interaction.response.send_modal(modal)
-
-class FeedConfigModal(discord.ui.Modal):
-    """Modal for configuring feed settings"""
-    def __init__(self, feed_config: dict, cog, guild_id: int):
-        self.feed_config = feed_config
-        self.cog = cog
-        self.guild_id = guild_id
-        
-        super().__init__(title=f"Configure Feed: {feed_config['name']}")
-        
-        # Add input fields
-        self.name_input = discord.ui.TextInput(
-            label="Feed Name",
-            default=feed_config.get("name", ""),
-            max_length=100
-        )
-        
-        self.avatar_input = discord.ui.TextInput(
-            label="Avatar URL (optional)",
-            default=feed_config.get("avatar_url", ""),
-            required=False,
-            max_length=500
-        )
-        
-        current_color = feed_config.get("embed_template", {}).get("color", 0x3498DB)
-        self.color_input = discord.ui.TextInput(
-            label="Color (hex without #, e.g. 3498DB)",
-            default=f"{current_color:06X}",
-            max_length=6
-        )
-        
-        self.add_item(self.name_input)
-        self.add_item(self.avatar_input)
-        self.add_item(self.color_input)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        # Validate color
-        try:
-            color_hex = int(self.color_input.value.lstrip("#"), 16)
-        except ValueError:
-            await interaction.response.send_message(
-                f"❌ Invalid color: {self.color_input.value}", ephemeral=True
-            )
-            return
-        
-        # Update feed config
-        config = self.cog._load_guild_config(self.guild_id)
-        feeds = config.get("feeds", [])
-        
-        for feed in feeds:
-            if feed.get("name") == self.feed_config["name"]:
-                old_name = feed["name"]
-                feed["name"] = self.name_input.value
-                feed["avatar_url"] = self.avatar_input.value or None
-                feed["embed_template"]["color"] = color_hex
-                feed["embed_template"]["footer"]["text"] = self.name_input.value
-                
-                # Update title for Bluesky feeds if name changed
-                if _is_bluesky_feed_url(feed["feed_url"]):
-                    feed["embed_template"]["title"] = f"{self.name_input.value} just posted on Bluesky"
-                    feed["embed_template"]["author"]["name"] = self.name_input.value
-                
-                # Update stats if name changed
-                if old_name != self.name_input.value and self.guild_id in self.cog.stats:
-                    if old_name in self.cog.stats[self.guild_id]:
-                        self.cog.stats[self.guild_id][self.name_input.value] = self.cog.stats[self.guild_id].pop(old_name)
-                break
-        
-        self.cog._save_guild_config(self.guild_id, config)
-        self.cog.guild_configs[self.guild_id] = config
-        
-        await interaction.response.send_message(
-            f"✅ Feed **{self.name_input.value}** updated successfully!", ephemeral=True
-        )
+from core import feeds_rss as rss
+from core.feeds_config import (
+    POLL_INTERVAL_MINUTES, RATE_LIMIT_SECONDS, FAILURE_THRESHOLD, 
+    AUTHORIZED_USERS, GLOBAL_MONITOR_CHANNEL_ID, COLOR_CHOICES,
+    is_bluesky_feed_url, create_bluesky_embed_template, create_standard_embed_template
+)
+from core.feeds_views import FeedRemoveView, FeedConfigureView
 
 class FeedCog(commands.Cog):
     """Cog for polling RSS feeds, posting embeds, buttons, health monitoring
@@ -257,6 +44,7 @@ class FeedCog(commands.Cog):
         self.monitor_message_id: Optional[int] = None
         self._load_monitor_message_id()
 
+    # Config Management
     def _get_guild_config_path(self, guild_id: int) -> Path:
         """Get the config file path for a specific guild"""
         guild_dir = self.config_base / str(guild_id)
@@ -270,6 +58,7 @@ class FeedCog(commands.Cog):
             return {"feeds": [], "monitor_channel_id": None}
         
         try:
+            import yaml
             with config_path.open(encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
                 return config
@@ -281,6 +70,7 @@ class FeedCog(commands.Cog):
         """Save configuration for a specific guild"""
         config_path = self._get_guild_config_path(guild_id)
         try:
+            import yaml
             with config_path.open("w", encoding="utf-8") as f:
                 yaml.safe_dump(config, f, sort_keys=False, allow_unicode=True)
         except Exception as e:
@@ -304,9 +94,8 @@ class FeedCog(commands.Cog):
         for guild_dir in self.config_base.iterdir():
             if guild_dir.is_dir() and guild_dir.name.isdigit():
                 guild_id = int(guild_dir.name)
-                # Check if guild still exists
                 if not self.bot.get_guild(guild_id):
-                    self.log.info(f"Guild {guild_id} no longer accessible, skipping config load")
+                    self._safe_log("info", "Guild %s no longer accessible, skipping config load", guild_id)
                     continue
                     
                 config = self._load_guild_config(guild_id)
@@ -321,13 +110,13 @@ class FeedCog(commands.Cog):
         total_feeds = sum(len(config.get("feeds", [])) for config in self.guild_configs.values())
         self.log.info(f"Loaded configs for {len(self.guild_configs)} guilds with {total_feeds} total feeds")
 
+    # Webhook Management
     def _load_webhook_cache(self):
         """Load webhook cache from JSON file"""
         if not self.webhook_cache_file.exists():
             return
         
         try:
-            import json
             with self.webhook_cache_file.open(encoding="utf-8") as f:
                 cache_data = json.load(f)
             
@@ -352,7 +141,6 @@ class FeedCog(commands.Cog):
     def _save_webhook_cache(self):
         """Save webhook cache to JSON file"""
         try:
-            import json
             cache_data = {}
             for channel_id, webhook in self.webhook_cache.items():
                 if webhook.token:  # Only save complete webhooks
@@ -373,7 +161,6 @@ class FeedCog(commands.Cog):
             return
         
         try:
-            import json
             with self.monitor_message_file.open(encoding="utf-8") as f:
                 data = json.load(f)
                 self.monitor_message_id = data.get("message_id")
@@ -383,7 +170,6 @@ class FeedCog(commands.Cog):
     def _save_monitor_message_id(self, message_id: int):
         """Save the global monitor message ID"""
         try:
-            import json
             with self.monitor_message_file.open("w", encoding="utf-8") as f:
                 json.dump({"message_id": message_id}, f)
             self.monitor_message_id = message_id
@@ -396,14 +182,11 @@ class FeedCog(commands.Cog):
         if channel.id in self.webhook_cache:
             webhook = self.webhook_cache[channel.id]
             try:
-                # Test if webhook still exists
                 await webhook.fetch()
                 return webhook
             except discord.NotFound:
-                # Webhook was deleted, remove from cache
                 del self.webhook_cache[channel.id]
             except Exception:
-                # Other error, webhook might still exist
                 pass
 
         # Create new webhook
@@ -423,19 +206,17 @@ class FeedCog(commands.Cog):
             self.log.exception(f"❌ Error creating webhook in #{channel.name}")
             return None
 
+    # Event Handlers
     @commands.Cog.listener()
     async def on_ready(self):
-        # Load all guild configurations
         self._load_all_guild_configs()
         
-        # Sync slash commands
         try:
             await self.bot.tree.sync()
             self.log.info("✅ Slash commands synced globally")
         except Exception:
             self.log.exception("Failed to sync slash commands")
 
-        # Start polling and cleanup tasks
         if not self.poll_loop.is_running():
             self.log.info("▶ Starting poll_loop...")
             self.poll_loop.start()
@@ -454,10 +235,7 @@ class FeedCog(commands.Cog):
         guild_id = guild.id
         self.log.info(f"Bot removed from guild {guild.name} (ID: {guild_id})")
         
-        # Remove guild config and state
         self._remove_guild_config(guild_id)
-        
-        # Remove from runtime configs
         self.guild_configs.pop(guild_id, None)
         self.stats.pop(guild_id, None)
         
@@ -469,102 +247,141 @@ class FeedCog(commands.Cog):
         
         self.log.info(f"Cleaned up all data for removed guild {guild_id}")
 
+    # Polling Logic
+    async def _poll_single_feed(self, guild_id: int, feed_cfg: dict, guild_stats: dict, monitor_channel_id: Optional[int]) -> List[dict]:
+        """Poll a single feed and return list of embeds to post"""
+        name = feed_cfg.get("name")
+        if name not in guild_stats:
+            guild_stats[name] = {"last_run": None, "last_success": None, "failures": 0}
+        
+        st = guild_stats[name]
+        st["last_run"] = datetime.utcnow()
+
+        try:
+            embeds = await asyncio.wait_for(
+                asyncio.to_thread(rss.poll, feed_cfg, guild_id),
+                timeout=RATE_LIMIT_SECONDS
+            )
+            
+            st["failures"] = 0
+            st["last_success"] = datetime.utcnow()
+            return embeds or []
+            
+        except Exception as e:
+            st["failures"] += 1
+            await self._maybe_alert(guild_id, name, st["failures"], monitor_channel_id)
+            self.log.exception("❌ Error polling feed %s in guild %s: %s", name, guild_id, e)
+            return []
+
     @tasks.loop(minutes=POLL_INTERVAL_MINUTES, reconnect=True)
     async def poll_loop(self):
-        """Main polling loop for all guild feeds with message update support"""
+        """Main polling loop with async processing"""
         now = datetime.utcnow()
         total_feeds = sum(len(config.get("feeds", [])) for config in self.guild_configs.values())
-        self.log.info(f"🔄 Running poll_loop for {total_feeds} feeds across {len(self.guild_configs)} guilds")
+        #self.log.info(f"🔄 Running async poll_loop for {total_feeds} feeds across {len(self.guild_configs)} guilds")
+        
+        # Collect all feed polling tasks
+        all_tasks = []
+        feed_info = []  # Store (guild_id, feed_cfg, channel) for each task
         
         for guild_id, config in self.guild_configs.items():
             guild_stats = self.stats.get(guild_id, {})
             monitor_channel_id = config.get("monitor_channel_id")
             
             for feed_cfg in config.get("feeds", []):
-                name = feed_cfg.get("name")
-                if name not in guild_stats:
-                    guild_stats[name] = {"last_run": None, "last_success": None, "failures": 0}
+                task = self._poll_single_feed(guild_id, feed_cfg, guild_stats, monitor_channel_id)
+                all_tasks.append(task)
                 
-                st = guild_stats[name]
-                st["last_run"] = now
-
-                # Fetch feed in thread with timeout
-                try:
-                    embeds = await asyncio.wait_for(
-                        asyncio.to_thread(rss.poll, feed_cfg, guild_id),
-                        timeout=RATE_LIMIT_SECONDS
-                    )
-                except Exception:
-                    st["failures"] += 1
-                    await self._maybe_alert(guild_id, name, st["failures"], monitor_channel_id)
-                    self.log.exception("❌ Error polling feed %s in guild %s", name, guild_id)
-                    continue
-
-                # Success
-                st["failures"] = 0
-                st["last_success"] = datetime.utcnow()
-                
-                if not embeds:
-                    continue
-
                 channel = self.bot.get_channel(feed_cfg["channel_id"])
-                if not channel:
-                    self.log.warning("⚠️ Channel %s not found for %s in guild %s",
-                                feed_cfg["channel_id"], name, guild_id)
-                    continue
-
-                # Process embeds (new posts and updates)
-                for e in embeds:
-                    try:
-                        embed = discord.Embed.from_dict(e)
-                        is_update = e.get("is_update", False)
-                        message_info = e.get("message_info")
-                        guid = e.get("guid")
-                        
-                        if is_update and message_info:
-                            # Try to update existing message
-                            message_id, old_channel_id = message_info
-                            if old_channel_id == channel.id:
-                                try:
-                                    old_message = await channel.fetch_message(message_id)
-                                    await old_message.edit(embed=embed)
-                                    self.log.info("✅ Updated existing message for %s", name)
-                                    # Update timestamp in state
+                feed_info.append((guild_id, feed_cfg, channel))
+        
+        if not all_tasks:
+            return
+            
+        # Execute all feed polling tasks in parallel
+        #self.log.info(f"📡 Fetching {len(all_tasks)} feeds in parallel...")
+        start_time = datetime.utcnow()
+        
+        try:
+            results = await asyncio.gather(*all_tasks, return_exceptions=True)
+        except Exception as e:
+            self.log.error(f"Error in parallel feed polling: {e}")
+            return
+        
+        fetch_time = (datetime.utcnow() - start_time).total_seconds()
+        self.log.info(f"⚡ Completed feed fetching for {total_feeds} feeds across {len(self.guild_configs)} guilds in {fetch_time:.1f}s")
+        
+        # Process results and post embeds
+        posts_made = 0
+        updates_made = 0
+        
+        for i, (embeds, (guild_id, feed_cfg, channel)) in enumerate(zip(results, feed_info)):
+            if isinstance(embeds, Exception):
+                self.log.error(f"Feed polling error: {embeds}")
+                continue
+                
+            if not embeds or not channel:
+                continue
+            
+            name = feed_cfg.get("name")
+            
+            # Process each embed from this feed
+            for e in embeds:
+                try:
+                    embed = discord.Embed.from_dict(e)
+                    is_update = e.get("is_update", False)
+                    message_info = e.get("message_info")
+                    guid = e.get("guid")
+                    
+                    if is_update and message_info:
+                        # Handle update
+                        message_id, old_channel_id = message_info
+                        if old_channel_id == channel.id:
+                            try:
+                                webhook = await self._get_or_create_webhook(channel, name)
+                                if webhook:
+                                    await webhook.edit_message(message_id, embed=embed)
+                                    self.log.info("✅ Updated existing embed for %s", name)
                                     rss.mark_entry_posted(guild_id, guid, message_id, channel.id)
-                                    continue
-                                except discord.NotFound:
-                                    self.log.info("Original message not found, posting new one for %s", name)
-                                except Exception as ex:
-                                    self.log.warning("Failed to update message for %s: %s", name, ex)
+                                    updates_made += 1
+                                    continue  # Important: Skip posting new message
+                                else:
+                                    self.log.info("No webhook available for update, posting new message")
+                            except Exception as ex:
+                                self.log.warning("Failed to update message for %s: %s", name, ex)
+                    
+                    # Post new message (either new entry or failed update)
+                    webhook = await self._get_or_create_webhook(channel, name)
+                    if webhook:
+                        msg = await webhook.send(
+                            embed=embed,
+                            username=name,
+                            avatar_url=feed_cfg.get("avatar_url"),
+                            wait=True
+                        )
+                        self.log.debug("✅ Posted embed for %s", name)
+                    else:
+                        # Fallback to bot posting
+                        msg = await self._post_via_bot_single(channel, embed, feed_cfg, name)
+                    
+                    if msg:
+                        rss.mark_entry_posted(guild_id, guid, msg.id, channel.id)
+                        posts_made += 1
                         
-                        # Post new message (either new entry or failed update)
-                        webhook = await self._get_or_create_webhook(channel, name)
-                        if webhook:
-                            msg = await webhook.send(
-                                embed=embed,
-                                username=name,  # Use feed name as username
-                                avatar_url=feed_cfg.get("avatar_url"),
-                                wait=True
-                            )
-                            self.log.info("✅ Posted embed via webhook to channel <#%s>", channel.id)
-                        else:
-                            # Fallback to bot posting
-                            msg = await self._post_via_bot_single(channel, embed, feed_cfg, name)
-                        
-                        if msg:
-                            # Mark as posted with message info
-                            rss.mark_entry_posted(guild_id, guid, msg.id, channel.id)
-                            
-                            # Handle crosspost
-                            if feed_cfg.get("crosspost"):
-                                try:
-                                    await msg.publish()
-                                    self.log.info("🚀 Published message")
-                                except discord.HTTPException as exc:
-                                    self.log.warning("Publish failed: %s", exc)
-                                    
-                    except Exception:
-                        self.log.exception("❌ Failed to process embed for %s", name)
+                        # Handle crosspost
+                        if feed_cfg.get("crosspost"):
+                            try:
+                                await msg.publish()
+                                self.log.debug("Published message for %s", name)
+                            except discord.HTTPException as exc:
+                                self.log.warning("Publish failed for %s: %s", name, exc)
+                                
+                except Exception as ex:
+                    self.log.exception("❌ Failed to process embed for %s: %s", name, ex)
+        
+        total_time = (datetime.utcnow() - start_time).total_seconds()
+        if posts_made > 0 or updates_made > 0:
+            self.log.info(f"📊 Completed in {total_time:.1f}s: {posts_made} new posts, {updates_made} updates")
 
     async def _post_via_bot_single(self, channel, embed, feed_cfg, name) -> Optional[discord.Message]:
         """Post single embed via bot with thread button"""
@@ -587,12 +404,13 @@ class FeedCog(commands.Cog):
             ))
 
             msg = await channel.send(embed=embed, view=view)
-            self.log.info("✅ Posted embed via bot to channel <#%s>", channel.id)
+            self.log.debug("Posted embed via bot to channel #%s", channel.name)
             return msg
         except Exception:
             self.log.exception("❌ Failed to post embed for %s", name)
             return None
 
+    # Background Tasks
     @tasks.loop(hours=168)  # Weekly cleanup
     async def cleanup_loop(self):
         """Weekly cleanup of old posted entries"""
@@ -623,6 +441,7 @@ class FeedCog(commands.Cog):
         await self.bot.wait_until_ready()
         self.log.info("✓ monitor_update_loop is ready")
 
+    # Helper Methods
     async def _maybe_alert(self, guild_id: int, feed_name: str, failures: int, monitor_channel_id: Optional[int]):
         """Send alert if failure threshold reached"""
         if failures == FAILURE_THRESHOLD and monitor_channel_id:
@@ -770,19 +589,10 @@ class FeedCog(commands.Cog):
                 default_hex = 0x3498DB
         
         # Check if this is a Bluesky feed and use appropriate template
-        if _is_bluesky_feed_url(feed_url):
-            embed_template = _create_bluesky_embed_template(name, default_hex)
+        if is_bluesky_feed_url(feed_url):
+            embed_template = create_bluesky_embed_template(name, default_hex)
         else:
-            # Standard template for normal RSS feeds
-            embed_template = {
-                "title": "{title}",
-                "description": "{description}",
-                "url": "{link}",
-                "color": default_hex,
-                "timestamp": "{published_custom}",
-                "footer": {"text": name},
-                "image": {"url": "{thumbnail}"}
-            }
+            embed_template = create_standard_embed_template(name, default_hex)
         
         new_feed = {
             "name": name,
@@ -808,7 +618,7 @@ class FeedCog(commands.Cog):
         self.poll_loop.restart()
         
         # Special confirmation message for Bluesky feeds
-        if _is_bluesky_feed_url(feed_url):
+        if is_bluesky_feed_url(feed_url):
             await interaction.followup.send(
                 f"✅ Bluesky feed **{name}** added to this server with custom title format.", ephemeral=True
             )
@@ -856,7 +666,7 @@ class FeedCog(commands.Cog):
         lines = []
         for f in feeds:
             col = f["embed_template"].get("color", 0)
-            feed_type = "🦋 Bluesky" if _is_bluesky_feed_url(f["feed_url"]) else "📰 RSS"
+            feed_type = "🦋 Bluesky" if is_bluesky_feed_url(f["feed_url"]) else "📰 RSS"
             lines.append(
                 f"• **{f['name']}** {feed_type} — <{f['feed_url']}> in <#{f['channel_id']}>"
                 f" — Color: `#{col:06X}`"

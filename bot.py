@@ -13,6 +13,7 @@ import discord
 from discord.ext import commands
 
 GUILD_ID = 1398409754967015647
+OWNER_ID = 485051896655249419
 GUILD    = discord.Object(id=GUILD_ID) if GUILD_ID else None
 LOG_WEBHOOK_URL = "https://discord.com/api/webhooks/1402497318208409680/xBavteSxxo1xzwkwqvHrja9bl3gh4zwKMKsm48dH9mGG6aBuDh7v0EDDajQOtnCwX1vt"
 
@@ -57,12 +58,22 @@ class WebhookLogHandler(logging.Handler):
     
     def emit(self, record):
         """Called when a log record is emitted"""
-        if self.bot and hasattr(self.bot, 'loop') and not self.bot.is_closed():
-            try:
-                # Add the log record to the queue
-                self.bot.loop.call_soon_threadsafe(self.queue.put_nowait, record)
-            except Exception as e:
-                print(f"Error adding log to queue: {e}")
+        try:
+            if self.bot and hasattr(self.bot, 'loop') and not self.bot.is_closed():
+                # Check if we're in an async context
+                try:
+                    loop = asyncio.get_running_loop()
+                    if loop == self.bot.loop:
+                        self.bot.loop.call_soon_threadsafe(self.queue.put_nowait, record)
+                    else:
+                        # Different loop, skip webhook logging
+                        pass
+                except RuntimeError:
+                    # No running loop, skip webhook logging
+                    pass
+        except Exception:
+            # Completely silent fallback - don't spam console
+            pass
     
     async def _webhook_worker(self):
         """Worker that processes the log queue and sends webhooks"""
@@ -162,7 +173,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-COGS = ["cogs.feeds", "cogs.map", "cogs.monitor", "cogs.moderation", "cogs.whenistrumpgone", "cogs.help"]
+COGS = ["cogs.feeds", "cogs.map", "cogs.monitor", "cogs.moderation", "cogs.whenistrumpgone", "cogs.help", "cogs.backup"]
 
 # ─── Enhanced Bot-Klasse ────────────────────────────────────────────────────
 class Tausendsassa(commands.Bot):
@@ -173,6 +184,8 @@ class Tausendsassa(commands.Bot):
         self.webhook_url = LOG_WEBHOOK_URL
         self.webhook_handler = None
         self.cog_loggers: Dict[str, logging.Logger] = {}
+
+        self.owner_id = OWNER_ID
         
         # Setup webhook logging if URL is provided
         if self.webhook_url:

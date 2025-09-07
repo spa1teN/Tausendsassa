@@ -1,4 +1,4 @@
-# core/state.py
+# core/feeds_state.py
 """
 Enhanced state management with timestamps, message tracking and automatic cleanup.
 Tracks which GUIDs have been posted, when, and the corresponding Discord message IDs
@@ -77,17 +77,20 @@ class State:
         """Mark GUID as sent with message info and timestamp"""
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
-        
+
+        # Convert datetime to ISO string for JSON serialization
+        timestamp_str = timestamp.isoformat()
+            
         # If entry exists, update it; otherwise create new
         if guid in self._entries:
             self._entries[guid].update({
-                "timestamp": timestamp.isoformat(),
+                "timestamp": timestamp_str,  # Always store as string
                 "message_id": message_id,
                 "channel_id": channel_id
             })
         else:
             self._entries[guid] = {
-                "timestamp": timestamp.isoformat(),
+                "timestamp": timestamp_str,  # Always store as string
                 "message_id": message_id,
                 "channel_id": channel_id
             }

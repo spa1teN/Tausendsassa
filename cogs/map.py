@@ -14,10 +14,10 @@ import math
 from shapely.geometry import box
 
 # Import our modular components
-from core.mapgen import MapGenerator
-from core.mapstorage import MapStorage
-from core.proximity import ProximityCalculator
-from core.views import MapPinButtonView, LocationModal
+from core.map_gen import MapGenerator
+from core.map_storage import MapStorage
+from core.map_proximity import ProximityCalculator
+from core.map_views import MapPinButtonView, LocationModal
 
 # Constants
 IMAGE_WIDTH = 1500

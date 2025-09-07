@@ -64,7 +64,9 @@ def get_image_urls(post_url: str) -> list[str]:
         embed = post.get("embed", {})
         if embed.get("$type") == "app.bsky.embed.images#view":
             for img in embed.get("images", []):
-                images.append(img.get("fullsize") or img.get("thumb"))
+                img_url = img.get("fullsize") or img.get("thumb")
+                if img_url:
+                    images.append(img_url)
         return images
 
     return extract(thread)
@@ -186,7 +188,7 @@ def find_thumbnail(entry: Any) -> Optional[str]:
                 img_url = 'https:' + img_url
             elif img_url.startswith('/'):
                 parsed = urlparse(entry_url)
-                img_url = f"{parsed.scheme}://{parsed.netlook}{img_url}"
+                img_url = f"{parsed.scheme}://{parsed.netloc}{img_url}"
             elif not img_url.startswith(('http://', 'https://')):
                 img_url = urljoin(entry_url, img_url)
         return img_url
