@@ -125,8 +125,8 @@ class StateSelectionView(discord.ui.View):
         
         # Add buttons dynamically (5 per row, max 5 rows)
         for i, (full_name, state_data) in enumerate(states_config.items()):
-            row = i // 5
-            if row >= 5:  # Discord limit
+            row = i // 4
+            if row >= 4:  # Discord limit
                 break
             
             # Create button with actual emoji from config

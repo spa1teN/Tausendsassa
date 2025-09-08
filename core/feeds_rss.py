@@ -17,7 +17,7 @@ from core.feeds_thumbnails import find_thumbnail
 
 # Configuration constants
 TZ = ZoneInfo("Europe/Berlin")
-MAX_AGE = timedelta(seconds=3600)  # 6 minutes
+MAX_AGE = timedelta(seconds=86400)
 CONFIG_BASE = Path(__file__).parent.parent / "config"
 
 # Global state and cache

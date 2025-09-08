@@ -13,9 +13,13 @@ class ModerationCog(commands.Cog):
         self.config_file = "config/moderation_config.json"
         self.config = self.load_config()
         self.member_join_times = {}  # Store join times for leave duration calculation
+        self.recently_banned_kicked = set()  # Track recently banned/kicked users
 
     def load_config(self) -> dict:
         """Load configuration from JSON file"""
+        # Ensure config directory exists
+        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+        
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
@@ -27,6 +31,8 @@ class ModerationCog(commands.Cog):
     def save_config(self):
         """Save configuration to JSON file"""
         try:
+            # Ensure config directory exists
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
         except IOError:
@@ -99,7 +105,7 @@ class ModerationCog(commands.Cog):
     def create_join_embed(self, member: discord.Member) -> discord.Embed:
         """Create embed for member join event"""
         embed = discord.Embed(
-            description=f"<@{member.id}> joined the server",
+            title=f"{member.display_name} joined the server",
             color=0x00ff00,  # Green for joins
             timestamp=datetime.now(timezone.utc)
         )
@@ -116,15 +122,14 @@ class ModerationCog(commands.Cog):
             age_str = f"{days} days"
         
         embed.add_field(name="Account Age", value=age_str, inline=True)
-        embed.add_field(name="User ID", value=str(member.id), inline=True)
-        embed.set_footer(text=f"Member #{len(member.guild.members)}")
+        embed.set_footer(text=f"User ID: {member.id}")
         
         return embed
 
     def create_leave_embed(self, member: discord.Member, duration: Optional[str] = None) -> discord.Embed:
         """Create embed for member leave event"""
         embed = discord.Embed(
-            description=f"{member.display_name} left the server",
+            title=f"{member.display_name} left the server",
             color=0xff0000,  # Red for leaves
             timestamp=datetime.now(timezone.utc)
         )
@@ -133,49 +138,51 @@ class ModerationCog(commands.Cog):
         if duration:
             embed.add_field(name="Time on Server", value=duration, inline=True)
         
-        embed.add_field(name="User ID", value=str(member.id), inline=True)
-        embed.set_footer(text=f"Members remaining: {len(member.guild.members) - 1}")
+        embed.set_footer(text=f"User ID: {member.id}")
         
         return embed
 
     def create_ban_embed(self, user: discord.User, moderator: Optional[discord.Member], reason: Optional[str]) -> discord.Embed:
         """Create embed for ban event"""
         embed = discord.Embed(
-            description=f"{user.display_name} was banned",
+            title=f"{user.display_name} was banned",
             color=0x8b0000,  # Dark red for bans
             timestamp=datetime.now(timezone.utc)
         )
         embed.set_thumbnail(url=user.display_avatar.url)
         
         if moderator:
-            embed.add_field(name="Banned by", value=moderator.display_name, inline=True)
+            embed.add_field(name="Banned by", value=f"<@{moderator.id}>", inline=True)
         
-        embed.add_field(name="Reason", value=reason or "No reason provided", inline=True)
-        embed.add_field(name="User ID", value=str(user.id), inline=True)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=True)
+        
+        embed.set_footer(text=f"User ID: {user.id}")
         
         return embed
 
     def create_kick_embed(self, user: discord.User, moderator: Optional[discord.Member], reason: Optional[str]) -> discord.Embed:
         """Create embed for kick event"""
         embed = discord.Embed(
-            description=f"{user.display_name} was kicked",
+            title=f"{user.display_name} was kicked",
             color=0xff4500,  # Orange red for kicks
             timestamp=datetime.now(timezone.utc)
         )
         embed.set_thumbnail(url=user.display_avatar.url)
         
         if moderator:
-            embed.add_field(name="Kicked by", value=moderator.display_name, inline=True)
+            embed.add_field(name="Kicked by", value=f"<@{moderator.id}>", inline=True)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=True)
         
-        embed.add_field(name="Reason", value=reason or "No reason provided", inline=True)
-        embed.add_field(name="User ID", value=str(user.id), inline=True)
+        embed.set_footer(text=f"User ID: {user.id}")
         
         return embed
 
     def create_timeout_embed(self, member: discord.Member, duration: str, moderator: Optional[discord.Member], reason: Optional[str]) -> discord.Embed:
         """Create embed for timeout event"""
         embed = discord.Embed(
-            description=f"{member.display_name} was timed out",
+            title=f"{member.display_name} was timed out",
             color=0xffa500,  # Orange for timeouts
             timestamp=datetime.now(timezone.utc)
         )
@@ -183,10 +190,27 @@ class ModerationCog(commands.Cog):
         
         embed.add_field(name="Duration", value=duration, inline=True)
         if moderator:
-            embed.add_field(name="Timed out by", value=moderator.display_name, inline=True)
+            embed.add_field(name="Timed out by", value=f"<@{moderator.id}>", inline=True)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=False)
         
-        embed.add_field(name="Reason", value=reason or "No reason provided", inline=False)
-        embed.add_field(name="User ID", value=str(member.id), inline=True)
+        embed.set_footer(text=f"User ID: {member.id}")
+        
+        return embed
+
+    def create_unban_embed(self, user: discord.User, moderator: Optional[discord.Member]) -> discord.Embed:
+        """Create embed for unban event"""
+        embed = discord.Embed(
+            title=f"{user.display_name} was unbanned",
+            color=0x90ee90,  # Light green for unbans
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_thumbnail(url=user.display_avatar.url)
+        
+        if moderator:
+            embed.add_field(name="Unbanned by", value=f"<@{moderator.id}>", inline=True)
+        
+        embed.set_footer(text=f"User ID: {user.id}")
         
         return embed
 
@@ -251,6 +275,12 @@ class ModerationCog(commands.Cog):
         """Handle member leave events"""
         print(f"DEBUG: Member {member.name} left {member.guild.name}")  # Debug output
         
+        # Check if this user was recently banned or kicked
+        if member.id in self.recently_banned_kicked:
+            print(f"DEBUG: User {member.name} was banned/kicked, skipping leave message")
+            self.recently_banned_kicked.discard(member.id)  # Remove from set
+            return
+        
         # Calculate duration on server
         duration = None
         if member.id in self.member_join_times:
@@ -267,6 +297,9 @@ class ModerationCog(commands.Cog):
     @commands.Cog.listener()
     async def on_member_ban(self, guild: discord.Guild, user: discord.User):
         """Handle member ban events"""
+        # Add user to recently banned set to prevent leave message
+        self.recently_banned_kicked.add(user.id)
+        
         # Get ban information
         try:
             ban = await guild.fetch_ban(user)
@@ -300,20 +333,20 @@ class ModerationCog(commands.Cog):
         except discord.Forbidden:
             pass
         
-        embed = discord.Embed(
-            description=f"{user.display_name} was unbanned",
-            color=0x90ee90,  # Light green for unbans
-            timestamp=datetime.now(timezone.utc)
-        )
-        embed.set_author(name="Member Unbanned", icon_url=user.display_avatar.url)
-        embed.set_thumbnail(url=user.display_avatar.url)
-        
-        if moderator:
-            embed.add_field(name="Unbanned by", value=moderator.display_name, inline=True)
-        
-        embed.add_field(name="User ID", value=str(user.id), inline=True)
-        
+        embed = self.create_unban_embed(user, moderator)
         await self.send_log_message(guild.id, embed)
+
+    @commands.Cog.listener()
+    async def on_audit_log_entry_create(self, entry: discord.AuditLogEntry):
+        """Handle audit log entries for kicks"""
+        if entry.action == discord.AuditLogAction.kick:
+            # Add user to recently kicked set to prevent leave message
+            if entry.target:
+                self.recently_banned_kicked.add(entry.target.id)
+            
+            # Create kick embed
+            embed = self.create_kick_embed(entry.target, entry.user, entry.reason)
+            await self.send_log_message(entry.guild.id, embed)
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
@@ -399,119 +432,6 @@ class ModerationCog(commands.Cog):
                 await interaction.followup.send("❌ Cannot delete messages older than 14 days. Try with a smaller number.", ephemeral=True)
             else:
                 await interaction.followup.send("❌ An error occurred while deleting messages.", ephemeral=True)
-
-
-    @app_commands.command(name="mod_memberlog_setup", description="Setup member logging with webhook")
-    @app_commands.describe(webhook_url="The webhook URL for the logging channel")
-    @app_commands.default_permissions(administrator=True)
-    async def setup_member_log(self, interaction: discord.Interaction, webhook_url: str):
-        """Setup member logging"""
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("❌ You need `Manage Server` permission to use this command.", ephemeral=True)
-            return
-        
-        # Validate webhook URL
-        if not webhook_url.startswith('https://discord.com/api/webhooks/'):
-            await interaction.response.send_message("❌ Invalid webhook URL format.", ephemeral=True)
-            return
-        
-        try:
-            # Test webhook
-            async with aiohttp.ClientSession() as session:
-                webhook = discord.Webhook.from_url(webhook_url, session=session)
-                await webhook.fetch()
-        except (discord.HTTPException, aiohttp.ClientError):
-            await interaction.response.send_message("❌ Invalid or inaccessible webhook URL.", ephemeral=True)
-            return
-        
-        self.set_guild_config(interaction.guild.id, 'member_log_webhook', webhook_url)
-        
-        embed = discord.Embed(
-            title="✅ Member Logging Enabled",
-            description="Successfully configured member logging!\n\nThe bot will now log:\n• Member joins\n• Member leaves\n• Bans and unbans\n• Kicks\n• Timeouts",
-            color=0x00ff00
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="mod_memberlog_disable", description="Disable member logging")
-    @app_commands.default_permissions(administrator=True)
-    async def disable_member_log(self, interaction: discord.Interaction):
-        """Disable member logging"""
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("❌ You need `Manage Server` permission to use this command.", ephemeral=True)
-            return
-        
-        config = self.get_guild_config(interaction.guild.id)
-        if 'member_log_webhook' not in config:
-            await interaction.response.send_message("❌ Member logging is not enabled.", ephemeral=True)
-            return
-        
-        # Remove webhook from config
-        guild_str = str(interaction.guild.id)
-        if guild_str in self.config and 'member_log_webhook' in self.config[guild_str]:
-            del self.config[guild_str]['member_log_webhook']
-            self.save_config()
-        
-        embed = discord.Embed(
-            title="✅ Member Logging Disabled",
-            description="Member logging has been disabled.",
-            color=0xff0000
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="mod_joinrole_setup", description="Setup auto role assignment for new members")
-    @app_commands.describe(role="The role to assign to new members")
-    @app_commands.default_permissions(administrator=True)
-    async def setup_join_role(self, interaction: discord.Interaction, role: discord.Role):
-        """Setup auto join role"""
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("❌ You need `Manage Roles` permission to use this command.", ephemeral=True)
-            return
-        
-        # Check if bot can assign the role
-        bot_member = interaction.guild.get_member(self.bot.user.id)
-        if role >= bot_member.top_role:
-            await interaction.response.send_message("❌ I cannot assign this role as it's higher than or equal to my highest role.", ephemeral=True)
-            return
-        
-        self.set_guild_config(interaction.guild.id, 'join_role', role.id)
-        
-        embed = discord.Embed(
-            title="✅ Auto Join Role Enabled",
-            description=f"New members will automatically receive the {role.mention} role when they join.",
-            color=0x00ff00
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="mod_joinrole_disable", description="Disable auto role assignment for new members")
-    @app_commands.default_permissions(administrator=True)
-    async def disable_join_role(self, interaction: discord.Interaction):
-        """Disable auto join role"""
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("❌ You need `Manage Roles` permission to use this command.", ephemeral=True)
-            return
-        
-        config = self.get_guild_config(interaction.guild.id)
-        if 'join_role' not in config:
-            await interaction.response.send_message("❌ Auto join role is not enabled.", ephemeral=True)
-            return
-        
-        # Remove join role from config
-        guild_str = str(interaction.guild.id)
-        if guild_str in self.config and 'join_role' in self.config[guild_str]:
-            del self.config[guild_str]['join_role']
-            self.save_config()
-        
-        embed = discord.Embed(
-            title="✅ Auto Join Role Disabled",
-            description="Auto role assignment for new members has been disabled.",
-            color=0xff0000
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(ModerationCog(bot))
