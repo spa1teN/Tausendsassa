@@ -43,7 +43,7 @@ class ProximityCalculator:
                 nearby_users.append({
                     'user_id': other_user_id,
                     'username': other_pin.get('username', 'Unknown'),
-                    'location': other_pin.get('display_name', 'Unknown'),
+                    'location': other_pin.get('location', 'Unknown'),  # WICHTIG: Verwende original input statt display_name
                     'lat': other_lat,
                     'lng': other_lng,
                     'distance': distance
@@ -109,12 +109,15 @@ class ProximityCalculator:
                 y = (maxy - lat) / (maxy - miny) * height
                 return (int(x), int(y))
         
-            # Create base map with custom colors and boundaries
-            base_map, _ = await self.map_generator.render_geopandas_map_bounds(minx, miny, maxx, maxy, width, height, str(guild_id), maps)
+            # WICHTIG: Create base map mit custom colors und boundaries
+            guild_id_str = str(guild_id)
+            base_map, _ = await self.map_generator.render_geopandas_map_bounds(
+                minx, miny, maxx, maxy, width, height, guild_id_str, maps
+            )
             
             if not base_map:
                 # Fallback with custom water color
-                land_color, water_color = self.map_generator.get_map_colors(str(guild_id), maps)
+                land_color, water_color = self.map_generator.get_map_colors(guild_id_str, maps)
                 base_map = Image.new('RGB', (width, height), color=water_color)
         
             draw = ImageDraw.Draw(base_map)
@@ -136,8 +139,8 @@ class ProximityCalculator:
                 center_x + user_pin_size, center_y + user_pin_size
             ], fill='#00FF00', outline='white', width=3)
         
-            # Draw nearby user pins with custom pin color
-            pin_color, _ = self.map_generator.get_pin_settings(str(guild_id), maps)
+            # WICHTIG: Draw nearby user pins with custom pin color
+            pin_color, _ = self.map_generator.get_pin_settings(guild_id_str, maps)
             
             for user_data in nearby_users:
                 pin_lat, pin_lng = user_data['lat'], user_data['lng']

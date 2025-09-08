@@ -20,6 +20,6 @@ pip install -r requirements.txt
 ## Usage
 - Start the bot:
 ```bash
-python3 bot.py
+.venv/bin/python3 bot.py
 ```
 - run `/help`

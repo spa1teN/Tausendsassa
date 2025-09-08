@@ -1,9 +1,6 @@
 ### **Map Feature**
 > - `/map_create`: create a server map **(Admin only)**
-> - `/map_remove`: remove the map **(Admin only)**
-> - `/map_pin`: pin your location
-> - `/map_unpin`: unpin your location
-> - `/map_info`: display information about the map
+> - `/map_pin`: manage your pin
 ### **RSS to Discord Feature** (also Bluesky)
 > - `/feeds_add`: add a feed to the server **(Admin only)**
 > - `/feeds_remove`: remove a feed **(Admin only)**

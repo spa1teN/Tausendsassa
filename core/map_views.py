@@ -1,11 +1,16 @@
-"""Improved Discord UI Views with dynamic buttons and update logic."""
+"""User Views for Discord Map Bot."""
 
 import discord
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Optional
+from io import BytesIO
 
 if TYPE_CHECKING:
     from cogs.map import MapV2Cog
+
+# Import admin views and proximity modal
+from .map_views_admin import AdminToolsView
+from .map_improved_modals import ProximityModal
 
 
 class LocationModal(discord.ui.Modal, title='Pin Location'):
@@ -24,245 +29,6 @@ class LocationModal(discord.ui.Modal, title='Pin Location'):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await self.cog._handle_pin_location(interaction, self.location.value)
-
-
-class AdminSettingsModal(discord.ui.Modal, title='Map Admin Settings'):
-    def __init__(self, cog: 'MapV2Cog', guild_id: int):
-        super().__init__()
-        self.cog = cog
-        self.guild_id = guild_id
-        
-        # Load current settings
-        map_data = self.cog.maps.get(str(guild_id), {})
-        settings = map_data.get('settings', {})
-        
-        # Pre-fill with current values
-        self.proximity_enabled.default = "true" if map_data.get('allow_proximity', True) else "false"
-        
-        colors = settings.get('colors', {})
-        land_color = colors.get('land', self.cog.map_generator.map_config.DEFAULT_LAND_COLOR)
-        water_color = colors.get('water', self.cog.map_generator.map_config.DEFAULT_WATER_COLOR)
-        
-        self.land_color.default = f"{land_color[0]},{land_color[1]},{land_color[2]}"
-        self.water_color.default = f"{water_color[0]},{water_color[1]},{water_color[2]}"
-        
-        pins = settings.get('pins', {})
-        self.pin_color.default = pins.get('color', self.cog.map_generator.map_config.DEFAULT_PIN_COLOR)
-        self.pin_size.default = str(pins.get('size', self.cog.map_generator.map_config.DEFAULT_PIN_SIZE))
-
-    proximity_enabled = discord.ui.TextInput(
-        label='Proximity Search Enabled',
-        placeholder='true or false',
-        required=True,
-        max_length=5
-    )
-    
-    land_color = discord.ui.TextInput(
-        label='Land Color (R,G,B)',
-        placeholder='240,240,220',
-        required=False,
-        max_length=20
-    )
-    
-    water_color = discord.ui.TextInput(
-        label='Water Color (R,G,B)', 
-        placeholder='168,213,242',
-        required=False,
-        max_length=20
-    )
-    
-    pin_color = discord.ui.TextInput(
-        label='Pin Color (Hex)',
-        placeholder='#FF4444',
-        required=False,
-        max_length=7
-    )
-    
-    pin_size = discord.ui.TextInput(
-        label='Pin Size',
-        placeholder='16',
-        required=False,
-        max_length=3
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        try:
-            guild_id = str(self.guild_id)
-            
-            # Validate and parse proximity setting
-            prox_input = self.proximity_enabled.value.lower().strip()
-            if prox_input not in ['true', 'false']:
-                await interaction.followup.send("❌ Proximity setting must be 'true' or 'false'", ephemeral=True)
-                return
-            
-            proximity_enabled = prox_input == 'true'
-            
-            # Parse and validate colors
-            def parse_rgb(color_str: str, default: tuple) -> tuple:
-                if not color_str.strip():
-                    return default
-                try:
-                    parts = [int(x.strip()) for x in color_str.split(',')]
-                    if len(parts) != 3 or not all(0 <= x <= 255 for x in parts):
-                        return default
-                    return tuple(parts)
-                except:
-                    return default
-            
-            land_color = parse_rgb(self.land_color.value, self.cog.map_generator.map_config.DEFAULT_LAND_COLOR)
-            water_color = parse_rgb(self.water_color.value, self.cog.map_generator.map_config.DEFAULT_WATER_COLOR)
-            
-            # Validate pin color
-            pin_color = self.pin_color.value.strip()
-            if not pin_color:
-                pin_color = self.cog.map_generator.map_config.DEFAULT_PIN_COLOR
-            elif not pin_color.startswith('#') or len(pin_color) != 7:
-                pin_color = self.cog.map_generator.map_config.DEFAULT_PIN_COLOR
-            
-            # Validate pin size
-            try:
-                pin_size = int(self.pin_size.value.strip()) if self.pin_size.value.strip() else self.cog.map_generator.map_config.DEFAULT_PIN_SIZE
-                if pin_size < 5 or pin_size > 50:
-                    pin_size = self.cog.map_generator.map_config.DEFAULT_PIN_SIZE
-            except:
-                pin_size = self.cog.map_generator.map_config.DEFAULT_PIN_SIZE
-            
-            # Update map data
-            if guild_id not in self.cog.maps:
-                await interaction.followup.send("❌ No map exists for this server.", ephemeral=True)
-                return
-            
-            # Update settings
-            self.cog.maps[guild_id]['allow_proximity'] = proximity_enabled
-            
-            if 'settings' not in self.cog.maps[guild_id]:
-                self.cog.maps[guild_id]['settings'] = {}
-            
-            self.cog.maps[guild_id]['settings']['colors'] = {
-                'land': land_color,
-                'water': water_color
-            }
-            
-            self.cog.maps[guild_id]['settings']['pins'] = {
-                'color': pin_color,
-                'size': pin_size
-            }
-            
-            # Save changes
-            await self.cog._save_data(guild_id)
-            
-            # Invalidate cache and update map
-            await self.cog._invalidate_map_cache(int(guild_id))
-            channel_id = self.cog.maps[guild_id]['channel_id']
-            await self.cog._update_map(int(guild_id), channel_id)
-            
-            # Create success embed
-            embed = discord.Embed(
-                title="⚙️ Map Settings Updated",
-                description="Map configuration has been successfully updated!",
-                color=0x00ff44
-            )
-            
-            embed.add_field(
-                name="Proximity Search", 
-                value="✅ Enabled" if proximity_enabled else "❌ Disabled", 
-                inline=True
-            )
-            embed.add_field(
-                name="Land Color", 
-                value=f"RGB({land_color[0]}, {land_color[1]}, {land_color[2]})", 
-                inline=True
-            )
-            embed.add_field(
-                name="Water Color", 
-                value=f"RGB({water_color[0]}, {water_color[1]}, {water_color[2]})", 
-                inline=True
-            )
-            embed.add_field(
-                name="Pin Color", 
-                value=pin_color, 
-                inline=True
-            )
-            embed.add_field(
-                name="Pin Size", 
-                value=str(pin_size), 
-                inline=True
-            )
-            embed.add_field(
-                name="Map Updated", 
-                value=f"<#{channel_id}>", 
-                inline=True
-            )
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            
-        except Exception as e:
-            self.cog.log.error(f"Error updating admin settings: {e}")
-            await interaction.followup.send("❌ Error updating settings", ephemeral=True)
-
-
-class MapRemovalConfirmView(discord.ui.View):
-    def __init__(self, cog: 'MapV2Cog', guild_id: int):
-        super().__init__(timeout=60)
-        self.cog = cog
-        self.guild_id = guild_id
-
-    @discord.ui.button(label="Yes, Delete Map", style=discord.ButtonStyle.danger, emoji="🗑️")
-    async def confirm_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-
-        guild_id = str(self.guild_id)
-        
-        if guild_id not in self.cog.maps:
-            await interaction.followup.send("❌ No map exists for this server.", ephemeral=True)
-            return
-
-        map_data = self.cog.maps[guild_id]
-        pin_count = len(map_data.get('pins', {}))
-        
-        # Try to delete the map message
-        channel_id = map_data.get('channel_id')
-        message_id = map_data.get('message_id')
-        
-        if channel_id and message_id:
-            try:
-                channel = self.cog.bot.get_channel(channel_id)
-                if channel:
-                    message = await channel.fetch_message(message_id)
-                    await message.delete()
-                    self.cog.log.info(f"Deleted map message {message_id} in channel {channel_id}")
-            except discord.NotFound:
-                self.cog.log.info(f"Map message {message_id} already deleted")
-            except Exception as e:
-                self.cog.log.warning(f"Could not delete map message: {e}")
-        
-        # Invalidate cache when removing map
-        await self.cog._invalidate_map_cache(int(guild_id))
-        
-        del self.cog.maps[guild_id]
-        await self.cog._save_data(guild_id)
-        await self.cog._update_global_overview()
-
-        embed = discord.Embed(
-            title="🗑️ Map Deleted",
-            description="The server map has been permanently removed.",
-            color=0xff4444
-        )
-        embed.add_field(name="Pins Removed", value=str(pin_count), inline=True)
-        embed.add_field(name="Map Message", value="Deleted", inline=True)
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
-    async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="❌ Deletion Cancelled",
-            description="The map was not deleted.",
-            color=0x7289da
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
 
 
 class ContinentSelectionView(discord.ui.View):
@@ -297,27 +63,54 @@ class ContinentSelectionView(discord.ui.View):
         await self._generate_continent(interaction, "australia", "Australia")
 
     async def _generate_continent(self, interaction: discord.Interaction, continent: str, display_name: str):
-        await interaction.response.defer()
+        # Show loading message immediately and clear previous content
+        loading_embed = discord.Embed(
+            title="🌍 Generating Close-up",
+            description="Just a moment, I'm generating the continent close-up view...",
+            color=0x7289da
+        )
+        # Replace both content and embed, clear view
+        await interaction.response.edit_message(
+            content=None,  # Clear the selection text
+            embed=loading_embed,
+            view=None
+        )
         
         try:
             continent_image = await self.cog._generate_continent_closeup(self.guild_id, continent)
             if continent_image:
                 filename = f"continent_{continent}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                 
-                # Edit the original message instead of creating new one
+                # Replace loading message with the actual image
                 await self.original_interaction.edit_original_response(
                     content=f"🌍 **Close-up view of {display_name}**",
+                    embed=None,  # Clear the loading embed
                     attachments=[discord.File(continent_image, filename=filename)],
                     view=None
                 )
             else:
-                await interaction.followup.send(
-                    f"❌ Could not generate map for {display_name}",
-                    ephemeral=True
+                error_embed = discord.Embed(
+                    title="❌ Generation Error",
+                    description=f"Could not generate map for {display_name}",
+                    color=0xff4444
+                )
+                await self.original_interaction.edit_original_response(
+                    content=None,  # Clear any content
+                    embed=error_embed,
+                    view=None
                 )
         except Exception as e:
             self.cog.log.error(f"Error generating continent map: {e}")
-            await interaction.followup.send("❌ Error generating continent map", ephemeral=True)
+            error_embed = discord.Embed(
+                title="❌ Generation Error",
+                description="An error occurred while generating the continent close-up view.",
+                color=0xff4444
+            )
+            await self.original_interaction.edit_original_response(
+                content=None,  # Clear any content
+                embed=error_embed,
+                view=None
+            )
 
 
 class StateSelectionView(discord.ui.View):
@@ -327,35 +120,24 @@ class StateSelectionView(discord.ui.View):
         self.guild_id = guild_id
         self.original_interaction = original_interaction
         
-        # German states as buttons (max 25 buttons per view)
-        states = [
-            ("Baden-Württemberg", "Baden-Württemberg"),
-            ("Bayern", "Bayern"),
-            ("Berlin", "Berlin"),
-            ("Brandenburg", "Brandenburg"),
-            ("Bremen", "Bremen"),
-            ("Hamburg", "Hamburg"),
-            ("Hessen", "Hessen"),
-            ("Mecklenburg-Vorpommern", "M-V"),
-            ("Niedersachsen", "Niedersachsen"),
-            ("Nordrhein-Westfalen", "NRW"),
-            ("Rheinland-Pfalz", "R-Pfalz"),
-            ("Saarland", "Saarland"),
-            ("Sachsen", "Sachsen"),
-            ("Sachsen-Anhalt", "S-Anhalt"),
-            ("Schleswig-Holstein", "S-Holstein"),
-            ("Thüringen", "Thüringen")
-        ]
+        # Get German states from config with actual emojis
+        states_config = self.cog.map_generator.map_config.GERMAN_STATES
         
         # Add buttons dynamically (5 per row, max 5 rows)
-        for i, (full_name, short_name) in enumerate(states):
+        for i, (full_name, state_data) in enumerate(states_config.items()):
             row = i // 5
             if row >= 5:  # Discord limit
                 break
             
+            # Create button with actual emoji from config
+            emoji_id = state_data.get('emoji_id')
+            # Use the actual emoji format if available
+            emoji = f"<:coat_{state_data['short'].lower()}:{emoji_id}>" if emoji_id else None
+            
             button = discord.ui.Button(
-                label=short_name,
+                label=state_data['short'],
                 style=discord.ButtonStyle.secondary,
+                emoji=emoji,
                 row=row
             )
             button.callback = self._create_state_callback(full_name)
@@ -363,54 +145,62 @@ class StateSelectionView(discord.ui.View):
 
     def _create_state_callback(self, state_name: str):
         async def state_callback(interaction: discord.Interaction):
-            await interaction.response.defer()
+            # Get emoji for the loading message
+            states_config = self.cog.map_generator.map_config.GERMAN_STATES
+            state_data = states_config.get(state_name, {})
+            emoji_id = state_data.get('emoji_id')
+            emoji_str = f"<:coat_{state_data.get('short', 'state').lower()}:{emoji_id}>" if emoji_id else "🏛️"
+            
+            # Show loading message with state emoji and clear previous content
+            loading_embed = discord.Embed(
+                title=f"{emoji_str} Generating Close-up",
+                description=f"Just a moment, I'm generating the {state_name} close-up view...",
+                color=0x7289da
+            )
+            # Replace both content and embed, clear view
+            await interaction.response.edit_message(
+                content=None,  # Clear the selection text
+                embed=loading_embed, 
+                view=None
+            )
             
             try:
                 state_image = await self.cog._generate_state_closeup(self.guild_id, state_name)
                 if state_image:
                     filename = f"state_{state_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                     
-                    # Edit the original message instead of creating new one
+                    # Replace loading message with the actual image
                     await self.original_interaction.edit_original_response(
-                        content=f"🏛️ **Close-up view of {state_name}**",
+                        content=f"{emoji_str} **Close-up view of {state_name}**",
+                        embed=None,  # Clear the loading embed
                         attachments=[discord.File(state_image, filename=filename)],
                         view=None
                     )
                 else:
-                    await interaction.followup.send(
-                        f"❌ Could not generate map for {state_name}",
-                        ephemeral=True
+                    error_embed = discord.Embed(
+                        title="❌ Generation Error",
+                        description=f"Could not generate map for {state_name}",
+                        color=0xff4444
+                    )
+                    await self.original_interaction.edit_original_response(
+                        content=None,  # Clear any content
+                        embed=error_embed, 
+                        view=None
                     )
             except Exception as e:
                 self.cog.log.error(f"Error generating state map: {e}")
-                await interaction.followup.send("❌ Error generating state map", ephemeral=True)
+                error_embed = discord.Embed(
+                    title="❌ Generation Error",
+                    description="An error occurred while generating the close-up view.",
+                    color=0xff4444
+                )
+                await self.original_interaction.edit_original_response(
+                    content=None,  # Clear any content
+                    embed=error_embed, 
+                    view=None
+                )
         
         return state_callback
-
-
-class AdminToolsView(discord.ui.View):
-    """Admin Tools interface for map management."""
-    
-    def __init__(self, cog: 'MapV2Cog', guild_id: int):
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.guild_id = guild_id
-
-    @discord.ui.button(label="Customize Map", style=discord.ButtonStyle.primary, emoji="🎨")
-    async def customize_map(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = AdminSettingsModal(self.cog, self.guild_id)
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="Delete Map", style=discord.ButtonStyle.danger, emoji="🗑️")
-    async def delete_map(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="⚠️ Confirm Map Deletion",
-            description="**This action cannot be undone!**\n\nDeleting the map will:\n• Remove all user pins\n• Delete the map message\n• Clear all custom settings\n\nAre you sure you want to proceed?",
-            color=0xff4444
-        )
-        
-        view = MapRemovalConfirmView(self.cog, self.guild_id)
-        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class MapMenuView(discord.ui.View):
@@ -444,7 +234,7 @@ class MapMenuView(discord.ui.View):
         proximity_button = discord.ui.Button(
             label="Nearby",
             style=discord.ButtonStyle.secondary,
-            emoji="📍"
+            emoji="🔍"
         )
         proximity_button.callback = self.nearby_members
         self.add_item(proximity_button)
@@ -453,7 +243,7 @@ class MapMenuView(discord.ui.View):
         closeup_button = discord.ui.Button(
             label="Close-up",
             style=discord.ButtonStyle.secondary,
-            emoji="🔍"
+            emoji="🔎"
         )
         closeup_button.callback = self.region_closeup
         self.add_item(closeup_button)
@@ -488,12 +278,17 @@ class MapMenuView(discord.ui.View):
 
     async def map_info(self, interaction: discord.Interaction):
         """Show map information (same functionality as /map_info command)."""
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
 
         guild_id = str(self.guild_id)
         
         if guild_id not in self.cog.maps:
-            await interaction.followup.send("❌ No map exists for this server.", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ Error",
+                description="No map exists for this server.",
+                color=0xff4444
+            )
+            await interaction.edit_original_response(embed=embed, view=None)
             return
 
         map_data = self.cog.maps[guild_id]
@@ -535,7 +330,7 @@ class MapMenuView(discord.ui.View):
                 inline=False
             )
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.edit_original_response(embed=embed, view=None)
 
     async def region_closeup(self, interaction: discord.Interaction):
         # Get current map data dynamically
@@ -557,10 +352,12 @@ class MapMenuView(discord.ui.View):
                 view=view
             )
         else:
-            await interaction.response.send_message(
-                "❌ Region close-up is not available for this map type.", 
-                ephemeral=True
+            embed = discord.Embed(
+                title="❌ Not Available",
+                description="Region close-up is not available for this map type.",
+                color=0xff4444
             )
+            await interaction.response.edit_message(embed=embed, view=None)
 
     async def nearby_members(self, interaction: discord.Interaction):
         # Get current map data dynamically
@@ -568,19 +365,23 @@ class MapMenuView(discord.ui.View):
         
         # Double-check if proximity is enabled (shouldn't be needed but safety first)
         if not map_data.get('allow_proximity', False):
-            await interaction.response.send_message(
-                "Proximity search is disabled for this map.", 
-                ephemeral=True
+            embed = discord.Embed(
+                title="❌ Not Available",
+                description="Proximity search is disabled for this map.",
+                color=0xff4444
             )
+            await interaction.response.edit_message(embed=embed, view=None)
             return
         
         # Check if user has a pin
         user_id = str(interaction.user.id)
         if user_id not in map_data.get('pins', {}):
-            await interaction.response.send_message(
-                "You need to pin your location first to search for nearby members!",
-                ephemeral=True
+            embed = discord.Embed(
+                title="❌ No Pin Found",
+                description="You need to pin your location first to search for nearby members!",
+                color=0xff4444
             )
+            await interaction.response.edit_message(embed=embed, view=None)
             return
         
         # Show proximity modal
@@ -636,7 +437,8 @@ class MapPinButtonView(discord.ui.View):
     async def menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Create view with user parameter for admin check
         view = MapMenuView(self.cog, int(interaction.guild.id), interaction.user)
-        await interaction.response.send_message(content="**Select an option:**", view=view, ephemeral=True)
+        # Remove "Select an option:" prefix for cleaner UX
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 
 class UserPinOptionsView(discord.ui.View):
@@ -644,7 +446,6 @@ class UserPinOptionsView(discord.ui.View):
         super().__init__(timeout=300)
         self.cog = cog
         self.guild_id = guild_id
-        self._original_response = None  # Store original response for updating
 
     @discord.ui.button(
         label="Change",
@@ -652,9 +453,6 @@ class UserPinOptionsView(discord.ui.View):
         emoji="🔄"
     )
     async def change_location(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Store the original response for updating later
-        self._original_response = interaction.response
-        
         modal = UpdateLocationModal(self.cog, self.guild_id, interaction)
         await interaction.response.send_modal(modal)
 
@@ -664,25 +462,44 @@ class UserPinOptionsView(discord.ui.View):
         emoji="🗑️"
     )
     async def remove_location(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        
+        await interaction.response.defer()
+    
         guild_id = str(interaction.guild.id)
         user_id = str(interaction.user.id)
-        
+    
         if guild_id not in self.cog.maps:
-            await interaction.followup.send("❌ No map for this server.", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ Error",
+                description="No map for this server.",
+                color=0xff4444
+            )
+            await interaction.edit_original_response(embed=embed, view=None)
             return
 
         if user_id not in self.cog.maps[guild_id]['pins']:
-            await interaction.followup.send("❌ You don't have a pin on the map.", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ Error",
+                description="You don't have a pin on the map.",
+                color=0xff4444
+            )
+            await interaction.edit_original_response(embed=embed, view=None)
             return
 
-        old_location = self.cog.maps[guild_id]['pins'][user_id].get('display_name', 'Unknown')
+        # Show loading message
+        loading_embed = discord.Embed(
+            title="🗺️ Updating Map",
+            description="Removing pin and rendering updated map...",
+            color=0x7289da
+        )
+        await interaction.edit_original_response(embed=loading_embed, view=None)
+
+        old_location = self.cog.maps[guild_id]['pins'][user_id].get('location', 'Unknown')  # Use original location
         del self.cog.maps[guild_id]['pins'][user_id]
         await self.cog._save_data(guild_id)
         
-        # Invalidate cache since pins changed
-        await self.cog._invalidate_map_cache(int(guild_id))
+        # VERBESSERUNG: Nur Final Map Cache invalidieren, Base Map beibehalten
+        await self.cog.storage.invalidate_final_map_cache_only(int(guild_id))
+        self.cog.log.info(f"Pin removal for guild {guild_id}: preserved base map cache for efficiency")
         
         channel_id = self.cog.maps[guild_id]['channel_id']
         await self.cog._update_map(int(guild_id), channel_id)
@@ -697,7 +514,7 @@ class UserPinOptionsView(discord.ui.View):
         embed.add_field(name="Removed Location", value=old_location, inline=False)
         embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.edit_original_response(embed=embed, view=None)
 
     async def on_timeout(self):
         """Disable all buttons when the view times out."""
@@ -723,12 +540,8 @@ class UpdateLocationModal(discord.ui.Modal, title='Update Pin Location'):
         await interaction.response.defer(ephemeral=True)
         
         # Handle the location update
-        result = await self.cog._handle_pin_location_update(
+        await self.cog._handle_pin_location_update(
             interaction, 
             self.location.value, 
             self.original_interaction
         )
-
-
-# Import the new modals
-from .improved_modals import ProximityModal

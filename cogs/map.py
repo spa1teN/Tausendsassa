@@ -17,7 +17,9 @@ from shapely.geometry import box
 from core.map_gen import MapGenerator
 from core.map_storage import MapStorage
 from core.map_proximity import ProximityCalculator
-from core.map_views import MapPinButtonView, LocationModal
+from core.map_views import MapPinButtonView, LocationModal, UserPinOptionsView
+from core.map_views_admin import AdminSettingsModal
+from core.map_config import MapConfig
 
 # Constants
 IMAGE_WIDTH = 1500
@@ -43,10 +45,14 @@ class MapV2Cog(commands.Cog):
         # Load data and configs
         self.global_config = self.storage.load_global_config()
         self.maps = self.storage.load_all_data()
-
+    
     async def cog_load(self):
         """Called when the cog is loaded. Re-register persistent views."""
         try:
+            # WICHTIG: Kompletten Base Map Cache leeren bei Neustart
+            self.storage.base_map_cache.clear()
+            self.log.info("Cleared all base map cache on restart")
+        
             # Register all persistent views for existing maps
             for guild_id, map_data in self.maps.items():
                 # Get current region from map data
@@ -62,8 +68,23 @@ class MapV2Cog(commands.Cog):
                         channel = self.bot.get_channel(channel_id)
                         if channel:
                             message = await channel.fetch_message(message_id)
-                            await message.edit(view=view)
-                            self.log.info(f"Updated view for guild {guild_id} with region {region}")
+                    
+                            # Check if map has custom settings
+                            has_custom_settings = bool(map_data.get('settings'))
+                            if has_custom_settings:
+                                # Force complete regeneration for custom maps
+                                self.log.info(f"Force-regenerating map with custom settings for guild {guild_id}")
+                            
+                                # Invalidate ALL cache for this guild
+                                await self._invalidate_map_cache(int(guild_id))
+                            
+                                # Force regeneration (will use custom settings)
+                                await self._update_map(int(guild_id), channel_id)
+                                self.log.info(f"Completed regeneration for guild {guild_id} with custom settings")
+                            else:
+                                # Just update the view for default maps
+                                await message.edit(view=view)
+                                self.log.info(f"Updated view for guild {guild_id} with region {region}")
                     except Exception as e:
                         self.log.warning(f"Could not update view for guild {guild_id}: {e}")
 
@@ -79,7 +100,7 @@ class MapV2Cog(commands.Cog):
                 self.log.error(f"Channel {channel_id} not found")
                 return
 
-            # Generate map image (uses caching internally)
+            # Generate map image (uses caching internally and respects custom settings)
             map_file = await self._generate_map_image(guild_id)
             if not map_file:
                 self.log.error("Failed to generate map image")
@@ -149,7 +170,7 @@ class MapV2Cog(commands.Cog):
                 height = int(height * 0.8)
             
             # Try to get cached base map first
-            base_map = await self.storage.get_cached_base_map(region, width, height)
+            base_map = await self.storage.get_cached_base_map(region, width, height, str(guild_id), self.maps)
             projection_func = None
             
             if not base_map:
@@ -158,7 +179,7 @@ class MapV2Cog(commands.Cog):
                 
                 if base_map:
                     # Cache the new base map
-                    await self.storage.cache_base_map(region, width, height, base_map)
+                    await self.storage.cache_base_map(region, width, height, base_map, str(guild_id), self.maps)
                 else:
                     # Fallback to simple background
                     land_color, water_color = self.map_generator.get_map_colors(str(guild_id), self.maps)
@@ -366,7 +387,10 @@ class MapV2Cog(commands.Cog):
             # Calculate line widths for state view using map config
             river_width, country_width, state_width = self.map_generator.map_config.get_line_widths(width, "default")
 
-            # Draw rivers
+            # Get custom border colors
+            country_color, state_color_custom, river_color = self.map_generator.get_border_colors(str(guild_id), self.maps)
+
+            # Draw rivers with custom color
             for line in rivers.geometry:
                 if line is None or not line.intersects(bbox):
                     continue
@@ -374,11 +398,11 @@ class MapV2Cog(commands.Cog):
                     try:
                         pts = [to_px(y, x) for x, y in seg.coords]
                         if len(pts) >= 2:
-                            draw.line(pts, fill=(60, 60, 200), width=river_width)
+                            draw.line(pts, fill=river_color, width=river_width)
                     except:
                         continue
 
-            # Draw country boundaries (thick black lines)
+            # Draw country boundaries with custom color
             for poly in world.geometry:
                 if poly is None or not poly.intersects(bbox):
                     continue
@@ -386,11 +410,11 @@ class MapV2Cog(commands.Cog):
                     try:
                         pts = [to_px(y, x) for x, y in ring.exterior.coords]
                         if len(pts) >= 2:
-                            draw.line(pts, fill=(0, 0, 0), width=country_width)
+                            draw.line(pts, fill=country_color, width=country_width)
                     except:
                         continue
 
-            # Draw state boundaries (gray lines)
+            # Draw state boundaries with custom color
             for poly in states.geometry:
                 if poly is None or not poly.intersects(bbox):
                     continue
@@ -398,7 +422,7 @@ class MapV2Cog(commands.Cog):
                     try:
                         pts = [to_px(y, x) for x, y in ring.exterior.coords]
                         if len(pts) >= 2:
-                            draw.line(pts, fill=(100, 100, 100), width=state_width)
+                            draw.line(pts, fill=state_color_custom, width=state_width)
                     except:
                         continue
 
@@ -544,7 +568,7 @@ class MapV2Cog(commands.Cog):
     async def _handle_pin_location(self, interaction: discord.Interaction, location: str):
         """Handle the actual pin location logic."""
         guild_id = str(interaction.guild.id)
-        
+    
         if guild_id not in self.maps:
             await interaction.followup.send("❌ No map exists for this server. Ask an admin to create one with `/map_create`.", ephemeral=True)
             return
@@ -560,7 +584,7 @@ class MapV2Cog(commands.Cog):
             return
 
         lat, lng, display_name = geocode_result
-        
+    
         # Check if coordinates are within the map region bounds
         region = self.maps[guild_id]['region']
         bounds = self.map_generator.map_configs[region]['bounds']
@@ -577,54 +601,64 @@ class MapV2Cog(commands.Cog):
         is_update = user_id in self.maps[guild_id]['pins']
         old_location = None
         if is_update:
-            old_location = self.maps[guild_id]['pins'][user_id].get('display_name', 'Unknown')
+            old_location = self.maps[guild_id]['pins'][user_id].get('location', 'Unknown')  # Use original location
 
-        # Add or update pin
+        # Add or update pin - WICHTIG: speichere nur die original location
         self.maps[guild_id]['pins'][user_id] = {
             'username': interaction.user.display_name,
-            'location': location,
-            'display_name': display_name,
+            'location': location,  # Original user input
+            'display_name': display_name,  # Geocoded display name for internal use
             'lat': lat,
             'lng': lng,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
 
         await self._save_data(guild_id)
-        
-        # Invalidate cache since pins changed
-        await self._invalidate_map_cache(int(guild_id))
-        
+    
+        # Show rendering loading message
+        rendering_embed = discord.Embed(
+            title="🗺️ Rendering Map",
+            description="Updating the map with your new pin location...",
+            color=0x7289da
+        )
+        loading_msg = await interaction.followup.send(embed=rendering_embed, ephemeral=True)
+    
+        # Invalidate only final map cache
+        await self.storage.invalidate_final_map_cache_only(int(guild_id))
+        self.log.info(f"Pin update for guild {guild_id}: preserved base map cache for efficiency")
+    
         # Update the map and global overview
         channel_id = self.maps[guild_id]['channel_id']
         await self._update_map(interaction.guild.id, channel_id)
         await self._update_global_overview()
 
-        # Create embed response
+        # Create success embed
         if is_update:
-            embed = discord.Embed(
-                title="📍 Pin Updated Successfully",
+            success_embed = discord.Embed(
+                title="📌 Pin Updated Successfully",
                 description="Your location has been updated on the map!",
                 color=0x00ff44
             )
-            embed.add_field(name="Previous Location", value=old_location, inline=False)
-            embed.add_field(name="New Location", value=display_name, inline=False)
+            success_embed.add_field(name="Previous Location", value=old_location, inline=False)
+            success_embed.add_field(name="New Location", value=location, inline=False)  # Show user input
         else:
-            embed = discord.Embed(
-                title="📍 Pin Added Successfully", 
+            success_embed = discord.Embed(
+                title="📌 Pin Added Successfully", 
                 description="Your location has been pinned on the map!",
                 color=0x7289da
             )
-            embed.add_field(name="Location", value=display_name, inline=False)
-        
-        embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
-        embed.set_footer(text=f"Updated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            success_embed.add_field(name="Location", value=location, inline=False)  # Show user input
+    
+        success_embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
+        success_embed.set_footer(text=f"Updated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        # Replace loading message with success message
+        await loading_msg.edit(embed=success_embed)
 
     async def _handle_pin_location_update(self, interaction: discord.Interaction, location: str, original_interaction: discord.Interaction):
         """Handle pin location update with response replacement."""
         guild_id = str(interaction.guild.id)
-        
+    
         if guild_id not in self.maps:
             await interaction.followup.send("❌ No map exists for this server.", ephemeral=True)
             return
@@ -640,7 +674,7 @@ class MapV2Cog(commands.Cog):
             return
 
         lat, lng, display_name = geocode_result
-        
+    
         # Check if coordinates are within the map region bounds
         region = self.maps[guild_id]['region']
         bounds = self.map_generator.map_configs[region]['bounds']
@@ -669,25 +703,26 @@ class MapV2Cog(commands.Cog):
         }
 
         await self._save_data(guild_id)
-        
-        # Invalidate cache since pins changed
-        await self._invalidate_map_cache(int(guild_id))
+    
+        # VERBESSERUNG: Nur Final Map Cache invalidieren, Base Map beibehalten
+        await self.storage.invalidate_final_map_cache_only(int(guild_id))
+        self.log.info(f"Pin update for guild {guild_id}: preserved base map cache for efficiency")
         
         # Update the map and global overview
         channel_id = self.maps[guild_id]['channel_id']
         await self._update_map(interaction.guild.id, channel_id)
         await self._update_global_overview()
-
+        
         # Create embed for update confirmation
         embed = discord.Embed(
-            title="📍 Pin Updated Successfully",
+            title="📌 Pin Updated Successfully",
             description="Your location has been updated on the map!",
             color=0x00ff44
         )
-        
+    
         if old_location:
             embed.add_field(name="Previous Location", value=old_location, inline=False)
-        
+    
         embed.add_field(name="New Location", value=display_name, inline=False)
         embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
         embed.set_footer(text=f"Updated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -698,7 +733,57 @@ class MapV2Cog(commands.Cog):
         except discord.HTTPException:
             # If editing fails, send new message
             await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _generate_preview_map(self, guild_id: int, preview_settings: Dict) -> Optional[BytesIO]:
+        """Generate a preview map with temporary settings."""
+        try:
+            guild_id_str = str(guild_id)
+            map_data = self.maps.get(guild_id_str, {})
+            region = map_data.get('region', 'world')
+            pins = map_data.get('pins', {})
+            
+            # Create temporary map data with preview settings
+            temp_maps = {guild_id_str: map_data.copy()}
+            temp_maps[guild_id_str]['settings'] = preview_settings
+            temp_maps[guild_id_str]['allow_proximity'] = preview_settings.get('allow_proximity', True)
+            
+            # Calculate dimensions based on region
+            width, height = self.map_generator.calculate_image_dimensions(region)
+            if region != "germany" and region != "usmainland":
+                height = int(height * 0.8)
+                
+            # Generate new base map with preview settings (don't use cache)
+            base_map, projection_func = await self.map_generator.render_geopandas_map(
+                region, width, height, guild_id_str, temp_maps
+            )
         
+            if not base_map:
+                # Fallback to simple background
+                land_color, water_color = self.map_generator.get_map_colors(guild_id_str, temp_maps)
+                base_map = Image.new('RGB', (width, height), color=water_color)
+                projection_func = self._create_projection_function(region, width, height)
+        
+            # Calculate pin size based on image height and custom settings
+            pin_color, custom_pin_size = self.map_generator.get_pin_settings(guild_id_str, temp_maps)
+            base_pin_size = int(height * custom_pin_size / 2400)
+        
+            # Group overlapping pins
+            pin_groups = self.map_generator.group_overlapping_pins(pins, projection_func, base_pin_size)
+            
+            # Draw pins on the map with preview settings
+            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size, guild_id_str, temp_maps)
+            
+            # Convert PIL image to BytesIO
+            img_buffer = BytesIO()
+            base_map.save(img_buffer, format='PNG', optimize=True)
+            img_buffer.seek(0)
+            
+            return img_buffer
+        
+        except Exception as e:
+            self.log.error(f"Failed to generate preview map: {e}")
+            return None
+            
     @commands.Cog.listener()
     async def on_member_remove(self, member):
         """Remove user's pin when they leave the server"""
