@@ -557,75 +557,12 @@ class FeedCog(commands.Cog):
         name="feeds_add",
         description="Add a new RSS feed to this server"
     )
-    @app_commands.describe(
-        name="Name of the RSS feed",
-        feed_url="URL of the RSS feed",
-        channel="Channel where posts will be sent",
-        crosspost="Whether to crosspost (for announcement channels)",
-        color="Color for the embed",
-        avatar_url="Avatar URL for the webhook"
-    )
-    @app_commands.choices(color=COLOR_CHOICES)
     @app_commands.default_permissions(administrator=True)
-    async def slash_feeds_add(
-        self,
-        interaction: discord.Interaction,
-        name: str,
-        feed_url: str,
-        channel: discord.TextChannel,
-        crosspost: bool = False,
-        color: app_commands.Choice[str] = None,
-        avatar_url: str = None
-    ):
-        await interaction.response.defer(ephemeral=True)
-        guild_id = interaction.guild.id
-        
-        # Parse color
-        default_hex = 0x3498DB
-        if color:
-            try:
-                default_hex = int(color.value, 16)
-            except ValueError:
-                default_hex = 0x3498DB
-        
-        # Check if this is a Bluesky feed and use appropriate template
-        if is_bluesky_feed_url(feed_url):
-            embed_template = create_bluesky_embed_template(name, default_hex)
-        else:
-            embed_template = create_standard_embed_template(name, default_hex)
-        
-        new_feed = {
-            "name": name,
-            "feed_url": feed_url,
-            "channel_id": channel.id,
-            "max_items": 3,  # Fixed to 3
-            "crosspost": crosspost,
-            "avatar_url": avatar_url,
-            "embed_template": embed_template
-        }
-        
-        # Load and update guild config
-        config = self._load_guild_config(guild_id)
-        config.setdefault("feeds", []).append(new_feed)
-        self._save_guild_config(guild_id, config)
-        
-        # Update runtime config and stats
-        self.guild_configs[guild_id] = config
-        if guild_id not in self.stats:
-            self.stats[guild_id] = {}
-        self.stats[guild_id][name] = {"last_run": None, "last_success": None, "failures": 0}
-        
-        self.poll_loop.restart()
-        
-        # Special confirmation message for Bluesky feeds
-        if is_bluesky_feed_url(feed_url):
-            await interaction.followup.send(
-                f"✅ Bluesky feed **{name}** added to this server with custom title format.", ephemeral=True
-            )
-        else:
-            await interaction.followup.send(
-                f"✅ Feed **{name}** added to this server.", ephemeral=True
-            )
+    async def slash_feeds_add(self, interaction: discord.Interaction):
+        # Create modal for adding new feed
+        from core.feeds_views import FeedConfigModal
+        modal = FeedConfigModal({}, self, interaction.guild.id, is_edit=False)
+        await interaction.response.send_modal(modal)
 
     @app_commands.command(
         name="feeds_remove",
@@ -643,6 +580,7 @@ class FeedCog(commands.Cog):
             )
             return
         
+        from core.feeds_views import FeedRemoveView
         view = FeedRemoveView(feeds, self, guild_id)
         await interaction.response.send_message(
             "Select a feed to remove:", view=view, ephemeral=True
@@ -652,6 +590,7 @@ class FeedCog(commands.Cog):
         name="feeds_list",
         description="List all RSS feeds configured for this server"
     )
+    @app_commands.default_permissions(administrator=True)
     async def slash_feeds_list(self, interaction: discord.Interaction):
         guild_id = interaction.guild.id
         config = self.guild_configs.get(guild_id, {})
@@ -665,18 +604,22 @@ class FeedCog(commands.Cog):
             
         lines = []
         for f in feeds:
-            col = f["embed_template"].get("color", 0)
             feed_type = "🦋 Bluesky" if is_bluesky_feed_url(f["feed_url"]) else "📰 RSS"
             lines.append(
-                f"• **{f['name']}** {feed_type} — <{f['feed_url']}> in <#{f['channel_id']}>"
-                f" — Color: `#{col:06X}`"
+                f"• **{f['name']}** {feed_type} — [Feed URL]({f['feed_url']}) in <#{f['channel_id']}>"
             )
+        
         embed = discord.Embed(
             title="📋 Current RSS Feeds",
             description="\n".join(lines),
             color=0x00ADEF
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+        # Add buttons for remove and configure
+        from core.feeds_views import FeedListView
+        view = FeedListView(self, guild_id)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(
         name="feeds_configure",
@@ -699,6 +642,7 @@ class FeedCog(commands.Cog):
             channel = self.bot.get_channel(feed.get("channel_id"))
             feed["channel_name"] = channel.name if channel else "unknown"
         
+        from core.feeds_views import FeedConfigureView
         view = FeedConfigureView(feeds, self, guild_id)
         await interaction.response.send_message(
             "Select a feed to configure:", view=view, ephemeral=True

@@ -2,16 +2,11 @@
 > - `/map_create`: create a server map **(Admin only)**
 > - `/map_pin`: manage your pin
 ### **RSS to Discord Feature** (also Bluesky)
+> - `/feeds_list`: manage all feeds on your server (Admin only)
+>   - covers `/feeds_configure` and `/feeds_remove` functionalities
 > - `/feeds_add`: add a feed to the server **(Admin only)**
-> - `/feeds_remove`: remove a feed **(Admin only)**
-> - `/feed_configure`: configure aesthetics of the embed
-> - `/feeds_list`: list all feeds on your server
 ### **Moderation Features**
-> - `/mod_dashboard`: show all mod-settings by this bot **(Admin only)**
-> - `/mod_joinrole_setup`: automatically assign a role to new members **(Admin only)**
-> - `/mod_joinrole_disable`: self-explanatory **(Admin only)**
-> - `/mod_memberlog_setup`: set up a webhook to log joins, leaves, bans, kicks and timeouts **(Admin only)**
-> - `/mod_memberlog_disable`: self-explanatory **(Admin only)**
+> - `/mod_dashboard`: manage this bot's moderation settings **(Admin only)**
 > - `/clear`: deletes a given number of messages from the channel **(Admin only)**
 ### **Miscellaneous**
 > - `/ping`: test bot responsiveness

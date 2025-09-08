@@ -3,51 +3,98 @@ from discord.ext import commands
 from discord import app_commands
 import json
 import os
-import aiohttp
 from datetime import datetime, timezone
 from typing import Optional
+import aiohttp
 
 class ModerationCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.config_file = "config/moderation_config.json"
+        self.config = self.load_config()
         self.member_join_times = {}  # Store join times for leave duration calculation
-        self.log = bot.get_cog_logger("mod")
-        
-    def get_config_path(self, guild_id: int) -> str:
-        """Get configuration file path for specific guild"""
-        config_dir = f"config/{guild_id}"
-        os.makedirs(config_dir, exist_ok=True)
-        return os.path.join(config_dir, "moderation_config.json")
 
-    def load_config(self, guild_id: int) -> dict:
-        """Load configuration from JSON file for specific guild"""
-        config_path = self.get_config_path(guild_id)
-        if os.path.exists(config_path):
+    def load_config(self) -> dict:
+        """Load configuration from JSON file"""
+        if os.path.exists(self.config_file):
             try:
-                with open(config_path, 'r', encoding='utf-8') as f:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except (json.JSONDecodeError, IOError):
                 return {}
         return {}
 
-    def save_config(self, guild_id: int, config: dict):
-        """Save configuration to JSON file for specific guild"""
+    def save_config(self):
+        """Save configuration to JSON file"""
         try:
-            config_path = self.get_config_path(guild_id)
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
         except IOError:
             pass  # Fail silently if unable to save
 
     def get_guild_config(self, guild_id: int) -> dict:
         """Get configuration for specific guild"""
-        return self.load_config(guild_id)
+        return self.config.get(str(guild_id), {})
 
     def set_guild_config(self, guild_id: int, key: str, value):
         """Set configuration value for specific guild"""
-        config = self.load_config(guild_id)
-        config[key] = value
-        self.save_config(guild_id, config)
+        guild_str = str(guild_id)
+        if guild_str not in self.config:
+            self.config[guild_str] = {}
+        self.config[guild_str][key] = value
+        self.save_config()
+
+    def create_dashboard_embed(self, guild_id: int) -> discord.Embed:
+        """Create embed for moderation dashboard"""
+        config = self.get_guild_config(guild_id)
+        
+        embed = discord.Embed(
+            title="🛡️ Moderation Dashboard",
+            color=0x5865f2,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        # Member logging configuration
+        webhook_url = config.get('member_log_webhook')
+        if webhook_url:
+            embed.add_field(
+                name="📋 Member Logging",
+                value="✅ **Enabled**\nLogging joins, leaves, bans, kicks, and timeouts",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📋 Member Logging",
+                value="❌ **Disabled**\nClick 'Setup Member Log' to enable",
+                inline=False
+            )
+        
+        # Join role configuration
+        join_role_id = config.get('join_role')
+        if join_role_id:
+            # We need the guild object to get the role
+            guild = self.bot.get_guild(guild_id)
+            if guild:
+                role = guild.get_role(join_role_id)
+                role_mention = role.mention if role else f"Role not found (ID: {join_role_id})"
+            else:
+                role_mention = f"Role ID: {join_role_id}"
+            
+            embed.add_field(
+                name="👤 Auto Join Role",
+                value=f"✅ **Enabled**\nAssigning role: {role_mention}",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="👤 Auto Join Role",
+                value="❌ **Disabled**\nClick 'Setup Join Role' to enable",
+                inline=False
+            )
+        
+        embed.set_footer(text=f"Guild ID: {guild_id}")
+        
+        return embed
 
     def create_join_embed(self, member: discord.Member) -> discord.Embed:
         """Create embed for member join event"""
@@ -128,7 +175,7 @@ class ModerationCog(commands.Cog):
     def create_timeout_embed(self, member: discord.Member, duration: str, moderator: Optional[discord.Member], reason: Optional[str]) -> discord.Embed:
         """Create embed for timeout event"""
         embed = discord.Embed(
-            description=f"<@{member.id}> was timed out",
+            description=f"{member.display_name} was timed out",
             color=0xffa500,  # Orange for timeouts
             timestamp=datetime.now(timezone.utc)
         )
@@ -164,19 +211,17 @@ class ModerationCog(commands.Cog):
         return ", ".join(parts)
 
     async def send_log_message(self, guild_id: int, embed: discord.Embed):
-        """Send log message to configured channel"""
+        """Send log message to configured webhook"""
         config = self.get_guild_config(guild_id)
         webhook_url = config.get('member_log_webhook')
-        username = "Member Logger"
-        avatar_url = "https://cdn.discordapp.com/attachments/1398436953422037013/1409705617131835434/17800528-benutzer-einfache-flache-symbolvektorillustration-vektor.jpg?ex=68ae5a2a&is=68ad08aa&hm=e36a3fc3f8c38417ae251ed852deceec54f1aabe867119c64200d1393fa7870e&"
         
         if webhook_url:
             try:
+                # Create a new aiohttp session for webhook requests
                 async with aiohttp.ClientSession() as session:
                     webhook = discord.Webhook.from_url(webhook_url, session=session)
-                    await webhook.send(username=username, avatar_url=avatar_url, embed=embed)
+                    await webhook.send(embed=embed)
             except (discord.HTTPException, aiohttp.ClientError):
-                self.log.error("Failed to send mod-log embed")
                 pass  # Fail silently if webhook is invalid
 
     @commands.Cog.listener()
@@ -199,22 +244,25 @@ class ModerationCog(commands.Cog):
                 try:
                     await member.add_roles(role, reason="Auto-assigned join role")
                 except discord.Forbidden:
-                    self.log.error("Failed to assign role on join")
                     pass  # Bot doesn't have permission
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         """Handle member leave events"""
+        print(f"DEBUG: Member {member.name} left {member.guild.name}")  # Debug output
+        
         # Calculate duration on server
         duration = None
         if member.id in self.member_join_times:
             join_time = self.member_join_times[member.id]
             duration = self.calculate_duration(join_time)
             del self.member_join_times[member.id]
+            print(f"DEBUG: Member was on server for {duration}")  # Debug output
         
         # Send log message
         embed = self.create_leave_embed(member, duration)
         await self.send_log_message(member.guild.id, embed)
+        print(f"DEBUG: Sent leave embed for {member.name}")  # Debug output
 
     @commands.Cog.listener()
     async def on_member_ban(self, guild: discord.Guild, user: discord.User):
@@ -292,92 +340,22 @@ class ModerationCog(commands.Cog):
                 embed = self.create_timeout_embed(after, duration, moderator, reason)
                 await self.send_log_message(after.guild.id, embed)
 
-
-    """
-    @app_commands.command(name="owner_give_role", description="Give role to user (owner only)")
-    @app_commands.describe(
-        user="User to give role to",
-        role="Role to give"
-    )
-    async def give_role_command(
-            self, 
-            interaction: discord.Interaction, 
-            user: discord.Member,
-            role: discord.Role
-    ):
-        if interaction.user.id != 703896034820096000:
-            await interaction.response.send_message("Owner only", ephemeral=True)
-            return
-    
-        try:
-            await user.add_roles(role)
-            await interaction.response.send_message(
-                f"✅ Added role **{role.name}** to {user.mention}", 
-                ephemeral=True
-            )
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "❌ Bot doesn't have permission to manage this role", 
-                ephemeral=True
-            )
-        except Exception as e:
-            await interaction.response.send_message(
-                f"❌ Error: {str(e)}", 
-                ephemeral=True
-            )
-    """
-                
-    @app_commands.command(name="mod_dashboard", description="View current moderation configuration")
+    @app_commands.command(name="mod_dashboard", description="Manage current moderation configuration")
     @app_commands.default_permissions(administrator=True)
     async def mod_dashboard(self, interaction: discord.Interaction):
-        """Display moderation dashboard"""
-        config = self.get_guild_config(interaction.guild.id)
+        """Display moderation dashboard with interactive buttons"""
+        # Import here to avoid circular imports
+        from core.mod_views import ModerationDashboardView
         
-        embed = discord.Embed(
-            title="🛡️ Moderation Dashboard",
-            color=0x5865f2,
-            timestamp=datetime.now(timezone.utc)
-        )
+        embed = self.create_dashboard_embed(interaction.guild.id)
+        view = ModerationDashboardView(self)
+        view.update_buttons(interaction.guild.id)
         
-        # Member logging configuration
-        webhook_url = config.get('member_log_webhook')
-        if webhook_url:
-            embed.add_field(
-                name="📝 Member Logging",
-                value="✅ **Enabled**\nLogging joins, leaves, bans, kicks, and timeouts",
-                inline=False
-            )
-        else:
-            embed.add_field(
-                name="📝 Member Logging",
-                value="❌ **Disabled**\nUse `/mod_memberlog_setup` to enable",
-                inline=False
-            )
-        
-        # Join role configuration
-        join_role_id = config.get('join_role')
-        if join_role_id:
-            role = interaction.guild.get_role(join_role_id)
-            role_mention = role.mention if role else f"Role not found (ID: {join_role_id})"
-            embed.add_field(
-                name="👤 Auto Join Role",
-                value=f"✅ **Enabled**\nAssigning role: {role_mention}",
-                inline=False
-            )
-        else:
-            embed.add_field(
-                name="👤 Auto Join Role",
-                value="❌ **Disabled**\nUse `/mod_joinrole_setup` to enable",
-                inline=False
-            )
-        
-        embed.set_footer(text=f"Guild ID: {interaction.guild.id}")
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="clear", description="Delete a specified number of messages from the current channel")
-    @app_commands.describe(amount="Number of messages to delete (1-100)")
     @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(amount="Number of messages to delete (1-100)")
     async def clear_messages(self, interaction: discord.Interaction, amount: int):
         """Clear specified number of messages from channel"""
         if not interaction.user.guild_permissions.manage_messages:
@@ -421,6 +399,7 @@ class ModerationCog(commands.Cog):
                 await interaction.followup.send("❌ Cannot delete messages older than 14 days. Try with a smaller number.", ephemeral=True)
             else:
                 await interaction.followup.send("❌ An error occurred while deleting messages.", ephemeral=True)
+
 
     @app_commands.command(name="mod_memberlog_setup", description="Setup member logging with webhook")
     @app_commands.describe(webhook_url="The webhook URL for the logging channel")
@@ -469,10 +448,10 @@ class ModerationCog(commands.Cog):
             return
         
         # Remove webhook from config
-        config = self.get_guild_config(interaction.guild.id)
-        if 'member_log_webhook' in config:
-            del config['member_log_webhook']
-            self.save_config(interaction.guild.id, config)
+        guild_str = str(interaction.guild.id)
+        if guild_str in self.config and 'member_log_webhook' in self.config[guild_str]:
+            del self.config[guild_str]['member_log_webhook']
+            self.save_config()
         
         embed = discord.Embed(
             title="✅ Member Logging Disabled",
@@ -521,10 +500,10 @@ class ModerationCog(commands.Cog):
             return
         
         # Remove join role from config
-        config = self.get_guild_config(interaction.guild.id)
-        if 'join_role' in config:
-            del config['join_role']
-            self.save_config(interaction.guild.id, config)
+        guild_str = str(interaction.guild.id)
+        if guild_str in self.config and 'join_role' in self.config[guild_str]:
+            del self.config[guild_str]['join_role']
+            self.save_config()
         
         embed = discord.Embed(
             title="✅ Auto Join Role Disabled",
