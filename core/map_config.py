@@ -2,6 +2,8 @@
 
 from typing import Union, Tuple, Dict
 import math
+import geopandas as gpd
+from pathlib import Path
 
 
 class MapConfig:
@@ -55,7 +57,163 @@ class MapConfig:
             },
             "usmainland": {
                 "bounds": [[24.0, -126.0], [51.0, -66.0]]
+            },
+            # European countries
+            "france": {
+                "bounds": [[41.0, -5.5], [51.5, 9.5]]
+            },
+            "spain": {
+                "bounds": [[35.0, -10.0], [44.0, 5.0]]
+            },
+            "italy": {
+                "bounds": [[35.5, 6.0], [47.5, 19.0]]
+            },
+            "poland": {
+                "bounds": [[49.0, 14.0], [55.0, 24.5]]
+            },
+            "netherlands": {
+                "bounds": [[50.5, 3.0], [54.0, 7.5]]
+            },
+            "belgium": {
+                "bounds": [[49.0, 2.0], [52.0, 6.5]]
+            },
+            "austria": {
+                "bounds": [[46.0, 9.0], [49.5, 17.5]]
+            },
+            "czech": {
+                "bounds": [[48.0, 12.0], [51.5, 19.0]]
+            },
+            "hungary": {
+                "bounds": [[45.5, 16.0], [48.5, 23.0]]
+            },
+            "portugal": {
+                "bounds": [[36.0, -10.0], [42.5, -6.0]]
+            },
+            "greece": {
+                "bounds": [[34.5, 19.0], [42.0, 29.0]]
+            },
+            "sweden": {
+                "bounds": [[55.0, 10.0], [69.5, 25.0]]
+            },
+            "norway": {
+                "bounds": [[57.5, 4.0], [71.5, 32.0]]
+            },
+            "denmark": {
+                "bounds": [[54.0, 7.0], [58.0, 16.0]]
+            },
+            "finland": {
+                "bounds": [[59.5, 19.0], [70.5, 32.0]]
+            },
+            "romania": {
+                "bounds": [[43.5, 20.0], [48.5, 30.0]]
+            },
+            "bulgaria": {
+                "bounds": [[41.0, 22.0], [44.5, 29.0]]
+            },
+            "croatia": {
+                "bounds": [[42.0, 13.0], [46.5, 19.5]]
+            },
+            "slovenia": {
+                "bounds": [[45.0, 13.0], [47.0, 16.5]]
+            },
+            "slovakia": {
+                "bounds": [[47.5, 16.5], [49.5, 22.5]]
+            },
+            "ireland": {
+                "bounds": [[51.0, -11.0], [55.5, -5.5]]
+            },
+            "lithuania": {
+                "bounds": [[53.5, 20.5], [56.5, 27.0]]
+            },
+            "latvia": {
+                "bounds": [[55.5, 20.5], [58.5, 28.5]]
+            },
+            "estonia": {
+                "bounds": [[57.5, 21.5], [59.5, 28.5]]
+            },
+            "luxembourg": {
+                "bounds": [[49.0, 5.5], [50.5, 6.5]]
+            },
+            "malta": {
+                "bounds": [[35.7, 14.0], [36.2, 14.8]]
+            },
+            "cyprus": {
+                "bounds": [[34.5, 32.0], [35.8, 34.8]]
+            },
+            # Other European countries
+            "switzerland": {
+                "bounds": [[45.5, 5.5], [48.0, 11.0]]
+            },
+            "ukraine": {
+                "bounds": [[44.0, 22.0], [53.0, 41.0]]
+            },
+            "russia": {
+                "bounds": [[41.0, 19.0], [82.0, 180.0]]
+            },
+            "turkey": {
+                "bounds": [[35.5, 25.5], [42.5, 45.0]]
+            },
+            "unitedkingdom": {
+                "bounds": [[49.0, -8.0], [61.0, 2.0]]
+            },
+            # Asian countries
+            "japan": {
+                "bounds": [[24.0, 123.0], [46.0, 146.0]]
+            },
+            "southkorea": {
+                "bounds": [[33.0, 124.5], [39.0, 132.0]]
+            },
+            # American countries
+            "brazil": {
+                "bounds": [[-34.0, -74.5], [6.0, -34.0]]
+            },
+            "canada": {
+                "bounds": [[42.0, -141.0], [84.0, -52.0]]
+            },
+            "mexico": {
+                "bounds": [[14.0, -118.0], [33.0, -86.0]]
             }
+        }
+        
+        # Country names mapping for shapefile lookup
+        self.COUNTRY_NAME_MAPPING = {
+            "france": "France",
+            "spain": "Spain", 
+            "italy": "Italy",
+            "poland": "Poland",
+            "netherlands": "Netherlands",
+            "belgium": "Belgium",
+            "austria": "Austria",
+            "czech": "Czech Republic",
+            "hungary": "Hungary",
+            "portugal": "Portugal",
+            "greece": "Greece",
+            "sweden": "Sweden",
+            "norway": "Norway",
+            "denmark": "Denmark",
+            "finland": "Finland",
+            "romania": "Romania",
+            "bulgaria": "Bulgaria",
+            "croatia": "Croatia",
+            "slovenia": "Slovenia",
+            "slovakia": "Slovakia",
+            "ireland": "Ireland",
+            "lithuania": "Lithuania",
+            "latvia": "Latvia",
+            "estonia": "Estonia",
+            "luxembourg": "Luxembourg",
+            "malta": "Malta",
+            "cyprus": "Cyprus",
+            "switzerland": "Switzerland",
+            "ukraine": "Ukraine", 
+            "russia": "Russia",
+            "turkey": "Turkey",
+            "unitedkingdom": "United Kingdom",
+            "japan": "Japan",
+            "southkorea": "South Korea",
+            "brazil": "Brazil",
+            "canada": "Canada",
+            "mexico": "Mexico"
         }
         
         # Color dictionary
@@ -101,6 +259,57 @@ class MapConfig:
             'beige': ('#F5F5DC', (245, 245, 220)),
             'tan': ('#D2B48C', (210, 180, 140)),
             'khaki': ('#F0E68C', (240, 230, 140)),
+        }
+        
+        # Country to flag emoji mapping
+        self.COUNTRY_FLAG_EMOJIS = {
+            "france": "🇫🇷",
+            "spain": "🇪🇸", 
+            "italy": "🇮🇹",
+            "poland": "🇵🇱",
+            "netherlands": "🇳🇱",
+            "belgium": "🇧🇪",
+            "austria": "🇦🇹",
+            "czech": "🇨🇿",
+            "hungary": "🇭🇺",
+            "portugal": "🇵🇹",
+            "greece": "🇬🇷",
+            "sweden": "🇸🇪",
+            "norway": "🇳🇴",
+            "denmark": "🇩🇰",
+            "finland": "🇫🇮",
+            "romania": "🇷🇴",
+            "bulgaria": "🇧🇬",
+            "croatia": "🇭🇷",
+            "slovenia": "🇸🇮",
+            "slovakia": "🇸🇰",
+            "ireland": "🇮🇪",
+            "lithuania": "🇱🇹",
+            "latvia": "🇱🇻",
+            "estonia": "🇪🇪",
+            "luxembourg": "🇱🇺",
+            "malta": "🇲🇹",
+            "cyprus": "🇨🇾",
+            "switzerland": "🇨🇭",
+            "ukraine": "🇺🇦",
+            "russia": "🇷🇺",
+            "turkey": "🇹🇷",
+            "unitedkingdom": "🇬🇧",
+            "germany": "🇩🇪",
+            "japan": "🇯🇵",
+            "southkorea": "🇰🇷",
+            "brazil": "🇧🇷",
+            "canada": "🇨🇦",
+            "mexico": "🇲🇽",
+            "usmainland": "🇺🇸",
+            # Continents get general emojis
+            "world": "🌍",
+            "europe": "🇪🇺",
+            "asia": "🌏",
+            "africa": "🌍",
+            "northamerica": "🌎",
+            "southamerica": "🌎",
+            "australia": "🇦🇺"
         }
         
         # German states with emoji IDs
@@ -177,6 +386,74 @@ class MapConfig:
         scale_factor = max(0.3, min(scale_factor, 8.0))
         
         return scale_factor
+    
+    def get_country_bounds_from_shapefile(self, country_key: str, data_path: Path = None) -> Union[Tuple[Tuple[float, float], Tuple[float, float]], None]:
+        """Get country bounds from shapefile data with padding."""
+        try:
+            if data_path is None:
+                data_path = Path(__file__).parent.parent / "data"
+            
+            # Skip if no mapping available
+            if country_key not in self.COUNTRY_NAME_MAPPING:
+                return None
+                
+            country_name = self.COUNTRY_NAME_MAPPING[country_key]
+            
+            # Load the world countries shapefile
+            world_file = data_path / "ne_10m_admin_0_countries.shp"
+            if not world_file.exists():
+                return None
+                
+            world = gpd.read_file(world_file)
+            
+            # Find the country
+            country_row = world[world["ADMIN"] == country_name]
+            if country_row.empty:
+                # Try alternative name fields
+                country_row = world[world["NAME"] == country_name]
+            if country_row.empty:
+                # Try case-insensitive search
+                country_row = world[world["ADMIN"].str.contains(country_name, case=False, na=False)]
+            
+            if country_row.empty:
+                return None
+            
+            # Get geometry and bounds
+            country_geom = country_row.geometry.unary_union
+            bounds = country_geom.bounds
+            minx, miny, maxx, maxy = bounds
+            
+            # Add padding (5% of the range) so countries don't touch edges
+            width_range = maxx - minx
+            height_range = maxy - miny
+            padding_x = width_range * 0.05
+            padding_y = height_range * 0.05
+            
+            minx -= padding_x
+            maxx += padding_x
+            miny -= padding_y
+            maxy += padding_y
+            
+            return [[miny, minx], [maxy, maxx]]  # Return in the expected [[lat0, lon0], [lat1, lon1]] format
+            
+        except Exception as e:
+            # Return None if any error occurs, will fall back to hardcoded bounds
+            return None
+    
+    def get_region_bounds(self, region_key: str, data_path: Path = None) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+        """Get region bounds, preferring shapefile data over hardcoded values for countries."""
+        # For countries, try to get bounds from shapefile first
+        if region_key in self.COUNTRY_NAME_MAPPING:
+            shapefile_bounds = self.get_country_bounds_from_shapefile(region_key, data_path)
+            if shapefile_bounds:
+                return shapefile_bounds
+        
+        # Fall back to hardcoded bounds
+        if region_key in self.MAP_REGIONS:
+            return self.MAP_REGIONS[region_key]["bounds"]
+        
+        # Default fallback to world bounds
+        return self.MAP_REGIONS["world"]["bounds"]
     
     def parse_color(self, color_input: str, default: Union[tuple, str]) -> Union[tuple, str]:
         """Parse color input and return appropriate format."""

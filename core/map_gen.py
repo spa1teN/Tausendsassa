@@ -247,8 +247,10 @@ class MapGenerator:
 
     def calculate_image_dimensions(self, region: str) -> Tuple[int, int]:
         """Calculate image dimensions based on region bounds."""
-        config = self.map_configs[region]
-        (lat0, lon0), (lat1, lon1) = config["bounds"]
+        # Use the new method that checks shapefile bounds first
+        data_path = self.data_dir.parent / "data"
+        bounds = self.map_config.get_region_bounds(region, data_path)
+        (lat0, lon0), (lat1, lon1) = bounds
         
         def lat_to_mercator_y(lat):
             return math.log(math.tan((90 + lat) * math.pi / 360))
@@ -397,8 +399,9 @@ class MapGenerator:
                     await progress_callback("Drawing rivers and waterways...", 70)
                 self.renderer.draw_lines(draw, shapefiles['rivers'].geometry, projection_func, bbox, river_color, river_width, "rivers")
             
-            # Draw state/province borders only for non-world maps
-            if map_type not in ["world", "europe"] and shapefiles.get('states') is not None:
+            # Draw state/province borders only for detailed maps (not continents or world)
+            continent_map_types = ["world", "europe", "asia", "africa", "northamerica", "southamerica", "australia"]
+            if map_type not in continent_map_types and shapefiles.get('states') is not None:
                 if progress_callback:
                     await progress_callback("Drawing state/province borders...", 85)
                 self.renderer.draw_lines(draw, shapefiles['states'].geometry, projection_func, bbox, state_color, state_width, "states")
@@ -434,8 +437,10 @@ class MapGenerator:
     async def render_geopandas_map(self, region: str, width: int, height: int, guild_id: str = None, maps: Dict = None, progress_callback=None) -> Tuple[Image.Image, Callable]:
         """Render map for predefined regions with geographic scaling."""
         try:
-            config = self.map_configs[region]
-            (lat0, lon0), (lat1, lon1) = config["bounds"]
+            # Use the new method that checks shapefile bounds first
+            data_path = self.data_dir.parent / "data"
+            bounds = self.map_config.get_region_bounds(region, data_path)
+            (lat0, lon0), (lat1, lon1) = bounds
             minx, miny, maxx, maxy = lon0, lat0, lon1, lat1
             
             if region == "germany":

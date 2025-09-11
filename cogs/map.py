@@ -141,7 +141,7 @@ class MapV2Cog(commands.Cog):
 
             # Use centralized progress handler
             from core.map_progress_handler import create_server_map_progress_callback
-            progress_callback = await create_server_map_progress_callback(interaction, self.log, progress_message) if progress_message else None
+            progress_callback = await create_server_map_progress_callback(interaction, self.log, progress_message, hide_final_image=True) if progress_message else None
 
             # Generate map image (uses caching internally and respects custom settings)
             map_file = await self._generate_map_image(guild_id, progress_callback)
@@ -288,8 +288,10 @@ class MapV2Cog(commands.Cog):
 
     def _create_projection_function(self, region: str, width: int, height: int):
         """Create projection function for cached maps."""
-        config = self.map_generator.map_configs[region]
-        (lat0, lon0), (lat1, lon1) = config["bounds"]
+        # Use the new method that checks shapefile bounds first
+        data_path = Path(__file__).parent.parent / "data"
+        bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
+        (lat0, lon0), (lat1, lon1) = bounds
         minx, miny, maxx, maxy = lon0, lat0, lon1, lat1
         
         # For germany regions, try to get better bounds
@@ -320,8 +322,11 @@ class MapV2Cog(commands.Cog):
     async def _generate_continent_closeup(self, guild_id: int, continent: str, progress_callback=None) -> Optional[BytesIO]:
         """Generate a close-up map of a continent using existing map configs."""
         try:
-            if continent not in self.map_generator.map_configs:
-                self.log.warning(f"Continent {continent} not in map configurations")
+            # Check if we can get bounds for this continent/country
+            data_path = Path(__file__).parent.parent / "data"
+            bounds = self.map_generator.map_config.get_region_bounds(continent, data_path)
+            if not bounds:
+                self.log.warning(f"Could not get bounds for {continent}")
                 return None
         
             # Check for cached closeup map first
@@ -663,7 +668,8 @@ class MapV2Cog(commands.Cog):
     
         # Check if coordinates are within the map region bounds
         region = self.maps[guild_id]['region']
-        bounds = self.map_generator.map_configs[region]['bounds']
+        data_path = Path(__file__).parent.parent / "data"
+        bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
         if not (bounds[0][0] <= lat <= bounds[1][0] and bounds[0][1] <= lng <= bounds[1][1]):
             await interaction.followup.send(
                 f"⛔ The location '{location}' is outside the {region} map region. "
@@ -769,7 +775,8 @@ class MapV2Cog(commands.Cog):
     
         # Check if coordinates are within the map region bounds
         region = self.maps[guild_id]['region']
-        bounds = self.map_generator.map_configs[region]['bounds']
+        data_path = Path(__file__).parent.parent / "data"
+        bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
         if not (bounds[0][0] <= lat <= bounds[1][0] and bounds[0][1] <= lng <= bounds[1][1]):
             await interaction.followup.send(
                 f"⛔ The location '{location}' is outside the {region} map region. "
@@ -1075,15 +1082,33 @@ class MapV2Cog(commands.Cog):
         allow_proximity="Allow users to see nearby members"
     )
     @app_commands.choices(region=[
-        app_commands.Choice(name="World", value="world"),
-        app_commands.Choice(name="Europe", value="europe"),
-        app_commands.Choice(name="Germany", value="germany"),
-        app_commands.Choice(name="Asia", value="asia"),
-        app_commands.Choice(name="Africa", value="africa"),
-        app_commands.Choice(name="North America", value="northamerica"),
-        app_commands.Choice(name="South America", value="southamerica"),
-        app_commands.Choice(name="Australia", value="australia"),
-        app_commands.Choice(name="US-Mainland", value="usmainland"),
+        # Continents
+        app_commands.Choice(name="🌍 World", value="world"),
+        app_commands.Choice(name="🇪🇺 Europe", value="europe"),
+        app_commands.Choice(name="🌏 Asia", value="asia"),
+        app_commands.Choice(name="🌍 Africa", value="africa"),
+        app_commands.Choice(name="🌎 North America", value="northamerica"),
+        app_commands.Choice(name="🌎 South America", value="southamerica"),
+        app_commands.Choice(name="🇦🇺 Australia", value="australia"),
+        # Major countries (most popular)
+        app_commands.Choice(name="🇺🇸 US-Mainland", value="usmainland"),
+        app_commands.Choice(name="🇩🇪 Germany", value="germany"),
+        app_commands.Choice(name="🇫🇷 France", value="france"),
+        app_commands.Choice(name="🇪🇸 Spain", value="spain"),
+        app_commands.Choice(name="🇮🇹 Italy", value="italy"),
+        app_commands.Choice(name="🇵🇱 Poland", value="poland"),
+        app_commands.Choice(name="🇳🇱 Netherlands", value="netherlands"),
+        app_commands.Choice(name="🇧🇪 Belgium", value="belgium"),
+        app_commands.Choice(name="🇨🇭 Switzerland", value="switzerland"),
+        app_commands.Choice(name="🇸🇪 Sweden", value="sweden"),
+        app_commands.Choice(name="🇷🇺 Russia", value="russia"),
+        app_commands.Choice(name="🇺🇦 Ukraine", value="ukraine"),
+        app_commands.Choice(name="🇹🇷 Turkey", value="turkey"),
+        app_commands.Choice(name="🇯🇵 Japan", value="japan"),
+        app_commands.Choice(name="🇰🇷 South Korea", value="southkorea"),
+        app_commands.Choice(name="🇧🇷 Brazil", value="brazil"),
+        app_commands.Choice(name="🇨🇦 Canada", value="canada"),
+        app_commands.Choice(name="🇲🇽 Mexico", value="mexico")
     ])
     @app_commands.default_permissions(administrator=True)
     async def create_map(

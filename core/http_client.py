@@ -35,7 +35,6 @@ class HTTPClientManager:
             keepalive_timeout=30,  # Keep connections alive for 30 seconds
             enable_cleanup_closed=True,  # Clean up closed connections
             force_close=False,  # Reuse connections when possible
-            limit_per_site=config.max_connections_per_host,  # Per-site limit
         )
         
         # Session timeout configuration

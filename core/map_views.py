@@ -45,10 +45,34 @@ class ContinentSelectionView(discord.ui.View):
     @discord.ui.button(label="S. America", style=discord.ButtonStyle.secondary, row=0)
     async def south_america(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._generate_continent(interaction, "southamerica", "South America")
+    
+    @discord.ui.button(label="🌎 N. American Countries", style=discord.ButtonStyle.primary, row=3)
+    async def north_american_countries(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = NorthAmericanCountrySelectionView(self.cog, self.guild_id, self.original_interaction)
+        await interaction.response.edit_message(
+            content="**🌎 Select a North American country for close-up view:**", 
+            view=view
+        )
+    
+    @discord.ui.button(label="🌎 S. American Countries", style=discord.ButtonStyle.primary, row=4)
+    async def south_american_countries(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = SouthAmericanCountrySelectionView(self.cog, self.guild_id, self.original_interaction)
+        await interaction.response.edit_message(
+            content="**🌎 Select a South American country for close-up view:**", 
+            view=view
+        )
 
     @discord.ui.button(label="Europe", style=discord.ButtonStyle.secondary, row=0)
     async def europe(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._generate_continent(interaction, "europe", "Europe")
+    
+    @discord.ui.button(label="🇪🇺 EU Countries", style=discord.ButtonStyle.primary, row=2)
+    async def european_countries(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = EuropeanCountrySelectionView(self.cog, self.guild_id, self.original_interaction)
+        await interaction.response.edit_message(
+            content="**🇪🇺 Select a European country for close-up view:**", 
+            view=view
+        )
 
     @discord.ui.button(label="Africa", style=discord.ButtonStyle.secondary, row=1)
     async def africa(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -57,6 +81,14 @@ class ContinentSelectionView(discord.ui.View):
     @discord.ui.button(label="Asia", style=discord.ButtonStyle.secondary, row=1)
     async def asia(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._generate_continent(interaction, "asia", "Asia")
+    
+    @discord.ui.button(label="🌏 Asian Countries", style=discord.ButtonStyle.primary, row=2)
+    async def asian_countries(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = AsianCountrySelectionView(self.cog, self.guild_id, self.original_interaction)
+        await interaction.response.edit_message(
+            content="**🌏 Select an Asian country for close-up view:**", 
+            view=view
+        )
 
     @discord.ui.button(label="Australia", style=discord.ButtonStyle.secondary, row=1)
     async def australia(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -112,6 +144,389 @@ class ContinentSelectionView(discord.ui.View):
             )
             await self.original_interaction.edit_original_response(
                 content=None,  # Clear any content
+                embed=error_embed,
+                view=None
+            )
+
+
+class EuropeanCountrySelectionView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int, original_interaction: discord.Interaction):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.original_interaction = original_interaction
+        
+        # European countries ordered by population (25 most populous)
+        # Using only flag emojis as labels, removing country names
+        countries = [
+            ("🇷🇺", "Russia", "russia"),  # 144M
+            ("🇩🇪", "Germany", "germany"),  # 84M  
+            ("🇬🇧", "United Kingdom", "unitedkingdom"),  # 67M
+            ("🇫🇷", "France", "france"),  # 68M
+            ("🇮🇹", "Italy", "italy"),  # 60M
+            ("🇪🇸", "Spain", "spain"),  # 47M
+            ("🇺🇦", "Ukraine", "ukraine"),  # 44M
+            ("🇵🇱", "Poland", "poland"),  # 38M
+            ("🇷🇴", "Romania", "romania"),  # 19M
+            ("🇳🇱", "Netherlands", "netherlands"),  # 17M
+            ("🇧🇪", "Belgium", "belgium"),  # 11M
+            ("🇬🇷", "Greece", "greece"),  # 11M
+            ("🇨🇿", "Czech Republic", "czech"),  # 11M
+            ("🇵🇹", "Portugal", "portugal"),  # 10M
+            ("🇸🇪", "Sweden", "sweden"),  # 10M
+            ("🇭🇺", "Hungary", "hungary"),  # 10M
+            ("🇦🇹", "Austria", "austria"),  # 9M
+            ("🇧🇬", "Bulgaria", "bulgaria"),  # 7M
+            ("🇨🇭", "Switzerland", "switzerland"),  # 9M
+            ("🇸🇰", "Slovakia", "slovakia"),  # 5M
+            ("🇳🇴", "Norway", "norway"),  # 5M
+            ("🇫🇮", "Finland", "finland"),  # 5M
+            ("🇮🇪", "Ireland", "ireland"),  # 5M
+            ("🇭🇷", "Croatia", "croatia"),  # 4M
+            ("🇸🇮", "Slovenia", "slovenia"),  # 2M
+        ]
+        
+        # Add buttons (max 25 components per view) - only using flag emojis, no text labels
+        for i, (flag, name, value) in enumerate(countries):
+            if i >= 25:  # Discord limit
+                break
+            row = i // 5  # 5 buttons per row
+            
+            button = discord.ui.Button(
+                label="",  # Empty label, only flag emoji
+                style=discord.ButtonStyle.secondary,
+                emoji=flag,
+                row=row
+            )
+            button.callback = self._create_country_callback(value, name)
+            self.add_item(button)
+
+    def _create_country_callback(self, country_code: str, country_name: str):
+        async def country_callback(interaction: discord.Interaction):
+            await self._generate_country(interaction, country_code, country_name)
+        return country_callback
+
+    async def _generate_country(self, interaction: discord.Interaction, country: str, display_name: str):
+        # Show loading message immediately and clear previous content
+        loading_embed = discord.Embed(
+            title="🗺️ Generating Country Map",
+            description=f"Just a moment, I'm generating the {display_name} map...",
+            color=0x7289da
+        )
+        await interaction.response.edit_message(
+            content=None,
+            embed=loading_embed,
+            view=None
+        )
+        
+        try:
+            # Use centralized progress handler
+            from core.map_progress_handler import create_closeup_progress_callback
+            progress_callback = await create_closeup_progress_callback(interaction, display_name, self.cog.log)
+            
+            country_image = await self.cog._generate_continent_closeup(self.guild_id, country, progress_callback)
+            if country_image:
+                filename = f"country_{country}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                
+                # Replace loading message with the actual image
+                await self.original_interaction.edit_original_response(
+                    content=f"🗺️ **{display_name} Map**",
+                    embed=None,
+                    attachments=[discord.File(country_image, filename=filename)],
+                    view=None
+                )
+            else:
+                error_embed = discord.Embed(
+                    title="⛔ Generation Error",
+                    description=f"Could not generate map for {display_name}",
+                    color=0xff4444
+                )
+                await self.original_interaction.edit_original_response(
+                    content=None,
+                    embed=error_embed,
+                    view=None
+                )
+        except Exception as e:
+            self.cog.log.error(f"Error generating country map: {e}")
+            error_embed = discord.Embed(
+                title="⛔ Generation Error",
+                description="An error occurred while generating the country map.",
+                color=0xff4444
+            )
+            await self.original_interaction.edit_original_response(
+                content=None,
+                embed=error_embed,
+                view=None
+            )
+
+
+class AsianCountrySelectionView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int, original_interaction: discord.Interaction):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.original_interaction = original_interaction
+        
+        # Asian countries ordered by population (most populous in Asia/partial Asia)
+        # Using only flag emojis as labels, removing country names  
+        countries = [
+            ("🇨🇳", "China", "china"),  # 1.4B - need to add
+            ("🇮🇳", "India", "india"),  # 1.4B - need to add  
+            ("🇮🇩", "Indonesia", "indonesia"),  # 275M - need to add
+            ("🇵🇰", "Pakistan", "pakistan"),  # 240M - need to add
+            ("🇧🇩", "Bangladesh", "bangladesh"),  # 170M - need to add
+            ("🇯🇵", "Japan", "japan"),  # 125M
+            ("🇵🇭", "Philippines", "philippines"),  # 115M - need to add
+            ("🇻🇳", "Vietnam", "vietnam"),  # 98M - need to add  
+            ("🇹🇷", "Turkey", "turkey"),  # 85M
+            ("🇮🇷", "Iran", "iran"),  # 85M - need to add
+            ("🇩🇪", "Germany", "germany"),  # 84M (partial coverage in Russia)
+            ("🇹🇭", "Thailand", "thailand"),  # 70M - need to add
+            ("🇰🇷", "South Korea", "southkorea"),  # 52M
+            ("🇲🇾", "Malaysia", "malaysia"),  # 35M - need to add
+            ("🇺🇿", "Uzbekistan", "uzbekistan"),  # 35M - need to add
+            ("🇸🇦", "Saudi Arabia", "saudiarabia"),  # 35M - need to add
+            ("🇮🇶", "Iraq", "iraq"),  # 45M - need to add
+            ("🇦🇫", "Afghanistan", "afghanistan"),  # 40M - need to add
+            ("🇰🇿", "Kazakhstan", "kazakhstan"),  # 20M - need to add
+            ("🇲🇲", "Myanmar", "myanmar"),  # 55M - need to add
+            ("🇱🇰", "Sri Lanka", "srilanka"),  # 22M - need to add
+            ("🇰🇭", "Cambodia", "cambodia"),  # 17M - need to add
+            ("🇯🇴", "Jordan", "jordan"),  # 11M - need to add
+            ("🇦🇿", "Azerbaijan", "azerbaijan"),  # 10M - need to add
+            ("🇹🇯", "Tajikistan", "tajikistan"),  # 10M - need to add
+        ]
+        
+        # For now, only include countries we have configs for
+        available_countries = [
+            ("🇯🇵", "Japan", "japan"), 
+            ("🇰🇷", "South Korea", "southkorea"),
+            ("🇷🇺", "Russia", "russia"),
+            ("🇹🇷", "Turkey", "turkey"),
+        ]
+        
+        for i, (flag, name, value) in enumerate(available_countries):
+            button = discord.ui.Button(
+                label="",  # Empty label, only flag emoji
+                style=discord.ButtonStyle.secondary,
+                emoji=flag,
+                row=0
+            )
+            button.callback = self._create_country_callback(value, name)
+            self.add_item(button)
+
+    def _create_country_callback(self, country_code: str, country_name: str):
+        async def country_callback(interaction: discord.Interaction):
+            await self._generate_country(interaction, country_code, country_name)
+        return country_callback
+
+    async def _generate_country(self, interaction: discord.Interaction, country: str, display_name: str):
+        loading_embed = discord.Embed(
+            title="🗺️ Generating Country Map",
+            description=f"Just a moment, I'm generating the {display_name} map...",
+            color=0x7289da
+        )
+        await interaction.response.edit_message(
+            content=None,
+            embed=loading_embed,
+            view=None
+        )
+        
+        try:
+            from core.map_progress_handler import create_closeup_progress_callback
+            progress_callback = await create_closeup_progress_callback(interaction, display_name, self.cog.log)
+            
+            country_image = await self.cog._generate_continent_closeup(self.guild_id, country, progress_callback)
+            if country_image:
+                filename = f"country_{country}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                
+                await self.original_interaction.edit_original_response(
+                    content=f"🗺️ **{display_name} Map**",
+                    embed=None,
+                    attachments=[discord.File(country_image, filename=filename)],
+                    view=None
+                )
+            else:
+                error_embed = discord.Embed(
+                    title="⛔ Generation Error",
+                    description=f"Could not generate map for {display_name}",
+                    color=0xff4444
+                )
+                await self.original_interaction.edit_original_response(
+                    content=None,
+                    embed=error_embed,
+                    view=None
+                )
+        except Exception as e:
+            self.cog.log.error(f"Error generating country map: {e}")
+            error_embed = discord.Embed(
+                title="⛔ Generation Error",
+                description="An error occurred while generating the country map.",
+                color=0xff4444
+            )
+            await self.original_interaction.edit_original_response(
+                content=None,
+                embed=error_embed,
+                view=None
+            )
+
+
+class NorthAmericanCountrySelectionView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int, original_interaction: discord.Interaction):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.original_interaction = original_interaction
+        
+        # North American countries with their flags (by population)
+        # Using only flag emojis as labels, removing country names
+        countries = [
+            ("🇺🇸", "United States", "usmainland"), 
+            ("🇲🇽", "Mexico", "mexico"),
+            ("🇨🇦", "Canada", "canada"),
+        ]
+        
+        for i, (flag, name, value) in enumerate(countries):
+            button = discord.ui.Button(
+                label="",  # Empty label, only flag emoji
+                style=discord.ButtonStyle.secondary,
+                emoji=flag,
+                row=0
+            )
+            button.callback = self._create_country_callback(value, name)
+            self.add_item(button)
+
+    def _create_country_callback(self, country_code: str, country_name: str):
+        async def country_callback(interaction: discord.Interaction):
+            await self._generate_country(interaction, country_code, country_name)
+        return country_callback
+
+    async def _generate_country(self, interaction: discord.Interaction, country: str, display_name: str):
+        loading_embed = discord.Embed(
+            title="🗺️ Generating Country Map",
+            description=f"Just a moment, I'm generating the {display_name} map...",
+            color=0x7289da
+        )
+        await interaction.response.edit_message(
+            content=None,
+            embed=loading_embed,
+            view=None
+        )
+        
+        try:
+            from core.map_progress_handler import create_closeup_progress_callback
+            progress_callback = await create_closeup_progress_callback(interaction, display_name, self.cog.log)
+            
+            country_image = await self.cog._generate_continent_closeup(self.guild_id, country, progress_callback)
+            if country_image:
+                filename = f"country_{country}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                
+                await self.original_interaction.edit_original_response(
+                    content=f"🗺️ **{display_name} Map**",
+                    embed=None,
+                    attachments=[discord.File(country_image, filename=filename)],
+                    view=None
+                )
+            else:
+                error_embed = discord.Embed(
+                    title="⛔ Generation Error",
+                    description=f"Could not generate map for {display_name}",
+                    color=0xff4444
+                )
+                await self.original_interaction.edit_original_response(
+                    content=None,
+                    embed=error_embed,
+                    view=None
+                )
+        except Exception as e:
+            self.cog.log.error(f"Error generating country map: {e}")
+            error_embed = discord.Embed(
+                title="⛔ Generation Error",
+                description="An error occurred while generating the country map.",
+                color=0xff4444
+            )
+            await self.original_interaction.edit_original_response(
+                content=None,
+                embed=error_embed,
+                view=None
+            )
+
+
+class SouthAmericanCountrySelectionView(discord.ui.View):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int, original_interaction: discord.Interaction):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.original_interaction = original_interaction
+        
+        # South American countries with their flags (by population)  
+        # Using only flag emojis as labels, removing country names
+        countries = [
+            ("🇧🇷", "Brazil", "brazil"),
+            # Add more South American countries here when we have configs for them
+        ]
+        
+        for i, (flag, name, value) in enumerate(countries):
+            button = discord.ui.Button(
+                label="",  # Empty label, only flag emoji
+                style=discord.ButtonStyle.secondary,
+                emoji=flag,
+                row=0
+            )
+            button.callback = self._create_country_callback(value, name)
+            self.add_item(button)
+
+    def _create_country_callback(self, country_code: str, country_name: str):
+        async def country_callback(interaction: discord.Interaction):
+            await self._generate_country(interaction, country_code, country_name)
+        return country_callback
+
+    async def _generate_country(self, interaction: discord.Interaction, country: str, display_name: str):
+        loading_embed = discord.Embed(
+            title="🗺️ Generating Country Map",
+            description=f"Just a moment, I'm generating the {display_name} map...",
+            color=0x7289da
+        )
+        await interaction.response.edit_message(
+            content=None,
+            embed=loading_embed,
+            view=None
+        )
+        
+        try:
+            from core.map_progress_handler import create_closeup_progress_callback
+            progress_callback = await create_closeup_progress_callback(interaction, display_name, self.cog.log)
+            
+            country_image = await self.cog._generate_continent_closeup(self.guild_id, country, progress_callback)
+            if country_image:
+                filename = f"country_{country}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                
+                await self.original_interaction.edit_original_response(
+                    content=f"🗺️ **{display_name} Map**",
+                    embed=None,
+                    attachments=[discord.File(country_image, filename=filename)],
+                    view=None
+                )
+            else:
+                error_embed = discord.Embed(
+                    title="⛔ Generation Error",
+                    description=f"Could not generate map for {display_name}",
+                    color=0xff4444
+                )
+                await self.original_interaction.edit_original_response(
+                    content=None,
+                    embed=error_embed,
+                    view=None
+                )
+        except Exception as e:
+            self.cog.log.error(f"Error generating country map: {e}")
+            error_embed = discord.Embed(
+                title="⛔ Generation Error",
+                description="An error occurred while generating the country map.",
+                color=0xff4444
+            )
+            await self.original_interaction.edit_original_response(
+                content=None,
                 embed=error_embed,
                 view=None
             )
@@ -228,7 +643,14 @@ class MapMenuView(discord.ui.View):
             self._add_proximity_button()
         
         # Only add close-up button for supported regions
-        if region in ["world", "germany"]:
+        supported_regions = ["world", "germany", "europe", "asia", "northamerica", "southamerica", 
+                           "france", "spain", "italy", "poland", "netherlands", "belgium", "austria", 
+                           "czech", "hungary", "portugal", "greece", "sweden", "norway", "denmark",
+                           "finland", "romania", "bulgaria", "croatia", "slovenia", "slovakia", 
+                           "ireland", "lithuania", "latvia", "estonia", "luxembourg", "malta", 
+                           "cyprus", "switzerland", "ukraine", "russia", "turkey", "japan", 
+                           "southkorea", "brazil", "canada", "mexico"]
+        if region in supported_regions:
             self._add_closeup_button()
             
         # Always add info button
@@ -357,6 +779,45 @@ class MapMenuView(discord.ui.View):
             view = StateSelectionView(self.cog, self.guild_id, interaction)
             await interaction.response.edit_message(
                 content="**🏛️ Select a German state for close-up view:**", 
+                view=view
+            )
+        elif region == "europe":
+            # Show European country selection buttons
+            view = EuropeanCountrySelectionView(self.cog, self.guild_id, interaction)
+            await interaction.response.edit_message(
+                content="**🇪🇺 Select a European country for close-up view:**", 
+                view=view
+            )
+        elif region in ["asia", "japan", "southkorea", "russia", "turkey"]:
+            # Show Asian country selection buttons
+            view = AsianCountrySelectionView(self.cog, self.guild_id, interaction)
+            await interaction.response.edit_message(
+                content="**🌏 Select an Asian country for close-up view:**", 
+                view=view
+            )
+        elif region in ["northamerica", "canada", "mexico", "usmainland"]:
+            # Show North American country selection buttons
+            view = NorthAmericanCountrySelectionView(self.cog, self.guild_id, interaction)
+            await interaction.response.edit_message(
+                content="**🌎 Select a North American country for close-up view:**", 
+                view=view
+            )
+        elif region in ["southamerica", "brazil"]:
+            # Show South American country selection buttons
+            view = SouthAmericanCountrySelectionView(self.cog, self.guild_id, interaction)
+            await interaction.response.edit_message(
+                content="**🌎 Select a South American country for close-up view:**", 
+                view=view
+            )
+        elif region in ["france", "spain", "italy", "poland", "netherlands", "belgium", "austria", 
+                        "czech", "hungary", "portugal", "greece", "sweden", "norway", "denmark",
+                        "finland", "romania", "bulgaria", "croatia", "slovenia", "slovakia", 
+                        "ireland", "lithuania", "latvia", "estonia", "luxembourg", "malta", 
+                        "cyprus", "switzerland", "ukraine"]:
+            # For individual European countries, show other European countries
+            view = EuropeanCountrySelectionView(self.cog, self.guild_id, interaction)
+            await interaction.response.edit_message(
+                content="**🇪🇺 Select another European country for close-up view:**", 
                 view=view
             )
         else:
