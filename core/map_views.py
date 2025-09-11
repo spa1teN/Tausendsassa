@@ -77,7 +77,11 @@ class ContinentSelectionView(discord.ui.View):
         )
         
         try:
-            continent_image = await self.cog._generate_continent_closeup(self.guild_id, continent)
+            # Use centralized progress handler
+            from core.map_progress_handler import create_closeup_progress_callback
+            progress_callback = await create_closeup_progress_callback(interaction, display_name, self.cog.log)
+            
+            continent_image = await self.cog._generate_continent_closeup(self.guild_id, continent, progress_callback)
             if continent_image:
                 filename = f"continent_{continent}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                 
@@ -165,7 +169,11 @@ class StateSelectionView(discord.ui.View):
             )
             
             try:
-                state_image = await self.cog._generate_state_closeup(self.guild_id, state_name)
+                # Use centralized progress handler
+                from core.map_progress_handler import create_closeup_progress_callback
+                update_progress = await create_closeup_progress_callback(interaction, state_name, self.cog.log)
+                
+                state_image = await self.cog._generate_state_closeup(self.guild_id, state_name, update_progress)
                 if state_image:
                     filename = f"state_{state_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                     

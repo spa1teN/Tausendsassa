@@ -54,9 +54,13 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
                 await self.original_interaction.edit_original_response(embed=error_embed, view=None)
                 return
 
+            # Use centralized progress handler
+            from core.map_progress_handler import create_proximity_progress_callback
+            progress_callback = await create_proximity_progress_callback(interaction, self.cog.log)
+            
             # Generate proximity map
             user_id = interaction.user.id
-            result = await self.cog._generate_proximity_map(user_id, self.guild_id, distance_km)
+            result = await self.cog._generate_proximity_map(user_id, self.guild_id, distance_km, progress_callback)
             
             if not result:
                 error_embed = discord.Embed(
@@ -111,8 +115,9 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
                 inline=False
             )
             
-            # Replace loading message with results
+            # Replace loading message with results and embed the map within the embed
             filename = f"proximity_{distance_km}km_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            embed.set_image(url=f"attachment://{filename}")
             await self.original_interaction.edit_original_response(
                 embed=embed,
                 attachments=[discord.File(proximity_image, filename=filename)],

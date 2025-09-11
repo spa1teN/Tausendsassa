@@ -53,9 +53,12 @@ def _save_feed_cache():
     except Exception:
         pass
 
-def _fmt_timestamp(dt: datetime) -> str:
-    """Format datetime as ISO timestamp"""
-    return dt.astimezone(timezone.utc).isoformat()
+def _fmt_timestamp(dt: datetime, guild_id: int = None) -> str:
+    """Format datetime as ISO timestamp for Discord embed"""
+    # For embed timestamps, Discord always shows them in the user's local timezone
+    # The guild timezone setting doesn't affect embed timestamps, only text content
+    # So we just provide the correct UTC timestamp
+    return dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 def _entry_published(entry) -> datetime | None:
     """Extract published datetime from feed entry"""
@@ -244,7 +247,7 @@ def poll(feed_cfg: Dict[str, Any], guild_id: int) -> List[Dict[str, Any]]:
                 # Content changed - create update
                 message_info = state.get_message_info(guid)
                 if message_info:
-                    embed = _create_embed(entry, feed_cfg)
+                    embed = _create_embed(entry, feed_cfg, guild_id)
                     embed["is_update"] = True
                     embed["message_info"] = message_info
                     embed["guid"] = guid
@@ -261,7 +264,7 @@ def poll(feed_cfg: Dict[str, Any], guild_id: int) -> List[Dict[str, Any]]:
         if datetime.now(timezone.utc) - published > MAX_AGE:
             continue
 
-        embed = _create_embed(entry, feed_cfg)
+        embed = _create_embed(entry, feed_cfg, guild_id)
         embed["guid"] = guid
         embed["is_update"] = False
         
@@ -300,7 +303,7 @@ def _check_recent_updates(parsed, feed_cfg: Dict[str, Any], guild_id: int) -> Li
         if stored_hash and stored_hash != current_hash:
             message_info = state.get_message_info(guid)
             if message_info:
-                embed = _create_embed(entry, feed_cfg)
+                embed = _create_embed(entry, feed_cfg, guild_id)
                 embed["is_update"] = True
                 embed["message_info"] = message_info
                 embed["guid"] = guid
@@ -312,12 +315,12 @@ def _check_recent_updates(parsed, feed_cfg: Dict[str, Any], guild_id: int) -> Li
     
     return new_embeds
 
-def _create_embed(entry, feed_cfg: Dict[str, Any]) -> Dict[str, Any]:
+def _create_embed(entry, feed_cfg: Dict[str, Any], guild_id: int = None) -> Dict[str, Any]:
     """Create embed from entry and feed config"""
     published = _entry_published(entry) or datetime.now(timezone.utc)
     thumb = find_thumbnail(entry)
     tpl = feed_cfg.get("embed_template", {})
-    embed = _render_template(tpl, entry, thumb, published)
+    embed = _render_template(tpl, entry, thumb, published, guild_id)
 
     # Description fallbacks
     desc = embed.get("description", "").strip()
@@ -357,9 +360,11 @@ def cleanup_old_entries(guild_id: int):
 def _render_template(template: Dict[str, Any],
                      entry,
                      thumb_url: str | None,
-                     published: datetime) -> Dict[str, Any]:
+                     published: datetime,
+                     guild_id: int = None) -> Dict[str, Any]:
     """Render embed template with entry data"""
     from collections import defaultdict
+    from core.timezone_util import to_guild_timezone
 
     def _fmt(value: Any) -> Any:
         if isinstance(value, str):
@@ -370,14 +375,20 @@ def _render_template(template: Dict[str, Any],
             # Reserved fields
             safe['link'] = entry.get('link', '')
             safe['thumbnail'] = thumb_url or ''
-            safe['published_custom'] = published.astimezone(TZ).strftime("%d.%m.%Y %H:%M")
+            
+            # Use guild timezone for published_custom or fallback to TZ
+            if guild_id:
+                guild_published = to_guild_timezone(published, guild_id)
+                safe['published_custom'] = guild_published.strftime("%d.%m.%Y %H:%M")
+            else:
+                safe['published_custom'] = published.astimezone(TZ).strftime("%d.%m.%Y %H:%M")
             return value.format_map(safe)
         if isinstance(value, dict):
             return {k: _fmt(v) for k, v in value.items()}
         return value
 
     embed = _fmt(template)
-    embed["timestamp"] = _fmt_timestamp(published)
+    embed["timestamp"] = _fmt_timestamp(published, guild_id)
     return embed
 
 # Initialize caches on import

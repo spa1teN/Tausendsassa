@@ -82,7 +82,7 @@ class ProximityCalculator:
         
         return radius_pixels
 
-    async def generate_proximity_map(self, user_id: int, guild_id: int, distance_km: int, maps: Dict) -> Optional[Tuple[BytesIO, List[Dict]]]:
+    async def generate_proximity_map(self, user_id: int, guild_id: int, distance_km: int, maps: Dict, progress_callback=None) -> Optional[Tuple[BytesIO, List[Dict]]]:
         """Generate proximity map showing nearby users using improved renderer with optimized caching."""
         try:
             map_data = maps.get(str(guild_id), {})
@@ -106,12 +106,24 @@ class ProximityCalculator:
             guild_id_str = str(guild_id)
             
             # OPTIMIZATION: Use the new unified renderer for proximity maps with caching support
+            if progress_callback:
+                await progress_callback("Generating proximity map base layer...", 10)
+            
+            # Define progress callback for base map rendering
+            async def internal_progress_callback(message, percentage, image_buffer=None):
+                self.log.info(f"Proximity map rendering progress: {message} ({percentage}%)")
+                if progress_callback:
+                    # Scale progress to 10-80% range for base map rendering
+                    scaled_percentage = 10 + int(percentage * 0.7)
+                    await progress_callback(f"Rendering map: {message}", scaled_percentage, image_buffer)
+            
             base_map, projection_func = await self.map_generator.render_base_map(
                 minx, miny, maxx, maxy, width, height, 
                 map_type="proximity", 
                 guild_id=guild_id_str, 
                 maps=maps,
-                zoom_level="proximity"
+                zoom_level="proximity",
+                progress_callback=internal_progress_callback
             )
             
             if not base_map:
@@ -120,7 +132,21 @@ class ProximityCalculator:
                 base_map = Image.new('RGB', (width, height), color=water_color)
                 projection_func = self.map_generator.create_projection_function(minx, miny, maxx, maxy, width, height)
         
+            if progress_callback:
+                await progress_callback("Adding pins and proximity circle...", 85)
+                
             draw = ImageDraw.Draw(base_map)
+            
+            # Share intermediate image with just the base map
+            if progress_callback:
+                try:
+                    intermediate_img = base_map.copy()
+                    img_buffer = BytesIO()
+                    intermediate_img.save(img_buffer, format='PNG', optimize=True)
+                    await progress_callback("Base map complete, adding proximity elements...", 85, img_buffer)
+                except Exception as e:
+                    # Fallback to regular progress without image
+                    await progress_callback("Adding pins and proximity circle...", 85)
             
             # Draw radius circle with accurate calculation
             center_x, center_y = projection_func(user_lat, user_lng)
@@ -142,6 +168,16 @@ class ProximityCalculator:
                 center_x - user_pin_size, center_y - user_pin_size,
                 center_x + user_pin_size, center_y + user_pin_size
             ], fill='#00FF00', outline='white', width=3)
+            
+            # Share intermediate image with circle and user pin
+            if progress_callback:
+                try:
+                    intermediate_img = base_map.copy()
+                    img_buffer = BytesIO()
+                    intermediate_img.save(img_buffer, format='PNG', optimize=True)
+                    await progress_callback("Proximity circle and your pin added, adding nearby users...", 92, img_buffer)
+                except Exception as e:
+                    await progress_callback("Adding nearby user pins...", 92)
         
             # Draw nearby user pins with custom pin color
             pin_color, _ = self.map_generator.get_pin_settings(guild_id_str, maps)
@@ -156,6 +192,9 @@ class ProximityCalculator:
                     draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
                                  fill=pin_color, outline='white', width=2)
         
+            if progress_callback:
+                await progress_callback("Finalizing proximity map...", 100)
+                
             # Convert to BytesIO
             img_buffer = BytesIO()
             base_map.save(img_buffer, format='PNG', optimize=True)

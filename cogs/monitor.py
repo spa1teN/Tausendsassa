@@ -15,216 +15,13 @@ import io
 import json
 from pathlib import Path
 
-BOT_OWNER_ID = 485051896655249419
+# Import config inside functions to avoid circular imports
+BOT_OWNER_ID = 485051896655249419  # Will be updated from config in __init__
 
-class FileSelect(discord.ui.Select):
-    """Select menu for choosing files to download"""
-    
-    def __init__(self, available_files: List[Dict[str, str]]):
-        self.available_files = {file['value']: file['path'] for file in available_files}
-        
-        options = [
-            discord.SelectOption(
-                label=file['label'],
-                description=file['description'],
-                value=file['value'],
-                emoji=file['emoji']
-            )
-            for file in available_files[:25]  # Discord limit
-        ]
-        
-        super().__init__(
-            placeholder="Choose files to download...",
-            min_values=1,
-            max_values=min(len(options), 10),  # Allow up to 10 files
-            options=options
-        )
-    
-    async def callback(self, interaction: discord.Interaction):
-        """Handle file selection"""
-        await interaction.response.defer(ephemeral=True)
-        
-        try:
-            files_to_send = []
-            
-            for selected_value in self.values:
-                file_path = self.available_files.get(selected_value)
-                
-                if not file_path or not os.path.exists(file_path):
-                    continue
-                
-                # Check file size (Discord limit: 25MB for non-nitro, 500MB for nitro)
-                file_size = os.path.getsize(file_path)
-                if file_size > 24 * 1024 * 1024:  # 24MB to be safe
-                    await interaction.followup.send(
-                        f"❌ File `{file_path}` is too large ({file_size / (1024*1024):.1f}MB). "
-                        f"Discord limit is 25MB.",
-                        ephemeral=True
-                    )
-                    continue
-                
-                # Read and prepare file
-                try:
-                    with open(file_path, 'rb') as f:
-                        file_content = f.read()
-                    
-                    # Get just the filename for Discord
-                    filename = os.path.basename(file_path)
-                    discord_file = discord.File(
-                        io.BytesIO(file_content),
-                        filename=filename
-                    )
-                    files_to_send.append(discord_file)
-                    
-                except Exception as e:
-                    await interaction.followup.send(
-                        f"❌ Error reading file `{file_path}`: {str(e)}",
-                        ephemeral=True
-                    )
-                    continue
-            
-            if not files_to_send:
-                await interaction.followup.send(
-                    "❌ No valid files found to send.",
-                    ephemeral=True
-                )
-                return
-            
-            # Send files
-            selected_names = [os.path.basename(self.available_files[v]) for v in self.values]
-            await interaction.followup.send(
-                f"📁 Here are your requested files: {', '.join(selected_names)}",
-                files=files_to_send,
-                ephemeral=True
-            )
-            
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Error preparing files: {str(e)}",
-                ephemeral=True
-            )
+# Import German timezone utilities
+from core.timezone_util import get_german_time
 
-class MonitorView(discord.ui.View):
-    """View for monitoring interactions with file download functionality"""
-    
-    def __init__(self, bot: commands.Bot, authorized_roles: List[int]):
-        super().__init__(timeout=300)  # 5 minutes timeout
-        self.bot = bot
-        self.authorized_roles = authorized_roles
-        
-        # Add file select menu
-        available_files = self._get_available_files()
-        if available_files:
-            self.add_item(FileSelect(available_files))
-    
-    def has_permission(self, user: discord.Member) -> bool:
-        """Check if user has permission to download files"""
-        return any(role.id in self.authorized_roles for role in user.roles)
-    
-    def _get_available_files(self) -> List[Dict[str, str]]:
-        """Get list of available files for download"""
-        files = []
-        
-        # Main bot file
-        if os.path.exists('bot.py'):
-            files.append({
-                'label': 'bot.py',
-                'description': 'Main bot file',
-                'value': 'bot_py',
-                'emoji': '🤖',
-                'path': 'bot.py'
-            })
-        
-        # Config files
-        config_files = [
-            ('config.yaml', 'YAML configuration file'),
-            ('config.yml', 'YAML configuration file'),
-            ('requirements.txt', 'Python dependencies'),
-            ('.env.example', 'Environment variables example')
-        ]
-        
-        for filename, description in config_files:
-            if os.path.exists(filename):
-                files.append({
-                    'label': filename,
-                    'description': description,
-                    'value': filename.replace('.', '_'),
-                    'emoji': '⚙️',
-                    'path': filename
-                })
-        
-        # Cog files
-        if os.path.exists('cogs'):
-            for file in os.listdir('cogs'):
-                if file.endswith('.py') and not file.startswith('__'):
-                    files.append({
-                        'label': f'cogs/{file}',
-                        'description': f'{file.replace(".py", "").title()} cog',
-                        'value': f'cogs_{file.replace(".", "_")}',
-                        'emoji': '🧩',
-                        'path': f'cogs/{file}'
-                    })
 
-        # Core Files
-        if os.path.exists('core'):
-            for file in os.listdir('core'):
-                if file.endswith('.py') and not file.startswith('__'):
-                    files.append({
-                        'label': f'core/{file}',
-                        'description': f'{file.replace(".py", "").title()} cog',
-                        'value': f'core_{file.replace(".", "_")}',
-                        'emoji': '🔨',
-                        'path': f'core/{file}'
-                    })
-                    
-        # Recent log files (last 3 days)
-        if os.path.exists('logs'):
-            current_time = time.time()
-            for file in os.listdir('logs'):
-                if file.endswith('.log'):
-                    file_path = f'logs/{file}'
-                    if os.path.getmtime(file_path) > current_time - (3 * 24 * 3600):
-                        # Get file size for description
-                        size = os.path.getsize(file_path)
-                        size_str = self._format_file_size(size)
-                        files.append({
-                            'label': f'logs/{file}',
-                            'description': f'Log file ({size_str})',
-                            'value': f'logs_{file.replace(".", "_")}',
-                            'emoji': '📋',
-                            'path': file_path
-                        })
-        
-        return files
-    
-    def _format_file_size(self, size_bytes: int) -> str:
-        """Format file size in human readable format"""
-        if size_bytes == 0:
-            return "0B"
-        size_names = ["B", "KB", "MB", "GB"]
-        i = 0
-        while size_bytes >= 1024 and i < len(size_names) - 1:
-            size_bytes /= 1024.0
-            i += 1
-        return f"{size_bytes:.1f}{size_names[i]}"
-    
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Check if user has permission before any interaction"""
-        if not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(
-                "❌ This command can only be used in a server.", 
-                ephemeral=True
-            )
-            return False
-            
-        if not self.has_permission(interaction.user):
-            await interaction.response.send_message(
-                "❌ You don't have permission to download bot files.", 
-                ephemeral=True
-            )
-            return False
-        
-        return True
 
 class Monitor(commands.Cog):
     """Monitor cog for system and bot health monitoring"""
@@ -233,11 +30,12 @@ class Monitor(commands.Cog):
         self.bot = bot
         self.log = bot.get_cog_logger("monitor")
         
-        # Configuration - adjust these role IDs for your server
-        self.authorized_roles = [
-            1402526603057303653,
-            1398500235541610639
-        ]
+        # Import config here to avoid circular imports
+        from core.config import config
+        
+        # Configuration from centralized config
+        self.authorized_roles = config.monitor_authorized_roles
+        self.config = config  # Store reference for use in other methods
         
         # System monitoring data storage
         self.cpu_history: List[float] = []
@@ -266,7 +64,7 @@ class Monitor(commands.Cog):
         """Load monitor configuration from file"""
         default_config = {
             "monitor_messages": {},  # channel_id: message_id
-            "auto_update_interval": 300,  # 5 minutes
+            "auto_update_interval": self.config.monitor_update_interval,
             "last_update": 0
         }
         
@@ -328,7 +126,7 @@ class Monitor(commands.Cog):
                     self.monitor_config["last_update"] = current_time
                     self.save_config()
                 
-                await asyncio.sleep(60)  # Collect every minute
+                await asyncio.sleep(self.config.system_metrics_interval)  # Configurable interval
                 
             except Exception as e:
                 self.log.error(f"Error collecting system metrics: {e}")
@@ -366,15 +164,63 @@ class Monitor(commands.Cog):
         try:
             # Generate fresh monitoring data
             embeds = await self.generate_monitor_embeds()
-            view = MonitorView(self.bot, self.authorized_roles)
             
             # Update the message
-            await message.edit(embeds=embeds, view=view)
+            await message.edit(embeds=embeds, view=None)
             
         except Exception as e:
             self.log.error(f"Error updating monitor message: {e}")
             raise
     
+    def get_cpu_temperature(self) -> Optional[float]:
+        """Get CPU temperature in Celsius"""
+        try:
+            # Try different methods to get CPU temperature
+            temperatures = psutil.sensors_temperatures()
+            
+            if temperatures:
+                # Common temperature sensor names
+                sensor_names = ['coretemp', 'cpu_thermal', 'acpi', 'k10temp', 'zenpower']
+                
+                for sensor_name in sensor_names:
+                    if sensor_name in temperatures:
+                        temps = temperatures[sensor_name]
+                        if temps:
+                            # Return the first temperature reading
+                            return temps[0].current
+                
+                # If no common sensor found, use the first available
+                for sensor_temps in temperatures.values():
+                    if sensor_temps:
+                        return sensor_temps[0].current
+            
+            # Fallback: try reading from common thermal files on Linux
+            thermal_files = [
+                '/sys/class/thermal/thermal_zone0/temp',
+                '/sys/class/thermal/thermal_zone1/temp',
+                '/sys/class/hwmon/hwmon0/temp1_input',
+                '/sys/class/hwmon/hwmon1/temp1_input'
+            ]
+            
+            for thermal_file in thermal_files:
+                try:
+                    with open(thermal_file, 'r') as f:
+                        temp_str = f.read().strip()
+                        temp = float(temp_str)
+                        # Convert from millicelsius to celsius if needed
+                        if temp > 1000:
+                            temp = temp / 1000
+                        if 0 < temp < 150:  # Reasonable temperature range
+                            return temp
+                except (FileNotFoundError, ValueError, PermissionError):
+                    continue
+            
+            return None
+            
+        except Exception as e:
+            self.log.debug(f"Error getting CPU temperature: {e}")
+            return None
+
     def get_device_info(self) -> Dict[str, Any]:
         """Get device information"""
         try:
@@ -386,6 +232,7 @@ class Monitor(commands.Cog):
             # CPU information
             cpu_count = psutil.cpu_count()
             cpu_freq = psutil.cpu_freq()
+            cpu_temp = self.get_cpu_temperature()
             
             # Memory information
             memory = psutil.virtual_memory()
@@ -406,6 +253,7 @@ class Monitor(commands.Cog):
                 'uptime_seconds': uptime,
                 'cpu_count': cpu_count,
                 'cpu_freq': cpu_freq.current if cpu_freq else None,
+                'cpu_temperature': cpu_temp,
                 'cpu_max_hour': cpu_max,
                 'cpu_avg_hour': cpu_avg,
                 'ram_total': memory.total,
@@ -433,16 +281,16 @@ class Monitor(commands.Cog):
                         ['systemctl', 'is-active', service_name],
                         capture_output=True,
                         text=True,
-                        timeout=5
+                        timeout=self.config.http_timeout // 2  # Half of HTTP timeout
                     )
                     
                     if result.returncode == 0:  # Service found
-                        # Get detailed status
+                        # Get detailed status with timeout
                         status_result = subprocess.run(
                             ['systemctl', 'status', service_name, '--no-pager', '-l'],
                             capture_output=True,
                             text=True,
-                            timeout=10
+                            timeout=self.config.http_timeout
                         )
                         
                         return {
@@ -450,9 +298,14 @@ class Monitor(commands.Cog):
                             'status': result.stdout.strip(),
                             'details': status_result.stdout[:1000]  # Limit output
                         }
-                except subprocess.TimeoutExpired:
+                except subprocess.TimeoutExpired as e:
+                    self.log.warning(f"Timeout checking systemd service {service_name}: {e}")
                     continue
-                except subprocess.CalledProcessError:
+                except subprocess.CalledProcessError as e:
+                    self.log.debug(f"Service {service_name} not found or error: {e}")
+                    continue
+                except Exception as e:
+                    self.log.warning(f"Unexpected error checking service {service_name}: {e}")
                     continue
             
             return {
@@ -462,6 +315,7 @@ class Monitor(commands.Cog):
             }
             
         except Exception as e:
+            self.log.error(f"Error in systemd status check: {e}")
             return {
                 'service_name': 'error',
                 'status': 'error',
@@ -497,63 +351,6 @@ class Monitor(commands.Cog):
             'python_version': platform.python_version()
         }
     
-    def get_file_tree(self) -> str:
-        """Get file tree structure"""
-        try:
-            # Use tree command if available
-            try:
-                result = subprocess.run(
-                    ['tree', '.', '-I', '__pycache__|*.pyc|.git|.env|ne_10m*|ne_50m*|map_cache|data|__init__.py|info|*.yaml|*.json|config|*~'],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=os.getcwd()
-                )
-                if result.returncode == 0:
-                    return result.stdout[:1500]  # Limit output
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                pass
-            
-            # Fallback: manual tree generation
-            def generate_tree(directory, prefix="", max_depth=3, current_depth=0):
-                if current_depth >= max_depth:
-                    return ""
-                
-                tree_str = ""
-                try:
-                    items = sorted(os.listdir(directory))
-                    dirs = [item for item in items if os.path.isdir(os.path.join(directory, item))]
-                    files = [item for item in items if os.path.isfile(os.path.join(directory, item))]
-                    
-                    # Filter relevant files and directories
-                    relevant_dirs = [d for d in dirs if d in ['cogs', 'logs', 'core']]
-                    relevant_files = [f for f in files if f in ['bot.py', 'requirements.txt']]
-                    
-                    all_items = relevant_dirs + relevant_files
-                    
-                    for i, item in enumerate(all_items):
-                        is_last = i == len(all_items) - 1
-                        current_prefix = "└── " if is_last else "├── "
-                        tree_str += f"{prefix}{current_prefix}{item}\n"
-                        
-                        if item in relevant_dirs:
-                            extension = "    " if is_last else "│   "
-                            tree_str += generate_tree(
-                                os.path.join(directory, item),
-                                prefix + extension,
-                                max_depth,
-                                current_depth + 1
-                            )
-                except PermissionError:
-                    tree_str += f"{prefix}└── [Permission Denied]\n"
-                
-                return tree_str
-            
-            tree_output = ".\n" + generate_tree(".")
-            return tree_output[:1500]  # Limit output
-            
-        except Exception as e:
-            return f"Error generating file tree: {e}"
     
     def format_uptime(self, seconds: float) -> str:
         """Format uptime in human-readable format"""
@@ -580,7 +377,6 @@ class Monitor(commands.Cog):
         systemd_info = self.get_systemd_status()
         cog_info = self.get_cog_info()
         bot_info = self.get_bot_info()
-        file_tree = self.get_file_tree()
         
         embeds = []
         
@@ -588,7 +384,7 @@ class Monitor(commands.Cog):
         device_embed = discord.Embed(
             title="🖥️ Device Health",
             color=0x00ff00,
-            timestamp=datetime.utcnow()
+            timestamp=get_german_time()
         )
         
         if device_info:
@@ -608,11 +404,17 @@ class Monitor(commands.Cog):
             
             cpu_cores = device_info.get('cpu_count', 0)
             cpu_freq = device_info.get('cpu_freq')
+            cpu_temp = device_info.get('cpu_temperature')
+            
             cpu_info = f"🔥 Max: {device_info.get('cpu_max_hour', 0):.1f}%\n" \
                       f"📊 Avg: {device_info.get('cpu_avg_hour', 0):.1f}%\n" \
                       f"⚙️ Cores: {cpu_cores}"
+            
             if cpu_freq:
                 cpu_info += f" @ {cpu_freq:.0f}MHz"
+            
+            if cpu_temp is not None:
+                cpu_info += f"\n🌡️ Temperature: {cpu_temp:.1f}°C"
             
             device_embed.add_field(
                 name="CPU Usage (Past Hour)",
@@ -648,7 +450,7 @@ class Monitor(commands.Cog):
         systemd_embed = discord.Embed(
             title="🔧 Systemd Service Status",
             color=0x0099ff,
-            timestamp=datetime.utcnow()
+            timestamp=get_german_time()
         )
         
         status = systemd_info.get('status', 'unknown')
@@ -678,7 +480,7 @@ class Monitor(commands.Cog):
         cog_embed = discord.Embed(
             title="🧩 Cog Status",
             color=0x9932cc,
-            timestamp=datetime.utcnow()
+            timestamp=get_german_time()
         )
         
         active_cogs = []
@@ -720,14 +522,13 @@ class Monitor(commands.Cog):
         bot_embed = discord.Embed(
             title="🤖 Bot Information",
             color=0xff6b6b,
-            timestamp=datetime.utcnow()
+            timestamp=get_german_time()
         )
         
         bot_embed.add_field(
             name="Server Statistics",
             value=f"🏠 Installed on **{bot_info.get('guild_count', 0)}** servers\n"
-                  f"👥 Serving **{bot_info.get('user_count', 0)}** users\n"
-                  f"⚡ **{bot_info.get('command_count', 0)}** commands available",
+                  f"👥 Serving **{bot_info.get('user_count', 0)}** users",
             inline=True
         )
         
@@ -741,22 +542,6 @@ class Monitor(commands.Cog):
         
         embeds.append(bot_embed)
         
-        # File Tree Embed (separate embed)
-        tree_embed = discord.Embed(
-            title="📁 Project Structure",
-            color=0x4ecdc4,
-            timestamp=datetime.utcnow()
-        )
-        
-        # Ensure file tree doesn't exceed field limits
-        truncated_tree = file_tree[:1000] + ('...' if len(file_tree) > 1000 else '')
-        tree_embed.add_field(
-            name="Directory Tree",
-            value=f"```\n{truncated_tree}\n```",
-            inline=False
-        )
-        
-        embeds.append(tree_embed)
         
         return embeds
     
@@ -770,7 +555,7 @@ class Monitor(commands.Cog):
     
     @app_commands.command(name="owner_monitor", description="Display comprehensive bot and system monitoring information")
     async def monitor_command(self, interaction: discord.Interaction):
-        if interaction.user.id != BOT_OWNER_ID:
+        if interaction.user.id != self.config.owner_id:
             await interaction.response.send_message("Only available to owner.", ephemeral=True)
             return
         
@@ -810,10 +595,9 @@ class Monitor(commands.Cog):
             
             # Generate fresh monitoring data
             embeds = await self.generate_monitor_embeds()
-            view = MonitorView(self.bot, self.authorized_roles)
             
             # Send new monitor message
-            message = await interaction.followup.send(embeds=embeds, view=view)
+            message = await interaction.followup.send(embeds=embeds)
             
             # Store the new message ID
             self.monitor_config["monitor_messages"][channel_id] = message.id
@@ -841,7 +625,7 @@ class Monitor(commands.Cog):
         auto_update_interval: Optional[int] = None,
         clear_messages: Optional[bool] = False
     ):
-        if interaction.user.id != BOT_OWNER_ID:
+        if interaction.user.id != self.config.owner_id:
             await interaction.response.send_message("Only available to owner.", ephemeral=True)
             return
         
@@ -893,14 +677,14 @@ class Monitor(commands.Cog):
                 title="⚙️ Monitor Configuration Updated",
                 description="\n".join(changes),
                 color=0x00ff00,
-                timestamp=datetime.utcnow()
+                timestamp=get_german_time()
             )
         else:
             # Show current configuration
             embed = discord.Embed(
                 title="⚙️ Current Monitor Configuration",
                 color=0x0099ff,
-                timestamp=datetime.utcnow()
+                timestamp=get_german_time()
             )
             
             interval = self.monitor_config.get("auto_update_interval", 300)

@@ -21,10 +21,12 @@ from core.map_views import MapPinButtonView, LocationModal, UserPinOptionsView
 from core.map_views_admin import AdminToolsView
 from core.map_config import MapConfig
 
+# Import German timezone utilities
+from core.timezone_util import get_german_time, format_german_time
+
 # Constants
 IMAGE_WIDTH = 1500
-BOT_OWNER_ID = 485051896655249419
-PIN_COOLDOWN_MINUTES = 30  # 30 minute cooldown after pin update
+# BOT_OWNER_ID and PIN_COOLDOWN_MINUTES will be loaded from config in __init__
 
 
 class MapV2Cog(commands.Cog):
@@ -33,6 +35,10 @@ class MapV2Cog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.log = bot.get_cog_logger("map")
+        
+        # Import config here to avoid circular imports
+        from core.config import config
+        self.config = config
         
         # Setup directories
         self.data_dir = Path(__file__).parent.parent / "config"
@@ -56,7 +62,7 @@ class MapV2Cog(commands.Cog):
             return False, None
         
         last_update = self.pin_cooldowns[user_id]
-        cooldown_expires = last_update + timedelta(minutes=PIN_COOLDOWN_MINUTES)
+        cooldown_expires = last_update + timedelta(minutes=self.config.pin_cooldown_minutes)
         
         if datetime.now() < cooldown_expires:
             return True, cooldown_expires
@@ -115,7 +121,7 @@ class MapV2Cog(commands.Cog):
         except Exception as e:
             self.log.error(f"Error re-registering views: {e}")
 
-    async def _update_map(self, guild_id: int, channel_id: int):
+    async def _update_map(self, guild_id: int, channel_id: int, interaction=None):
         """Update the map in the specified channel."""
         try:
             channel = self.bot.get_channel(channel_id)
@@ -123,10 +129,31 @@ class MapV2Cog(commands.Cog):
                 self.log.error(f"Channel {channel_id} not found")
                 return
 
+            # Send progress message if we have an interaction (from /map_create)
+            progress_message = None
+            if interaction:
+                progress_embed = discord.Embed(
+                    title="🗺️ Generating Map",
+                    description="Creating your server map...",
+                    color=0x7289da
+                )
+                progress_message = await interaction.followup.send(embed=progress_embed, ephemeral=True)
+
+            # Use centralized progress handler
+            from core.map_progress_handler import create_server_map_progress_callback
+            progress_callback = await create_server_map_progress_callback(interaction, self.log, progress_message) if progress_message else None
+
             # Generate map image (uses caching internally and respects custom settings)
-            map_file = await self._generate_map_image(guild_id)
+            map_file = await self._generate_map_image(guild_id, progress_callback)
             if not map_file:
                 self.log.error("Failed to generate map image")
+                if progress_message:
+                    error_embed = discord.Embed(
+                        title="⛔ Error",
+                        description="Failed to generate map image.",
+                        color=0xff4444
+                    )
+                    await progress_message.edit(embed=error_embed)
                 return
 
             # Get map data for view - get current region
@@ -157,8 +184,24 @@ class MapV2Cog(commands.Cog):
             self.maps[str(guild_id)]['message_id'] = message.id
             await self._save_data(str(guild_id))
 
+            # Complete progress message
+            if progress_message:
+                success_embed = discord.Embed(
+                    title="✅ Map Created Successfully",
+                    description="Your server map has been posted to the channel!",
+                    color=0x00ff00
+                )
+                await progress_message.edit(embed=success_embed)
+
         except Exception as e:
             self.log.error(f"Failed to update map: {e}")
+            if interaction and progress_message:
+                error_embed = discord.Embed(
+                    title="⛔ Error",
+                    description="Failed to create map. Please try again.",
+                    color=0xff4444
+                )
+                await progress_message.edit(embed=error_embed)
 
     def cog_unload(self):
         """Clean up when cog is unloaded."""
@@ -174,7 +217,7 @@ class MapV2Cog(commands.Cog):
         """Invalidate cached maps for a guild."""
         await self.storage.invalidate_map_cache(guild_id)
 
-    async def _generate_map_image(self, guild_id: int) -> Optional[discord.File]:
+    async def _generate_map_image(self, guild_id: int, progress_callback=None) -> Optional[discord.File]:
         """Generate a map image with pins for the guild."""
         try:
             # Check for cached final map first
@@ -197,7 +240,15 @@ class MapV2Cog(commands.Cog):
             
             if not base_map:
                 # Generate new base map using improved renderer
-                base_map, projection_func = await self.map_generator.render_geopandas_map(region, width, height, str(guild_id), self.maps)
+                self.log.info(f"No base map in cache for {region}, rendering new one (will take some time)")
+                
+                # Define progress callback for rendering updates
+                async def internal_progress_callback(message, percentage, image_buffer=None):
+                    self.log.info(f"Map rendering progress: {message} ({percentage}%)")
+                    if progress_callback:
+                        await progress_callback(message, percentage, image_buffer)
+                
+                base_map, projection_func = await self.map_generator.render_geopandas_map(region, width, height, str(guild_id), self.maps, internal_progress_callback)
                 
                 if base_map:
                     # Cache the new base map
@@ -262,11 +313,11 @@ class MapV2Cog(commands.Cog):
         
         return to_px
 
-    async def _generate_proximity_map(self, user_id: int, guild_id: int, distance_km: int) -> Optional[Tuple[BytesIO, List[Dict]]]:
+    async def _generate_proximity_map(self, user_id: int, guild_id: int, distance_km: int, progress_callback=None) -> Optional[Tuple[BytesIO, List[Dict]]]:
         """Generate proximity map showing nearby users."""
-        return await self.proximity_calc.generate_proximity_map(user_id, guild_id, distance_km, self.maps)
+        return await self.proximity_calc.generate_proximity_map(user_id, guild_id, distance_km, self.maps, progress_callback)
 
-    async def _generate_continent_closeup(self, guild_id: int, continent: str) -> Optional[BytesIO]:
+    async def _generate_continent_closeup(self, guild_id: int, continent: str, progress_callback=None) -> Optional[BytesIO]:
         """Generate a close-up map of a continent using existing map configs."""
         try:
             if continent not in self.map_generator.map_configs:
@@ -278,13 +329,34 @@ class MapV2Cog(commands.Cog):
             if cached_closeup:
                 return cached_closeup
         
-            # Use existing map generation
+            # Calculate dimensions
             width, height = self.map_generator.calculate_image_dimensions(continent)
-            base_map, projection_func = await self.map_generator.render_geopandas_map(continent, width, height, str(guild_id), self.maps)
-        
-            if not base_map or not projection_func:
-                return None
-        
+            
+            # Try to get cached base map first
+            base_map = await self.storage.get_cached_closeup_base_map(guild_id, self.maps, "continent", continent, width, height)
+            projection_func = None
+            
+            if not base_map:
+                # Generate new base map
+                self.log.info(f"No base map in cache for {continent} closeup, rendering new one (will take some time)")
+                
+                # Define progress callback for rendering updates
+                async def internal_progress_callback(message, percentage, image_buffer=None):
+                    self.log.info(f"Continent closeup rendering progress: {message} ({percentage}%)")
+                    if progress_callback:
+                        await progress_callback(message, percentage, image_buffer)
+                
+                base_map, projection_func = await self.map_generator.render_geopandas_map(continent, width, height, str(guild_id), self.maps, internal_progress_callback)
+                
+                if base_map:
+                    # Cache the new base map
+                    await self.storage.cache_closeup_base_map(guild_id, self.maps, "continent", continent, width, height, base_map)
+                else:
+                    return None
+            else:
+                # For cached maps, recreate the projection function
+                projection_func = self._create_projection_function(continent, width, height)
+            
             # Draw pins for this guild
             map_data = self.maps.get(str(guild_id), {})
             pins = map_data.get('pins', {})
@@ -309,7 +381,7 @@ class MapV2Cog(commands.Cog):
             self.log.error(f"Failed to generate continent closeup for {continent}: {e}")
             return None
 
-    async def _generate_state_closeup(self, guild_id: int, state_name: str) -> Optional[BytesIO]:
+    async def _generate_state_closeup(self, guild_id: int, state_name: str, progress_callback=None) -> Optional[BytesIO]:
         """Generate a close-up map of a German state using unified renderer."""
         try:
             # Check for cached closeup map first
@@ -372,17 +444,45 @@ class MapV2Cog(commands.Cog):
             height = int(width * aspect_ratio)
             height = max(600, min(height, 2000))
             
-            # Use the improved unified renderer with state_closeup map type
-            img, projection_func = await self.map_generator.render_base_map(
-                minx, miny, maxx, maxy, width, height, 
-                map_type="state_closeup", 
-                guild_id=str(guild_id), 
-                maps=self.maps,
-                zoom_level="state_closeup"
-            )
+            # Try to get cached base map first
+            base_map = await self.storage.get_cached_closeup_base_map(guild_id, self.maps, "state", state_name, width, height)
+            projection_func = None
+            
+            if not base_map:
+                # Generate new base map
+                self.log.info(f"No base map in cache for {state_name} state closeup, rendering new one (will take some time)")
+                
+                # Notify user about base map rendering if callback provided
+                if progress_callback:
+                    await progress_callback(f"No base map in cache, rendering new one (will take some time)", 5)
+                
+                # Define progress callback for rendering updates
+                async def render_progress_callback(message, percentage, image_buffer=None):
+                    self.log.info(f"State closeup rendering progress: {message} ({percentage}%)")
+                    # Also update the user via the existing progress callback if provided
+                    if progress_callback:
+                        await progress_callback(f"Rendering base map: {message}", percentage, image_buffer)
+                
+                base_map, projection_func = await self.map_generator.render_base_map(
+                    minx, miny, maxx, maxy, width, height, 
+                    map_type="state_closeup", 
+                    guild_id=str(guild_id), 
+                    maps=self.maps,
+                    zoom_level="state_closeup",
+                    progress_callback=render_progress_callback
+                )
+                
+                if base_map:
+                    # Cache the new base map
+                    await self.storage.cache_closeup_base_map(guild_id, self.maps, "state", state_name, width, height, base_map)
+                else:
+                    return None
+            else:
+                # For cached maps, recreate the projection function
+                projection_func = self.map_generator.create_projection_function(minx, miny, maxx, maxy, width, height)
             
             # Highlight the selected state with a subtle border
-            draw = ImageDraw.Draw(img)
+            draw = ImageDraw.Draw(base_map)
             try:
                 if hasattr(state_geom, 'exterior'):
                     coords_list = [state_geom.exterior.coords]
@@ -405,11 +505,11 @@ class MapV2Cog(commands.Cog):
             base_pin_size = int(height * custom_pin_size / 2400)
             pin_groups = self.map_generator.group_overlapping_pins(pins, projection_func, base_pin_size)
             
-            self.map_generator.draw_pins_on_map(img, pin_groups, width, height, base_pin_size, str(guild_id), self.maps)
+            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size, str(guild_id), self.maps)
 
             # Convert to BytesIO
             img_buffer = BytesIO()
-            img.save(img_buffer, format='PNG', optimize=True)
+            base_map.save(img_buffer, format='PNG', optimize=True)
             
             # Cache the closeup map
             await self.storage.cache_closeup(guild_id, self.maps, "state", state_name, img_buffer)
@@ -441,7 +541,7 @@ class MapV2Cog(commands.Cog):
                 title="🗺️ Global Map Overview",
                 description="Overview of all server maps across Discord",
                 color=0x7289da,
-                timestamp=datetime.now()
+                timestamp=get_german_time()
             )
             
             total_pins = 0
@@ -544,7 +644,7 @@ class MapV2Cog(commands.Cog):
                 remaining_minutes = int(remaining.total_seconds() / 60)
                 await interaction.followup.send(
                     f"⛔ You can update your pin again in **{remaining_minutes} minutes**. "
-                    f"There's a {PIN_COOLDOWN_MINUTES}-minute cooldown after updating your location.",
+                    f"There's a {self.config.pin_cooldown_minutes}-minute cooldown after updating your location.",
                     ephemeral=True
                 )
                 return
@@ -619,7 +719,7 @@ class MapV2Cog(commands.Cog):
             )
             success_embed.add_field(name="Previous Location", value=old_location, inline=False)
             success_embed.add_field(name="New Location", value=location, inline=False)  # Show user input
-            success_embed.add_field(name="Cooldown", value=f"Next update allowed in {PIN_COOLDOWN_MINUTES} minutes", inline=False)
+            success_embed.add_field(name="Cooldown", value=f"Next update allowed in {self.config.pin_cooldown_minutes} minutes", inline=False)
         else:
             success_embed = discord.Embed(
                 title="📌 Pin Added Successfully", 
@@ -650,7 +750,7 @@ class MapV2Cog(commands.Cog):
             remaining_minutes = int(remaining.total_seconds() / 60)
             await interaction.followup.send(
                 f"⛔ You can update your pin again in **{remaining_minutes} minutes**. "
-                f"There's a {PIN_COOLDOWN_MINUTES}-minute cooldown after updating your location.",
+                f"There's a {self.config.pin_cooldown_minutes}-minute cooldown after updating your location.",
                 ephemeral=True
             )
             return
@@ -719,7 +819,7 @@ class MapV2Cog(commands.Cog):
     
         embed.add_field(name="New Location", value=display_name, inline=False)
         embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
-        embed.add_field(name="Cooldown", value=f"Next update allowed in {PIN_COOLDOWN_MINUTES} minutes", inline=False)
+        embed.add_field(name="Cooldown", value=f"Next update allowed in {self.config.pin_cooldown_minutes} minutes", inline=False)
         embed.set_footer(text=f"Updated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
         # Try to edit the original message, fallback to new message
@@ -729,8 +829,9 @@ class MapV2Cog(commands.Cog):
             # If editing fails, send new message
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-    async def _generate_preview_map(self, guild_id: int, preview_settings: Dict) -> Optional[BytesIO]:
-        """Generate a preview map with temporary settings - OPTIMIZED with intelligent caching."""
+    async def _generate_preview_map(self, guild_id: int, preview_settings: Dict, progress_callback=None) -> Optional[Tuple[BytesIO, Image.Image]]:
+        """Generate a preview map with temporary settings - OPTIMIZED with intelligent caching.
+        Returns tuple of (final_preview_image, base_map_for_caching)."""
         try:
             guild_id_str = str(guild_id)
             map_data = self.maps.get(guild_id_str, {})
@@ -776,8 +877,14 @@ class MapV2Cog(commands.Cog):
                 temp_maps = {guild_id_str: map_data.copy()}
                 temp_maps[guild_id_str]['settings'] = preview_settings
                 
+                # Define progress callback for preview rendering
+                async def preview_progress_callback(message, percentage, image_buffer=None):
+                    self.log.info(f"Preview rendering progress: {message} ({percentage}%)")
+                    if progress_callback:
+                        await progress_callback(message, percentage, image_buffer)
+                
                 base_map, projection_func = await self.map_generator.render_geopandas_map(
-                    region, width, height, guild_id_str, temp_maps
+                    region, width, height, guild_id_str, temp_maps, preview_progress_callback
                 )
             
             if not base_map or not projection_func:
@@ -791,6 +898,9 @@ class MapV2Cog(commands.Cog):
             # Create temporary maps for pin rendering
             temp_maps = {guild_id_str: map_data.copy()}
             temp_maps[guild_id_str]['settings'] = preview_settings
+            
+            # Store a copy of the base map before adding pins (for caching when approved)
+            base_map_for_caching = base_map.copy()
             
             # Calculate pin size based on preview settings
             pin_color, custom_pin_size = self.map_generator.get_pin_settings(guild_id_str, temp_maps)
@@ -807,11 +917,65 @@ class MapV2Cog(commands.Cog):
             base_map.save(img_buffer, format='PNG', optimize=True)
             img_buffer.seek(0)
             
-            return img_buffer
+            return img_buffer, base_map_for_caching
         
         except Exception as e:
             self.log.error(f"Failed to generate preview map: {e}")
-            return None
+            return None, None
+
+    async def _apply_cached_preview_as_map(self, guild_id: int, cached_preview: BytesIO) -> bool:
+        """Apply a cached preview image as the final map without regenerating."""
+        try:
+            # Cache the preview image as the final map
+            cached_preview.seek(0)
+            await self.storage.cache_map(guild_id, self.maps, cached_preview)
+            
+            # Get map data for view - get current region
+            map_data = self.maps.get(str(guild_id), {})
+            region = map_data.get('region', 'world')
+            channel_id = map_data.get('channel_id')
+            
+            if not channel_id:
+                return False
+            
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                return False
+
+            # Create the discord file from cached preview
+            cached_preview.seek(0)
+            filename = f"map_{region}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            map_file = discord.File(cached_preview, filename=filename)
+            
+            # Button with persistent view
+            view = MapPinButtonView(self, region, guild_id)
+
+            # Check if there's an existing map message to edit
+            existing_message_id = map_data.get('message_id')
+            if existing_message_id:
+                try:
+                    message = await channel.fetch_message(existing_message_id)
+                    await message.edit(content=None, attachments=[map_file], view=view)
+                    return True
+                except discord.NotFound:
+                    self.log.info(f"Previous map message {existing_message_id} not found, creating new one")
+                except Exception as e:
+                    self.log.warning(f"Failed to edit existing map message: {e}")
+
+            # Send new message - just image with buttons
+            message = await channel.send(file=map_file, view=view)
+            
+            # Update message ID in data
+            if str(guild_id) not in self.maps:
+                self.maps[str(guild_id)] = {}
+            self.maps[str(guild_id)]['message_id'] = message.id
+            await self._save_data(str(guild_id))
+            
+            return True
+            
+        except Exception as e:
+            self.log.error(f"Failed to apply cached preview as map: {e}")
+            return False
 
     async def _generate_fast_pin_preview(self, guild_id: int, preview_settings: Dict) -> Optional[BytesIO]:
         """Generate fast pin preview by reusing cached base map - ALWAYS use cache for pin-only changes."""
@@ -947,15 +1111,8 @@ class MapV2Cog(commands.Cog):
         }
 
         await self._save_data(guild_id)
-        await self._update_map(interaction.guild.id, channel.id)
+        await self._update_map(interaction.guild.id, channel.id, interaction)
         await self._update_global_overview()
-
-        await interaction.followup.send(
-            f"✅ Map created successfully in {channel.mention}!\n"
-            f"🗺️ Region: **{region.title()}**\n"
-            f"📍 Users can now add their location using the buttons under the map.",
-            ephemeral=True
-        )
 
     @app_commands.command(name="map_pin", description="Manage your location on the server map")
     async def pin_on_map_v2(self, interaction: discord.Interaction):
@@ -1002,7 +1159,7 @@ class MapV2Cog(commands.Cog):
     @app_commands.command(name="owner_clear_map_cache", description="Clear cached map images (bot owner only)")
     @app_commands.default_permissions(administrator=True)
     async def clear_cache(self, interaction: discord.Interaction):
-        if interaction.user.id != BOT_OWNER_ID:
+        if interaction.user.id != self.config.owner_id:
             await interaction.response.send_message("⛔ This command is only available to the bot owner.", ephemeral=True)
             return
             

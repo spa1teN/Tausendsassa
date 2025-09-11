@@ -1,14 +1,15 @@
 # core/feeds_config.py
 
 from discord import app_commands
+from core.config import config
 
-# Configuration constants
-POLL_INTERVAL_MINUTES = 1.0
-MAX_POST_AGE_SECONDS = 86400
-RATE_LIMIT_SECONDS = 30
-FAILURE_THRESHOLD = 3
-AUTHORIZED_USERS = [485051896655249419, 506551160354766848, 703896034820096000]
-GLOBAL_MONITOR_CHANNEL_ID = 1403336394801414234
+# Configuration constants (now using centralized config)
+POLL_INTERVAL_MINUTES = config.poll_interval_minutes
+MAX_POST_AGE_SECONDS = config.max_post_age_seconds
+RATE_LIMIT_SECONDS = config.rate_limit_seconds
+FAILURE_THRESHOLD = config.failure_threshold
+AUTHORIZED_USERS = config.authorized_users
+GLOBAL_MONITOR_CHANNEL_ID = config.global_monitor_channel_id
 
 # Predefined color choices for easier selection
 COLOR_CHOICES = [

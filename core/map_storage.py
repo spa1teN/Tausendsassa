@@ -8,34 +8,7 @@ from datetime import datetime
 from io import BytesIO
 from PIL import Image
 import discord
-from collections import OrderedDict
-
-
-class LRUCache:
-    """Simple LRU cache for base maps with size limit."""
-    
-    def __init__(self, max_size: int = 50):
-        self.max_size = max_size
-        self.cache = OrderedDict()
-    
-    def get(self, key: str) -> Optional[Image.Image]:
-        if key in self.cache:
-            # Move to end (most recently used)
-            self.cache.move_to_end(key)
-            return self.cache[key].copy()
-        return None
-    
-    def put(self, key: str, value: Image.Image):
-        if key in self.cache:
-            self.cache.move_to_end(key)
-        else:
-            if len(self.cache) >= self.max_size:
-                # Remove least recently used
-                self.cache.popitem(last=False)
-        self.cache[key] = value.copy()
-    
-    def clear(self):
-        self.cache.clear()
+from core.cache_manager import cache_manager
 
 
 class UnifiedCacheManager:
@@ -50,8 +23,8 @@ class UnifiedCacheManager:
         self.data_dir.mkdir(exist_ok=True)
         self.cache_dir.mkdir(exist_ok=True)
         
-        # In-memory LRU cache for base maps
-        self.memory_cache = LRUCache(max_size=50)
+        # Use global managed cache
+        self.memory_cache = cache_manager.memory_cache
     
     def _get_guild_cache_dir(self, guild_id: str) -> Path:
         """Get guild-specific cache directory."""
@@ -137,6 +110,35 @@ class UnifiedCacheManager:
         if cache_type == "base_map":
             # Use specialized base map key generation
             return self.generate_base_map_cache_key(guild_id, maps, params['region'], params['width'], params['height'])
+        elif cache_type == "closeup_base_map":
+            # New cache type for closeup base maps (without pins)
+            base_parts.extend([params['closeup_type'], params['closeup_name'], str(params['width']), str(params['height'])])
+            # Only include visual settings that affect the BASE MAP (not pins)
+            map_data = maps.get(guild_id, {})
+            settings = map_data.get('settings', {})
+            
+            if settings:
+                base_map_settings = {}
+                
+                # Colors affect base map
+                if 'colors' in settings:
+                    base_map_settings['colors'] = settings['colors']
+                
+                # Borders affect base map
+                if 'borders' in settings:
+                    borders = settings['borders'].copy()
+                    borders.pop('pin', None)  # Remove pin-specific settings
+                    if borders:
+                        base_map_settings['borders'] = borders
+                
+                if base_map_settings:
+                    settings_str = json.dumps(base_map_settings, sort_keys=True)
+                    settings_hash = hashlib.md5(settings_str.encode()).hexdigest()[:8]
+                    base_parts.append(settings_hash)
+                else:
+                    base_parts.append("default")
+            else:
+                base_parts.append("default")
         elif cache_type == "final_map":
             base_parts.append(params['region'])
             # Add pin hash
@@ -154,9 +156,10 @@ class UnifiedCacheManager:
             pin_hash = hashlib.md5(pin_str.encode()).hexdigest()[:8]
             base_parts.append(pin_hash)
         
-        # Add settings hash
-        settings_hash = self.generate_settings_hash(guild_id, maps)
-        base_parts.append(settings_hash)
+        # Add settings hash for non-base-map types
+        if cache_type not in ["base_map", "closeup_base_map"]:
+            settings_hash = self.generate_settings_hash(guild_id, maps)
+            base_parts.append(settings_hash)
         
         return "_".join(base_parts)
     
@@ -164,9 +167,9 @@ class UnifiedCacheManager:
         """Get cached item of any type."""
         cache_key = self.generate_cache_key(cache_type, guild_id, maps, **params)
         
-        # Check memory cache for base maps
-        if cache_type == "base_map":
-            cached_image = self.memory_cache.get(cache_key)
+        # Check memory cache for base maps (including closeup base maps)
+        if cache_type in ["base_map", "closeup_base_map"]:
+            cached_image = await self.memory_cache.get(cache_key)
             if cached_image:
                 self.log.info(f"Using in-memory cached {cache_type} for guild {guild_id}")
                 return cached_image
@@ -177,10 +180,10 @@ class UnifiedCacheManager:
         
         if cache_file.exists():
             try:
-                if cache_type == "base_map":
+                if cache_type in ["base_map", "closeup_base_map"]:
                     image = Image.open(cache_file)
                     # Store in memory cache too
-                    self.memory_cache.put(cache_key, image)
+                    await self.memory_cache.set(cache_key, image)
                     self.log.info(f"Using disk cached {cache_type} for guild {guild_id} from {cache_location}")
                     return image.copy()
                 elif cache_type == "final_map":
@@ -206,9 +209,9 @@ class UnifiedCacheManager:
         cache_file = cache_dir / f"{cache_key}.png"
         
         try:
-            if cache_type == "base_map" and isinstance(item, Image.Image):
+            if cache_type in ["base_map", "closeup_base_map"] and isinstance(item, Image.Image):
                 # Store in memory
-                self.memory_cache.put(cache_key, item)
+                await self.memory_cache.set(cache_key, item)
                 # Store on disk
                 item.save(cache_file, 'PNG', optimize=True)
             elif isinstance(item, BytesIO):
@@ -224,7 +227,7 @@ class UnifiedCacheManager:
     async def invalidate_cache(self, guild_id: str, cache_types: Optional[list] = None):
         """Invalidate specific cache types for a guild - PRESERVES default base maps."""
         if cache_types is None:
-            cache_types = ["base_map", "final_map", "closeup"]
+            cache_types = ["base_map", "final_map", "closeup", "closeup_base_map"]
         
         deleted_count = 0
         
@@ -239,8 +242,22 @@ class UnifiedCacheManager:
                     self.log.info(f"Removed custom base map cache file: {cache_file.name}")
             
             # Clear memory cache for base maps (affects both custom and default)
-            self.memory_cache.clear()
+            await self.memory_cache.clear()
             self.log.info("Cleared base map memory cache")
+
+        # Remove closeup base maps when requested (preserve default ones)
+        if "closeup_base_map" in cache_types:
+            # Remove from guild cache only (custom closeup base maps)
+            guild_cache_dir = self.data_dir / guild_id
+            if guild_cache_dir.exists():
+                for cache_file in guild_cache_dir.glob("closeup_base_map_*.png"):
+                    cache_file.unlink()
+                    deleted_count += 1
+                    self.log.info(f"Removed custom closeup base map cache file: {cache_file.name}")
+            
+            # Clear memory cache for closeup base maps too
+            await self.memory_cache.clear()
+            self.log.info("Cleared closeup base map memory cache")
         
         # Remove final maps from both shared and guild cache
         if "final_map" in cache_types:
@@ -291,14 +308,32 @@ class UnifiedCacheManager:
                 self.log.info(f"Removed guild cache file: {cache_file.name}")
         
         # Clear memory cache
-        self.memory_cache.clear()
+        await self.memory_cache.clear()
         self.log.info("Cleared all in-memory cache")
         
         self.log.info(f"Complete cache invalidation for guild {guild_id} deletion ({deleted_count} files removed)")
     
+    async def invalidate_all_png_files_for_settings_change(self, guild_id: str):
+        """Radical cleanup: remove ALL PNG files for a guild when settings are saved."""
+        deleted_count = 0
+        
+        # Remove ALL PNG files from guild cache
+        guild_cache_dir = self.data_dir / guild_id
+        if guild_cache_dir.exists():
+            for cache_file in guild_cache_dir.glob("*.png"):
+                cache_file.unlink()
+                deleted_count += 1
+                self.log.info(f"Removed guild PNG file: {cache_file.name}")
+        
+        # Clear memory cache to ensure no stale references
+        await self.memory_cache.clear()
+        self.log.info("Cleared all in-memory cache")
+        
+        self.log.info(f"Complete PNG cleanup for guild {guild_id} settings change ({deleted_count} files removed)")
+    
     async def clear_all_cache(self) -> int:
         """Clear all cached items."""
-        self.memory_cache.clear()
+        await self.memory_cache.clear()
         deleted_count = 0
         
         # Clear shared cache
@@ -336,8 +371,8 @@ class MapStorage:
         # Unified cache manager
         self.cache = UnifiedCacheManager(data_dir, cache_dir, logger)
         
-        # Legacy property for backwards compatibility
-        self.base_map_cache = self.cache.memory_cache.cache
+        # Legacy property for backwards compatibility - removed as it's no longer needed
+        # The new cache manager handles this internally
 
     def load_all_data(self) -> Dict:
         """Load all guild map data from individual files."""
@@ -417,7 +452,7 @@ class MapStorage:
         cache_key = self.cache.generate_base_map_cache_key(guild_id, maps, region, width, height)
         
         # Check memory cache
-        cached_image = self.cache.memory_cache.get(cache_key)
+        cached_image = await self.cache.memory_cache.get(cache_key)
         if cached_image:
             self.log.info(f"Using in-memory cached base map for guild {guild_id}")
             return cached_image
@@ -430,7 +465,7 @@ class MapStorage:
             try:
                 image = Image.open(cache_file)
                 # Store in memory cache too
-                self.cache.memory_cache.put(cache_key, image)
+                await self.cache.memory_cache.set(cache_key, image)
                 self.log.info(f"Using disk cached base map for guild {guild_id} from {cache_location}")
                 return image.copy()
             except Exception as e:
@@ -448,7 +483,7 @@ class MapStorage:
             
             try:
                 # Store in memory
-                self.cache.memory_cache.put(cache_key, image)
+                await self.cache.memory_cache.set(cache_key, image)
                 # Store on disk
                 image.save(cache_file, 'PNG', optimize=True)
                 self.log.info(f"Cached base map for guild {guild_id} in {cache_location}")
@@ -475,6 +510,18 @@ class MapStorage:
         """Cache closeup map image."""
         await self.cache.cache_item("closeup", str(guild_id), maps, image_buffer, closeup_type=closeup_type, closeup_name=closeup_name)
 
+    async def get_cached_closeup_base_map(self, guild_id: int, maps: Dict, closeup_type: str, closeup_name: str, width: int, height: int) -> Optional[Image.Image]:
+        """Get cached closeup base map if available."""
+        return await self.cache.get_cached_item("closeup_base_map", str(guild_id), maps, 
+                                               closeup_type=closeup_type, closeup_name=closeup_name, 
+                                               width=width, height=height)
+
+    async def cache_closeup_base_map(self, guild_id: int, maps: Dict, closeup_type: str, closeup_name: str, width: int, height: int, image: Image.Image):
+        """Cache closeup base map image."""
+        await self.cache.cache_item("closeup_base_map", str(guild_id), maps, image,
+                                   closeup_type=closeup_type, closeup_name=closeup_name,
+                                   width=width, height=height)
+
     async def invalidate_final_map_cache_only(self, guild_id: int):
         """Invalidate only final map cache, preserve base maps for efficiency - IMPROVED targeting."""
         guild_id_str = str(guild_id)
@@ -498,7 +545,7 @@ class MapStorage:
         self.log.info(f"Invalidated final map cache for guild {guild_id} ({deleted_count} files removed) - preserved base maps")
 
     async def invalidate_base_map_cache_only(self, guild_id: int):
-        """Invalidate base map cache when visual settings change - ONLY custom base maps."""
+        """Invalidate base map cache when visual settings change - ONLY custom base maps and closeup base maps."""
         guild_id_str = str(guild_id)
         deleted_count = 0
         
@@ -509,9 +556,15 @@ class MapStorage:
                 cache_file.unlink()
                 deleted_count += 1
                 self.log.info(f"Removed custom base map cache file: {cache_file.name}")
+            
+            # Also remove closeup base maps since they are affected by color changes
+            for cache_file in guild_cache_dir.glob("closeup_base_map_*.png"):
+                cache_file.unlink()
+                deleted_count += 1
+                self.log.info(f"Removed custom closeup base map cache file: {cache_file.name}")
         
         # Clear memory cache for base maps (affects both custom and default)
-        self.cache.memory_cache.clear()
+        await self.cache.memory_cache.clear()
         self.log.info("Cleared base map memory cache")
         
         self.log.info(f"Invalidated custom base map cache for guild {guild_id} ({deleted_count} files removed) - PRESERVED shared default base maps")
@@ -519,14 +572,14 @@ class MapStorage:
     # IMPROVED cache invalidation methods
     async def invalidate_map_cache(self, guild_id: int):
         """Invalidate cached maps for a guild - PRESERVES default base maps."""
-        await self.cache.invalidate_cache(str(guild_id), ["base_map", "final_map", "closeup"])
+        await self.cache.invalidate_cache(str(guild_id), ["base_map", "final_map", "closeup", "closeup_base_map"])
         
     async def admin_clear_cache(self, guild_id: int):
         """Admin-triggered cache clear - removes CUSTOM base maps only, preserves defaults.""" 
         guild_id_str = str(guild_id)
         deleted_count = 0
         
-        # Remove ALL cache from guild directory (custom base maps, final maps, closeups)
+        # Remove ALL cache from guild directory (custom base maps, closeup base maps, final maps, closeups)
         guild_cache_dir = self.data_dir / guild_id_str
         if guild_cache_dir.exists():
             for cache_file in guild_cache_dir.glob("*.png"):
@@ -545,8 +598,8 @@ class MapStorage:
             deleted_count += 1
             self.log.info(f"Admin cleared shared closeup: {cache_file.name}")
         
-        # Clear memory cache
-        self.cache.memory_cache.clear()
+        # Clear memory cache (affects all base maps including default and closeup base maps)
+        await self.cache.memory_cache.clear()
         self.log.info("Admin cleared memory cache")
         
         self.log.info(f"Admin cleared cache for guild {guild_id} ({deleted_count} files removed) - PRESERVED shared default base maps")

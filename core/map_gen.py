@@ -304,12 +304,16 @@ class MapGenerator:
     async def render_base_map(self, minx: float, miny: float, maxx: float, maxy: float,
                             width: int, height: int, map_type: str = "default",
                             guild_id: str = None, maps: Dict = None, zoom_level: str = "normal", 
-                            region: str = None) -> Tuple[Image.Image, Callable]:
+                            region: str = None, progress_callback=None) -> Tuple[Image.Image, Callable]:
         """Render base map with land, water, rivers, and borders.
         
         Updated to use geographic scale-aware line width calculation.
         """
         self.log.info(f"Rendering base map: {map_type} ({width}x{height}) with geographic scaling")
+        
+        # Report initial progress
+        if progress_callback:
+            await progress_callback("Initializing map rendering...", 5)
         
         try:
             if guild_id and maps:
@@ -330,20 +334,50 @@ class MapGenerator:
             
             required_files = ['land', 'lakes', 'rivers', 'world', 'states']
             
+            if progress_callback:
+                await progress_callback("Loading geographic data...", 15)
+            
             base_path = self.data_dir.parent / "data"
             shapefiles = self.renderer.load_shapefiles(base_path, required_files)
             
             bbox = box(minx, miny, maxx, maxy)
             projection_func = self.create_projection_function(minx, miny, maxx, maxy, width, height)
             
+            if progress_callback:
+                await progress_callback("Creating base canvas...", 25)
+            
             img = Image.new("RGB", (width, height), water_color)
             draw = ImageDraw.Draw(img)
             
             if shapefiles['land'] is not None:
+                if progress_callback:
+                    await progress_callback("Drawing land masses...", 40)
                 self.renderer.draw_polygons(draw, shapefiles['land'].geometry, projection_func, bbox, land_color)
+                
+                # Send intermediate image after land drawing
+                if progress_callback:
+                    try:
+                        intermediate_img = img.copy()
+                        img_buffer = BytesIO()
+                        intermediate_img.save(img_buffer, format='PNG', optimize=True)
+                        await progress_callback("Land masses drawn, adding water bodies...", 45, img_buffer)
+                    except Exception as e:
+                        await progress_callback("Land masses drawn, adding water bodies...", 45)
             
             if shapefiles['lakes'] is not None:
+                if progress_callback:
+                    await progress_callback("Drawing lakes and water bodies...", 55)
                 self.renderer.draw_polygons(draw, shapefiles['lakes'].geometry, projection_func, bbox, water_color)
+                
+                # Send intermediate image after lakes drawing
+                if progress_callback:
+                    try:
+                        intermediate_img = img.copy()
+                        img_buffer = BytesIO()
+                        intermediate_img.save(img_buffer, format='PNG', optimize=True)
+                        await progress_callback("Water bodies drawn, adding borders...", 60, img_buffer)
+                    except Exception as e:
+                        await progress_callback("Water bodies drawn, adding borders...", 60)
             
             # Calculate line widths with geographic scaling
             custom_bounds = (minx, miny, maxx, maxy) if not region else None
@@ -359,15 +393,34 @@ class MapGenerator:
                 self.log.info(f"No region specified, using custom bounds for line width calculation")
             
             if map_type != "world" and shapefiles.get('rivers') is not None:
+                if progress_callback:
+                    await progress_callback("Drawing rivers and waterways...", 70)
                 self.renderer.draw_lines(draw, shapefiles['rivers'].geometry, projection_func, bbox, river_color, river_width, "rivers")
             
             # Draw state/province borders only for non-world maps
             if map_type not in ["world", "europe"] and shapefiles.get('states') is not None:
+                if progress_callback:
+                    await progress_callback("Drawing state/province borders...", 85)
                 self.renderer.draw_lines(draw, shapefiles['states'].geometry, projection_func, bbox, state_color, state_width, "states")
             
             # Draw country borders (admin_0 = international boundaries)
             if shapefiles.get('world') is not None:
+                if progress_callback:
+                    await progress_callback("Drawing country borders...", 95)
                 self.renderer.draw_lines(draw, shapefiles['world'].geometry, projection_func, bbox, country_color, country_width, "countries")
+                
+                # Send final base map image before completion
+                if progress_callback:
+                    try:
+                        intermediate_img = img.copy()
+                        img_buffer = BytesIO()
+                        intermediate_img.save(img_buffer, format='PNG', optimize=True)
+                        await progress_callback("Base map complete, finalizing...", 98, img_buffer)
+                    except Exception as e:
+                        await progress_callback("Base map complete, finalizing...", 98)
+            
+            if progress_callback:
+                await progress_callback("Finalizing map rendering...", 100)
             
             return img, projection_func
             
@@ -378,7 +431,7 @@ class MapGenerator:
             projection_func = self.create_projection_function(minx, miny, maxx, maxy, width, height)
             return img, projection_func
 
-    async def render_geopandas_map(self, region: str, width: int, height: int, guild_id: str = None, maps: Dict = None) -> Tuple[Image.Image, Callable]:
+    async def render_geopandas_map(self, region: str, width: int, height: int, guild_id: str = None, maps: Dict = None, progress_callback=None) -> Tuple[Image.Image, Callable]:
         """Render map for predefined regions with geographic scaling."""
         try:
             config = self.map_configs[region]
@@ -401,17 +454,17 @@ class MapGenerator:
             map_type = "world" if region == "world" else "europe" if region == "europe" else "default"
             
             # Pass region to render_base_map for geographic scaling
-            return await self.render_base_map(minx, miny, maxx, maxy, width, height, map_type, guild_id, maps, region=region)
+            return await self.render_base_map(minx, miny, maxx, maxy, width, height, map_type, guild_id, maps, region=region, progress_callback=progress_callback)
             
         except Exception as e:
             self.log.error(f"Failed to render map for {region}: {e}")
             return await self.render_base_map(0, 0, 1, 1, width, height, "default", guild_id, maps)
 
     async def render_geopandas_map_bounds(self, minx: float, miny: float, maxx: float, maxy: float, 
-                                        width: int, height: int, guild_id: str = None, maps: Dict = None) -> Tuple[Image.Image, Callable]:
+                                        width: int, height: int, guild_id: str = None, maps: Dict = None, progress_callback=None) -> Tuple[Image.Image, Callable]:
         """Render map for custom bounds with geographic scaling."""
         # Pass custom bounds for geographic scale calculation
-        return await self.render_base_map(minx, miny, maxx, maxy, width, height, "proximity", guild_id, maps, "proximity", custom_bounds=(minx, miny, maxx, maxy))
+        return await self.render_base_map(minx, miny, maxx, maxy, width, height, "proximity", guild_id, maps, "proximity", region=None, progress_callback=progress_callback)
 
     def group_overlapping_pins(self, pins: Dict, projection_func: Callable, base_pin_size: int) -> List[Dict]:
         """Group overlapping pins together."""

@@ -27,8 +27,8 @@ class FeedListView(discord.ui.View):
             return
         
         view = FeedRemoveView(feeds, self.cog, self.guild_id)
-        await interaction.response.send_message(
-            "Select a feed to remove:", view=view, ephemeral=True
+        await interaction.response.edit_message(
+            content="Select a feed to remove:", view=view
         )
 
     @discord.ui.button(label="Configure Feed", style=discord.ButtonStyle.secondary, emoji="⚙️")
@@ -48,8 +48,8 @@ class FeedListView(discord.ui.View):
             feed["channel_name"] = channel.name if channel else "unknown"
         
         view = FeedConfigureView(feeds, self.cog, self.guild_id)
-        await interaction.response.send_message(
-            "Select a feed to configure:", view=view, ephemeral=True
+        await interaction.response.edit_message(
+            content="Select a feed to configure:", view=view
         )
 
 class FeedRemoveView(discord.ui.View):
@@ -194,9 +194,9 @@ class FeedConfigModal(discord.ui.Modal):
         
         current_color = feed_config.get("embed_template", {}).get("color", 0x3498DB)
         self.color_input = discord.ui.TextInput(
-            label="Color (hex without #, e.g. 3498DB)",
+            label="Color (name/RGB/hex, e.g. 'orange')",
             default=f"{current_color:06X}",
-            max_length=6,
+            max_length=50,
             required=True
         )
         
@@ -216,12 +216,21 @@ class FeedConfigModal(discord.ui.Modal):
         self.add_item(self.color_input)
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Validate color
-        try:
-            color_hex = int(self.color_input.value.lstrip("#"), 16)
-        except ValueError:
+        # Import color utility
+        from core.colors import get_discord_embed_color
+        
+        # Validate color using color utility
+        color_hex = get_discord_embed_color(self.color_input.value)
+        if color_hex is None:
+            # List some available colors for help
+            from core.colors import get_available_colors
+            available = ', '.join(get_available_colors()[:10])  # Show first 10
             await interaction.response.send_message(
-                f"❌ Invalid color: {self.color_input.value}", ephemeral=True
+                f"❌ Invalid color: `{self.color_input.value}`\n\n"
+                f"**Examples:**\n"
+                f"• Color names: `{available}`, etc.\n"
+                f"• RGB values: `255,165,0` (orange)\n"
+                f"• HEX values: `#FF6600` or `FF6600`", ephemeral=True
             )
             return
         

@@ -2,7 +2,7 @@
 import os
 import yaml
 import logging
-from logging.handlers import RotatingFileHandler
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 import aiohttp
 import asyncio
 from datetime import datetime
@@ -11,11 +11,10 @@ from typing import Dict, Optional
 
 import discord
 from discord.ext import commands
-
-GUILD_ID = 1398409754967015647
-OWNER_ID = 485051896655249419
-GUILD    = discord.Object(id=GUILD_ID) if GUILD_ID else None
-LOG_WEBHOOK_URL = "https://discord.com/api/webhooks/1402497318208409680/xBavteSxxo1xzwkwqvHrja9bl3gh4zwKMKsm48dH9mGG6aBuDh7v0EDDajQOtnCwX1vt"
+from core.config import config
+from core.cache_manager import cache_manager
+from core.http_client import http_client
+from core.validation import run_full_validation, log_validation_results
 
 # ─── Webhook Log Handler ────────────────────────────────────────────────────
 class WebhookLogHandler(logging.Handler):
@@ -38,8 +37,8 @@ class WebhookLogHandler(logging.Handler):
     
     async def start_webhook_worker(self):
         """Start the webhook worker task"""
-        if not self.session:
-            self.session = aiohttp.ClientSession()
+        # Use shared HTTP client instead of creating new session
+        self.session = await http_client.get_session()
         
         if not self.task or self.task.done():
             self.task = asyncio.create_task(self._webhook_worker())
@@ -53,8 +52,8 @@ class WebhookLogHandler(logging.Handler):
             except asyncio.CancelledError:
                 pass
         
-        if self.session and not self.session.closed:
-            await self.session.close()
+        # Don't close shared HTTP session here - it's managed globally
+        self.session = None
     
     def emit(self, record):
         """Called when a log record is emitted"""
@@ -91,7 +90,7 @@ class WebhookLogHandler(logging.Handler):
         """Send a single log record as a webhook embed"""
         try:
             if not self.session or self.session.closed:
-                self.session = aiohttp.ClientSession()
+                self.session = await http_client.get_session()
             
             message = self.format(record)
             
@@ -161,7 +160,7 @@ logging.basicConfig(
     datefmt=DATE_FORMAT,
     handlers=[
         logging.StreamHandler(),
-        RotatingFileHandler("logs/tausendsassa.log", maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+        TimedRotatingFileHandler("logs/tausendsassa.log", when="midnight", interval=1, backupCount=1, encoding="utf-8")
     ]
 )
 
@@ -181,11 +180,11 @@ class Tausendsassa(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         
         # Webhook configuration
-        self.webhook_url = LOG_WEBHOOK_URL
+        self.webhook_url = config.log_webhook_url
         self.webhook_handler = None
         self.cog_loggers: Dict[str, logging.Logger] = {}
 
-        self.owner_id = OWNER_ID
+        self.owner_id = config.owner_id
         
         # Setup webhook logging if URL is provided
         if self.webhook_url:
@@ -222,11 +221,12 @@ class Tausendsassa(commands.Bot):
                 console_handler.setFormatter(formatter)
                 logger.addHandler(console_handler)
                 
-                # File handler
-                file_handler = RotatingFileHandler(
+                # File handler with 24-hour rotation
+                file_handler = TimedRotatingFileHandler(
                     f"logs/{cog_name}.log", 
-                    maxBytes=5*1024*1024, 
-                    backupCount=2, 
+                    when="midnight", 
+                    interval=1, 
+                    backupCount=1, 
                     encoding="utf-8"
                 )
                 file_handler.setLevel(logging.INFO)
@@ -243,6 +243,10 @@ class Tausendsassa(commands.Bot):
         return self.cog_loggers[logger_name]
 
     async def setup_hook(self):
+        # Start cache management
+        await cache_manager.start_cleanup_task()
+        log.info("✅ Cache manager started")
+        
         # Start webhook worker if handler exists
         if self.webhook_handler:
             await self.webhook_handler.start_webhook_worker()
@@ -292,6 +296,14 @@ class Tausendsassa(commands.Bot):
         """Cleanup when bot is shutting down"""
         log.info("🔄 Bot is shutting down...")
         
+        # Stop cache manager
+        await cache_manager.stop_cleanup_task()
+        log.info("✅ Cache manager stopped")
+        
+        # Stop HTTP client
+        await http_client.close()
+        log.info("✅ HTTP client closed")
+        
         # Stop webhook handler
         if self.webhook_handler:
             await self.webhook_handler.stop_webhook_worker()
@@ -301,22 +313,33 @@ class Tausendsassa(commands.Bot):
 
 # ─── Main ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    token = os.getenv("DISCORD_TOKEN")
-    if not token:
-        log.error("DISCORD_TOKEN environment variable not set")
-        exit(1)
-    
-    # Check for webhook URL
-    webhook_url = LOG_WEBHOOK_URL
-    if webhook_url:
-        log.info("✅ Webhook URL found - live logging enabled")
-    else:
-        log.info("ℹ️ No webhook URL provided - using file/console logging only")
-    
-    bot = Tausendsassa()
-    
     try:
-        bot.run(token)
+        # Run comprehensive validation before starting
+        log.info("🔍 Running configuration validation...")
+        validation_results = run_full_validation()
+        log_validation_results(validation_results)
+        
+        if not validation_results["valid"]:
+            log.error("❌ Validation failed. Please fix the issues above and restart.")
+            exit(1)
+        
+        # Log configuration for debugging
+        config.log_configuration()
+        
+        # Check for webhook URL
+        webhook_url = config.log_webhook_url
+        if webhook_url:
+            log.info("✅ Webhook URL found - live logging enabled")
+        else:
+            log.info("ℹ️ No webhook URL provided - using file/console logging only")
+        
+        log.info("🚀 Starting Tausendsassa Bot...")
+        bot = Tausendsassa()
+        
+        bot.run(config.discord_token)
+    except ValueError as e:
+        log.error(f"Configuration error: {e}")
+        exit(1)
     except KeyboardInterrupt:
         log.info("Bot stopped by user")
     except Exception as e:

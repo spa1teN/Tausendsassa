@@ -11,6 +11,7 @@
 ### **Miscellaneous**
 > - `/ping`: test bot responsiveness
 > - `/when_is_trump_gone`: liberation day
+> - `/timezone`: lets you specify a timezone for your server
 
 
 -# *note: all commands starting in `/owner_...` can only be used by the bot-owner!*

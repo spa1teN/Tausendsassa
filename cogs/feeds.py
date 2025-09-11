@@ -18,6 +18,12 @@ from core.feeds_config import (
     is_bluesky_feed_url, create_bluesky_embed_template, create_standard_embed_template
 )
 from core.feeds_views import FeedRemoveView, FeedConfigureView
+from core.retry_handler import retry_handler
+from core.config import config
+from core.validation import ConfigValidator
+
+# Import timezone utilities
+from core.timezone_util import get_current_time, get_current_timestamp
 
 class FeedCog(commands.Cog):
     """Cog for polling RSS feeds, posting embeds, buttons, health monitoring
@@ -43,6 +49,9 @@ class FeedCog(commands.Cog):
         self.monitor_message_file = self.config_base / "monitor_message.json"
         self.monitor_message_id: Optional[int] = None
         self._load_monitor_message_id()
+        
+        # Start retry handler
+        retry_handler.start_cleanup_task()
 
     # Config Management
     def _get_guild_config_path(self, guild_id: int) -> Path:
@@ -251,26 +260,50 @@ class FeedCog(commands.Cog):
     async def _poll_single_feed(self, guild_id: int, feed_cfg: dict, guild_stats: dict, monitor_channel_id: Optional[int]) -> List[dict]:
         """Poll a single feed and return list of embeds to post"""
         name = feed_cfg.get("name")
+        feed_url = feed_cfg.get("feed_url", "")
+        operation_id = f"feed_poll_{guild_id}_{name}"
+        
         if name not in guild_stats:
             guild_stats[name] = {"last_run": None, "last_success": None, "failures": 0}
         
         st = guild_stats[name]
         st["last_run"] = datetime.utcnow()
 
-        try:
-            embeds = await asyncio.wait_for(
+        async def poll_operation():
+            """Wrapped polling operation for retry handler"""
+            return await asyncio.wait_for(
                 asyncio.to_thread(rss.poll, feed_cfg, guild_id),
-                timeout=RATE_LIMIT_SECONDS
+                timeout=config.http_timeout
+            )
+
+        try:
+            # Use retry handler for robust polling
+            embeds = await retry_handler.execute_with_retry(
+                operation_id,
+                poll_operation
             )
             
+            # Success - update stats
             st["failures"] = 0
             st["last_success"] = datetime.utcnow()
+            retry_handler.record_success(operation_id)
             return embeds or []
             
         except Exception as e:
+            # Update local stats for monitoring
             st["failures"] += 1
-            await self._maybe_alert(guild_id, name, st["failures"], monitor_channel_id)
-            self.log.exception("❌ Error polling feed %s in guild %s: %s", name, guild_id, e)
+            retry_handler.record_failure(operation_id, e)
+            
+            # Get failure count from retry handler for more accurate tracking
+            consecutive_failures = retry_handler.get_failure_count(operation_id)
+            
+            # Send alert if threshold exceeded
+            await self._maybe_alert(guild_id, name, consecutive_failures, monitor_channel_id)
+            
+            self.log.error(
+                f"❌ Error polling feed {name} in guild {guild_id} (attempt {consecutive_failures}): {e}",
+                exc_info=True if consecutive_failures >= FAILURE_THRESHOLD else False
+            )
             return []
 
     @tasks.loop(minutes=POLL_INTERVAL_MINUTES, reconnect=True)
@@ -465,7 +498,7 @@ class FeedCog(commands.Cog):
         embed = discord.Embed(
             title="🌐 Global RSS Feed Monitor",
             color=0x00FF00,
-            timestamp=datetime.utcnow()
+            timestamp=get_current_time()
         )
         
         total_feeds = 0

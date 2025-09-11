@@ -11,6 +11,9 @@ from pathlib import Path
 import logging
 import traceback
 
+# Import German timezone utilities
+from core.timezone_util import get_german_time, get_german_timestamp, format_german_time
+
 class BackupTask(commands.Cog):
     """Automated config backup system"""
     
@@ -83,7 +86,7 @@ class BackupTask(commands.Cog):
         """Create a zip backup of the config directory"""
         try:
             # Generate timestamp for filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = format_german_time(format_str="%Y%m%d_%H%M%S")
             backup_filename = f"config_backup_{timestamp}.zip"
             backup_file_path = self.backup_path / backup_filename
             
@@ -97,8 +100,18 @@ class BackupTask(commands.Cog):
                 for root, dirs, files in os.walk(self.config_path):
                     for file in files:
                         file_path = Path(root) / file
+                        
                         # Skip hidden files and non-config files
-                        if not file.startswith('.') and file.endswith(('.py', '.json', '.yaml', '.yml', '.txt', '.md')):
+                        if file.startswith('.'):
+                            continue
+                            
+                        # Skip map cache images (they can be re-rendered)
+                        if file.endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+                            self.logger.debug(f"Skipping map cache image: {file_path}")
+                            continue
+                        
+                        # Only include config files
+                        if file.endswith(('.py', '.json', '.yaml', '.yml', '.txt', '.md')):
                             # Calculate relative path for zip
                             relative_path = file_path.relative_to(self.config_path.parent)
                             zipf.write(file_path, relative_path)
@@ -143,7 +156,7 @@ class BackupTask(commands.Cog):
                 "title": "📦 Daily Config Backup",
                 "description": f"Automated daily backup completed successfully",
                 "color": 0x00ff00,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": get_german_time().isoformat(),
                 "fields": [
                     {
                         "name": "📁 Filename",
@@ -157,7 +170,7 @@ class BackupTask(commands.Cog):
                     },
                     {
                         "name": "🕐 Created",
-                        "value": f"<t:{int(datetime.now().timestamp())}:F>",
+                        "value": f"<t:{get_german_timestamp()}:F>",
                         "inline": True
                     }
                 ],
@@ -211,7 +224,7 @@ class BackupTask(commands.Cog):
                 "title": title,
                 "description": description,
                 "color": color,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": get_german_time().isoformat(),
                 "footer": {
                     "text": "Tausendsassa Backup System"
                 }
@@ -339,7 +352,7 @@ class BackupTask(commands.Cog):
             embed = discord.Embed(
                 title="📊 Backup System Status",
                 color=0x0099ff,
-                timestamp=datetime.utcnow()
+                timestamp=get_german_time()
             )
             
             # Task info

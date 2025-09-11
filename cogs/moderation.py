@@ -8,6 +8,9 @@ from typing import Optional
 import aiohttp
 import asyncio
 
+# Import timezone utilities
+from core.timezone_util import get_current_time, get_current_timestamp, save_guild_timezone, get_guild_timezone
+
 class ModerationCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -58,7 +61,7 @@ class ModerationCog(commands.Cog):
         embed = discord.Embed(
             title="🛡️ Moderation Dashboard",
             color=0x5865f2,
-            timestamp=datetime.now(timezone.utc)
+            timestamp=get_current_time(guild_id)
         )
         
         # Member logging configuration
@@ -108,7 +111,7 @@ class ModerationCog(commands.Cog):
         embed = discord.Embed(
             title=f"{member.display_name} joined the server",
             color=0x00ff00,  # Green for joins
-            timestamp=datetime.now(timezone.utc)
+            timestamp=get_current_time(member.guild.id)
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         
@@ -140,7 +143,7 @@ class ModerationCog(commands.Cog):
         embed = discord.Embed(
             title=f"{member.display_name} left the server",
             color=0xff0000,  # Red for leaves
-            timestamp=datetime.now(timezone.utc)
+            timestamp=get_current_time(member.guild.id)
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         
@@ -151,12 +154,12 @@ class ModerationCog(commands.Cog):
         
         return embed
 
-    def create_ban_embed(self, user: discord.User, moderator: Optional[discord.Member], reason: Optional[str]) -> discord.Embed:
+    def create_ban_embed(self, user: discord.User, moderator: Optional[discord.Member], reason: Optional[str], guild: discord.Guild) -> discord.Embed:
         """Create embed for ban event"""
         embed = discord.Embed(
             title=f"{user.display_name} was banned",
             color=0x8b0000,  # Dark red for bans
-            timestamp=datetime.now(timezone.utc)
+            timestamp=get_current_time(guild.id)
         )
         embed.set_thumbnail(url=user.display_avatar.url)
         
@@ -170,12 +173,12 @@ class ModerationCog(commands.Cog):
         
         return embed
 
-    def create_kick_embed(self, user: discord.User, moderator: Optional[discord.Member], reason: Optional[str]) -> discord.Embed:
+    def create_kick_embed(self, user: discord.User, moderator: Optional[discord.Member], reason: Optional[str], guild: discord.Guild) -> discord.Embed:
         """Create embed for kick event"""
         embed = discord.Embed(
             title=f"{user.display_name} was kicked",
             color=0xff4500,  # Orange red for kicks
-            timestamp=datetime.now(timezone.utc)
+            timestamp=get_current_time(guild.id)
         )
         embed.set_thumbnail(url=user.display_avatar.url)
         
@@ -193,7 +196,7 @@ class ModerationCog(commands.Cog):
         embed = discord.Embed(
             title=f"{member.display_name} was timed out",
             color=0xffa500,  # Orange for timeouts
-            timestamp=datetime.now(timezone.utc)
+            timestamp=get_current_time(member.guild.id)
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         
@@ -207,12 +210,12 @@ class ModerationCog(commands.Cog):
         
         return embed
 
-    def create_unban_embed(self, user: discord.User, moderator: Optional[discord.Member]) -> discord.Embed:
+    def create_unban_embed(self, user: discord.User, moderator: Optional[discord.Member], guild: discord.Guild) -> discord.Embed:
         """Create embed for unban event"""
         embed = discord.Embed(
             title=f"{user.display_name} was unbanned",
             color=0x90ee90,  # Light green for unbans
-            timestamp=datetime.now(timezone.utc)
+            timestamp=get_current_time(guild.id)
         )
         embed.set_thumbnail(url=user.display_avatar.url)
         
@@ -269,7 +272,7 @@ class ModerationCog(commands.Cog):
                         # Add to banned/kicked set and send kick embed
                         self.recently_banned_kicked.add(user_id)
                         
-                        embed = self.create_kick_embed(entry.target, entry.user, entry.reason)
+                        embed = self.create_kick_embed(entry.target, entry.user, entry.reason, guild)
                         await self.send_log_message(guild.id, embed)
                         return True
         except discord.Forbidden:
@@ -351,7 +354,7 @@ class ModerationCog(commands.Cog):
         except discord.Forbidden:
             pass
         
-        embed = self.create_ban_embed(user, moderator, reason)
+        embed = self.create_ban_embed(user, moderator, reason, guild)
         await self.send_log_message(guild.id, embed)
 
     @commands.Cog.listener()
@@ -367,7 +370,7 @@ class ModerationCog(commands.Cog):
         except discord.Forbidden:
             pass
         
-        embed = self.create_unban_embed(user, moderator)
+        embed = self.create_unban_embed(user, moderator, guild)
         await self.send_log_message(guild.id, embed)
 
     @commands.Cog.listener()
@@ -441,7 +444,7 @@ class ModerationCog(commands.Cog):
                 title="🧹 Messages Cleared",
                 description=f"Successfully deleted {deleted_count} message{'s' if deleted_count != 1 else ''} from {channel.mention}",
                 color=0x00ff00,
-                timestamp=datetime.now(timezone.utc)
+                timestamp=get_current_time(interaction.guild.id)
             )
             embed.set_footer(text=f"Cleared by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
             
@@ -454,6 +457,49 @@ class ModerationCog(commands.Cog):
                 await interaction.followup.send("❌ Cannot delete messages older than 14 days. Try with a smaller number.", ephemeral=True)
             else:
                 await interaction.followup.send("❌ An error occurred while deleting messages.", ephemeral=True)
+
+    @app_commands.command(name="timezone", description="Set the timezone for this server's embeds")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(timezone="Timezone name (e.g., 'Europe/Berlin', 'America/New_York', 'UTC')")
+    async def set_timezone(self, interaction: discord.Interaction, timezone: str):
+        """Set guild-specific timezone for embed timestamps"""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
+            return
+        
+        # Import here to avoid circular imports
+        import pytz
+        
+        # Validate timezone
+        try:
+            pytz.timezone(timezone)
+        except pytz.exceptions.UnknownTimeZoneError:
+            await interaction.response.send_message(
+                f"❌ Unknown timezone: `{timezone}`\n\n"
+                "Common timezones:\n"
+                "• `Europe/Berlin` (Germany)\n"
+                "• `America/New_York` (US Eastern)\n"
+                "• `America/Los_Angeles` (US Pacific)\n"
+                "• `Asia/Tokyo` (Japan)\n"
+                "• `UTC` (Coordinated Universal Time)\n\n"
+                "See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones",
+                ephemeral=True
+            )
+            return
+        
+        # Save timezone configuration
+        if save_guild_timezone(interaction.guild.id, timezone):
+            embed = discord.Embed(
+                title="⏰ Timezone Updated",
+                description=f"Server timezone has been set to: `{timezone}`\n\nAll embed timestamps will now use this timezone.",
+                color=0x00ff00,
+                timestamp=get_current_time(interaction.guild.id)
+            )
+            embed.set_footer(text=f"Set by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Failed to save timezone configuration.", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(ModerationCog(bot))

@@ -100,8 +100,17 @@ class ColorSettingsModal(discord.ui.Modal, title='Map Color Settings'):
         await interaction.response.edit_message(embed=loading_embed, attachments=[], view=None)
         
         try:
+            # Use centralized progress handler
+            from core.map_progress_handler import create_preview_progress_callback
+            progress_callback = await create_preview_progress_callback(interaction, self.cog.log)
+            
             # Generate preview
-            preview_image = await self.cog._generate_preview_map(int(self.guild_id), settings)
+            result = await self.cog._generate_preview_map(int(self.guild_id), settings, progress_callback)
+            
+            if not result or result[0] is None:
+                preview_image, base_map = None, None
+            else:
+                preview_image, base_map = result
             
             if not preview_image:
                 error_embed = discord.Embed(
@@ -109,7 +118,7 @@ class ColorSettingsModal(discord.ui.Modal, title='Map Color Settings'):
                     description="Failed to generate preview. Please try again.",
                     color=0xff4444
                 )
-                await interaction.edit_original_response(embed=error_embed, view=None)
+                await interaction.edit_original_response(content=None, embed=error_embed, attachments=[], view=None)
                 return
             
             # Create preview embed
@@ -149,10 +158,13 @@ class ColorSettingsModal(discord.ui.Modal, title='Map Color Settings'):
             )
             
             # Send preview with confirmation buttons
-            view = ColorSettingsPreviewView(self.cog, self.guild_id, settings, self.original_interaction)
+            # Create a copy of the preview image for caching
+            preview_image_copy = BytesIO(preview_image.getvalue())
+            view = ColorSettingsPreviewView(self.cog, self.guild_id, settings, self.original_interaction, preview_image_copy, base_map)
             
             filename = f"color_preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
             await interaction.edit_original_response(
+                content=None,
                 embed=embed,
                 attachments=[discord.File(preview_image, filename=filename)],
                 view=view
@@ -165,7 +177,7 @@ class ColorSettingsModal(discord.ui.Modal, title='Map Color Settings'):
                 description="An error occurred while generating the preview.",
                 color=0xff4444
             )
-            await interaction.edit_original_response(embed=error_embed, view=None)
+            await interaction.edit_original_response(content=None, embed=error_embed, attachments=[], view=None)
 
 
 class PinSettingsModal(discord.ui.Modal, title='Pin Settings'):
@@ -259,7 +271,7 @@ class PinSettingsModal(discord.ui.Modal, title='Pin Settings'):
                     description="Failed to generate preview. Please try again.",
                     color=0xff4444
                 )
-                await interaction.edit_original_response(embed=error_embed, view=None)
+                await interaction.edit_original_response(content=None, embed=error_embed, attachments=[], view=None)
                 return
             
             # Create preview embed
@@ -309,18 +321,20 @@ class PinSettingsModal(discord.ui.Modal, title='Pin Settings'):
                 description="An error occurred while generating the preview.",
                 color=0xff4444
             )
-            await interaction.edit_original_response(embed=error_embed, view=None)
+            await interaction.edit_original_response(content=None, embed=error_embed, attachments=[], view=None)
 
 
 class ColorSettingsPreviewView(discord.ui.View):
     """View for confirming color settings after preview."""
     
-    def __init__(self, cog: 'MapV2Cog', guild_id: int, settings: Dict, original_interaction: discord.Interaction):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int, settings: Dict, original_interaction: discord.Interaction, preview_image: BytesIO = None, base_map: 'Image.Image' = None):
         super().__init__(timeout=300)
         self.cog = cog
         self.guild_id = guild_id
         self.settings = settings
         self.original_interaction = original_interaction
+        self.preview_image = preview_image  # Cache the preview image to reuse
+        self.base_map = base_map  # Cache the base map for saving when approved
 
     @discord.ui.button(label="Apply Colors", style=discord.ButtonStyle.success, emoji="✅")
     async def apply_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -353,8 +367,8 @@ class ColorSettingsPreviewView(discord.ui.View):
             guild_id = str(self.guild_id)
             
             if guild_id not in self.cog.maps:
-                await interaction.edit_original_response(embed=discord.Embed(
-                    title="⛔ Error", description="No map exists for this server.", color=0xff4444), view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(
+                    title="⛔ Error", description="No map exists for this server.", color=0xff4444), attachments=[], view=None)
                 return
             
             # Apply settings
@@ -364,13 +378,40 @@ class ColorSettingsPreviewView(discord.ui.View):
             self.cog.maps[guild_id]['settings'].update(self.settings)
             await self.cog._save_data(guild_id)
             
-            # Invalidate caches efficiently - colors affect base maps
-            await self.cog.storage.invalidate_base_map_cache_only(int(guild_id))
-            await self.cog.storage.invalidate_final_map_cache_only(int(guild_id))
+            # Radical cleanup: remove ALL PNG files when settings change
+            await self.cog.storage.cache.invalidate_all_png_files_for_settings_change(guild_id)
             
-            # Update main map
-            channel_id = self.cog.maps[guild_id]['channel_id']
-            await self.cog._update_map(int(guild_id), channel_id)
+            # Use cached preview image if available, otherwise regenerate
+            if self.preview_image and self.base_map:
+                # Use the cached preview image to avoid regeneration
+                success = await self.cog._apply_cached_preview_as_map(int(guild_id), self.preview_image)
+                
+                if success:
+                    # Save the new base map from the preview
+                    map_data = self.cog.maps.get(guild_id, {})
+                    region = map_data.get('region', 'world')
+                    width, height = self.cog.map_generator.calculate_image_dimensions(region)
+                    if region != "germany" and region != "usmainland":
+                        height = int(height * 0.8)
+                    
+                    # Cache the new base map (this replaces the old one)
+                    await self.cog.storage.cache_base_map(region, width, height, self.base_map, guild_id, self.cog.maps)
+                    
+                    # Now invalidate old closeup base maps and final maps since they use old colors
+                    await self.cog.storage.cache.invalidate_cache(guild_id, ["closeup_base_map", "final_map", "closeup"])
+                    
+                    self.cog.log.info(f"Applied new base map for guild {guild_id} with updated colors")
+                else:
+                    # Fallback: regenerate if cached preview fails - clean up all old maps
+                    await self.cog.storage.cache.invalidate_cache(guild_id, ["base_map", "final_map", "closeup", "closeup_base_map"])
+                    channel_id = self.cog.maps[guild_id]['channel_id']
+                    await self.cog._update_map(int(guild_id), channel_id)
+            else:
+                # No cached preview - do full regeneration with comprehensive cleanup
+                await self.cog.storage.invalidate_cache(guild_id, ["base_map", "final_map", "closeup", "closeup_base_map"])
+                channel_id = self.cog.maps[guild_id]['channel_id']
+                await self.cog._update_map(int(guild_id), channel_id)
+            
             await self.cog._update_global_overview()
             
             success_embed = discord.Embed(
@@ -378,9 +419,10 @@ class ColorSettingsPreviewView(discord.ui.View):
                 description="Your map colors have been updated!",
                 color=0x00ff44
             )
+            channel_id = self.cog.maps[guild_id]['channel_id']
             success_embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
             
-            await interaction.edit_original_response(embed=success_embed, attachments=[], view=None)
+            await interaction.edit_original_response(content=None, embed=success_embed, attachments=[], view=None)
             
         except Exception as e:
             self.cog.log.error(f"Error applying color settings: {e}")
@@ -389,7 +431,7 @@ class ColorSettingsPreviewView(discord.ui.View):
                 description="An error occurred while saving the colors.",
                 color=0xff4444
             )
-            await interaction.edit_original_response(embed=error_embed, view=None)
+            await interaction.edit_original_response(content=None, embed=error_embed, attachments=[], view=None)
 
 
 class PinSettingsPreviewView(discord.ui.View):
@@ -433,8 +475,8 @@ class PinSettingsPreviewView(discord.ui.View):
             guild_id = str(self.guild_id)
             
             if guild_id not in self.cog.maps:
-                await interaction.edit_original_response(embed=discord.Embed(
-                    title="⛔ Error", description="No map exists for this server.", color=0xff4444), view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(
+                    title="⛔ Error", description="No map exists for this server.", color=0xff4444), attachments=[], view=None)
                 return
             
             # Apply settings
@@ -443,6 +485,9 @@ class PinSettingsPreviewView(discord.ui.View):
             
             self.cog.maps[guild_id]['settings'].update(self.settings)
             await self.cog._save_data(guild_id)
+            
+            # Radical cleanup: remove ALL PNG files when settings change
+            await self.cog.storage.cache.invalidate_all_png_files_for_settings_change(guild_id)
             
             # Only invalidate final map cache for pin changes (base map unchanged)
             await self.cog.storage.invalidate_final_map_cache_only(int(guild_id))
@@ -459,7 +504,7 @@ class PinSettingsPreviewView(discord.ui.View):
             )
             success_embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
             
-            await interaction.edit_original_response(embed=success_embed, attachments=[], view=None)
+            await interaction.edit_original_response(content=None, embed=success_embed, attachments=[], view=None)
             
         except Exception as e:
             self.cog.log.error(f"Error applying pin settings: {e}")
@@ -468,7 +513,7 @@ class PinSettingsPreviewView(discord.ui.View):
                 description="An error occurred while saving the pin settings.",
                 color=0xff4444
             )
-            await interaction.edit_original_response(embed=error_embed, view=None)
+            await interaction.edit_original_response(content=None, embed=error_embed, attachments=[], view=None)
 
 
 class ProximitySettingsView(discord.ui.View):
@@ -518,7 +563,7 @@ class ProximitySettingsView(discord.ui.View):
             color=0x00ff44 if enabled else 0xff4444
         )
         
-        await interaction.edit_original_response(embed=embed, view=self)
+        await interaction.edit_original_response(content=None, embed=embed, attachments=[], view=self)
 
 
 class MapRemovalConfirmView(discord.ui.View):
@@ -539,7 +584,7 @@ class MapRemovalConfirmView(discord.ui.View):
                 description="No map exists for this server.",
                 color=0xff4444
             )
-            await interaction.edit_original_response(embed=embed, view=None)
+            await interaction.edit_original_response(content=None, embed=embed, attachments=[], view=None)
             return
 
         map_data = self.cog.maps[guild_id]
@@ -576,7 +621,7 @@ class MapRemovalConfirmView(discord.ui.View):
         embed.add_field(name="Pins Removed", value=str(pin_count), inline=True)
         embed.add_field(name="Map Message", value="Deleted", inline=True)
 
-        await interaction.edit_original_response(embed=embed, view=None)
+        await interaction.edit_original_response(content=None, embed=embed, attachments=[], view=None)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="⛔")
     async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -661,7 +706,7 @@ class AdminToolsView(discord.ui.View):
                 color=0x00ff44
             )
             
-            await interaction.edit_original_response(embed=embed, view=None)
+            await interaction.edit_original_response(content=None, embed=embed, attachments=[], view=None)
             
         except Exception as e:
             self.cog.log.error(f"Error clearing guild cache: {e}")
@@ -670,4 +715,4 @@ class AdminToolsView(discord.ui.View):
                 description="Failed to clear cache.",
                 color=0xff4444
             )
-            await interaction.edit_original_response(embed=embed, view=None)
+            await interaction.edit_original_response(content=None, embed=embed, attachments=[], view=None)
