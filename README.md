@@ -274,6 +274,8 @@ CMD ["python3", "bot.py"]
 - **Improved feed UI** - Consistent ephemeral message editing instead of creating new messages
 - **Comprehensive cache cleanup** - Map color changes now properly remove all old cached files
 - **Interactive help buttons** - Direct links to GitHub repository and Discord development server
+- **Enhanced RSS Processing** - Improved HTML entity decoding and smart text truncation (500 char limit with word-boundary `[...]`)
+- **Optimized Map Bounds** - Hybrid country bounds system eliminates overseas territory display issues (no more Morocco in Spain maps, etc.)
 
 ### Health Monitoring
 - Use `/monitor` command for system status

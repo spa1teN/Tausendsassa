@@ -406,20 +406,26 @@ class MapConfig:
                 
             world = gpd.read_file(world_file)
             
-            # Find the country
-            country_row = world[world["ADMIN"] == country_name]
-            if country_row.empty:
-                # Try alternative name fields
-                country_row = world[world["NAME"] == country_name]
-            if country_row.empty:
-                # Try case-insensitive search
-                country_row = world[world["ADMIN"].str.contains(country_name, case=False, na=False)]
+            # Special handling for Ukraine - include all territories (including Crimea)
+            if country_key == 'ukraine':
+                country_rows = world[world["SOVEREIGNT"] == country_name]
+            else:
+                # For countries with overseas territories, use ADMIN == country_name to get mainland only
+                # This excludes dependencies that have different ADMIN names
+                country_rows = world[world["ADMIN"] == country_name]
+                
+                # Additional filter: exclude very small or distant territories
+                if not country_rows.empty and len(country_rows) > 1:
+                    # If multiple rows, keep only the largest by area
+                    country_rows['area'] = country_rows.geometry.area
+                    largest_idx = country_rows['area'].idxmax()
+                    country_rows = country_rows.loc[[largest_idx]]
             
-            if country_row.empty:
+            if country_rows.empty:
                 return None
             
             # Get geometry and bounds
-            country_geom = country_row.geometry.unary_union
+            country_geom = country_rows.geometry.unary_union
             bounds = country_geom.bounds
             minx, miny, maxx, maxy = bounds
             
@@ -441,14 +447,18 @@ class MapConfig:
             return None
     
     def get_region_bounds(self, region_key: str, data_path: Path = None) -> Tuple[Tuple[float, float], Tuple[float, float]]:
-        """Get region bounds, preferring shapefile data over hardcoded values for countries."""
-        # For countries, try to get bounds from shapefile first
-        if region_key in self.COUNTRY_NAME_MAPPING:
+        """Get region bounds, using hardcoded values for countries with overseas territories."""
+        # Countries with problematic overseas territories - use hardcoded bounds
+        overseas_territory_countries = {'france', 'spain', 'unitedkingdom', 'netherlands', 'denmark', 'portugal'}
+        
+        # For countries without overseas territory issues, try shapefile first
+        if (region_key in self.COUNTRY_NAME_MAPPING and 
+            region_key not in overseas_territory_countries):
             shapefile_bounds = self.get_country_bounds_from_shapefile(region_key, data_path)
             if shapefile_bounds:
                 return shapefile_bounds
         
-        # Fall back to hardcoded bounds
+        # Fall back to hardcoded bounds (used for overseas territory countries and fallback)
         if region_key in self.MAP_REGIONS:
             return self.MAP_REGIONS[region_key]["bounds"]
         

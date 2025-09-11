@@ -179,9 +179,36 @@ def mark_entry_posted(guild_id: int, guid: str, message_id: int, channel_id: int
 
 # Remove HTML tags from text
 _REMOVE_TAGS = re.compile(r'<[^>]+>')
+_HTML_ENTITIES = {
+    '&quot;': '"',
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&apos;': "'",
+    '&nbsp;': ' ',
+    '&#39;': "'",
+    '&#34;': '"',
+    '&#38;': '&',
+    '&#60;': '<',
+    '&#62;': '>',
+}
+
 def _strip_html(text: str) -> str:
-    """Strip HTML tags from text"""
-    return _REMOVE_TAGS.sub('', text)
+    """Strip HTML tags and decode HTML entities from text"""
+    if not text:
+        return text
+    
+    # Remove HTML tags
+    text = _REMOVE_TAGS.sub('', text)
+    
+    # Decode HTML entities
+    for entity, replacement in _HTML_ENTITIES.items():
+        text = text.replace(entity, replacement)
+    
+    # Handle numeric entities like &#8220; &#8221; etc
+    text = re.sub(r'&#(\d+);', lambda m: chr(int(m.group(1))), text)
+    
+    return text.strip()
 
 # Store content hashes for entries to detect real changes
 _entry_hashes: Dict[str, str] = {}
@@ -326,7 +353,15 @@ def _create_embed(entry, feed_cfg: Dict[str, Any], guild_id: int = None) -> Dict
     desc = embed.get("description", "").strip()
     if not desc:
         desc = entry.get("summary", "")
-    embed["description"] = _strip_html(desc)
+    
+    # Clean HTML and entities
+    desc = _strip_html(desc)
+    
+    # Truncate long descriptions
+    if len(desc) > 500:
+        desc = desc[:500].rsplit(' ', 1)[0] + "[...]"
+    
+    embed["description"] = desc
 
     # Image fallbacks
     img = embed.get("image", {}) or {}
