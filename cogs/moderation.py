@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 import aiohttp
+import asyncio
 
 class ModerationCog(commands.Cog):
     def __init__(self, bot):
@@ -102,7 +103,7 @@ class ModerationCog(commands.Cog):
         
         return embed
 
-    def create_join_embed(self, member: discord.Member) -> discord.Embed:
+    def create_join_embed(self, member: discord.Member, role_assigned=None, role_name=None) -> discord.Embed:
         """Create embed for member join event"""
         embed = discord.Embed(
             title=f"{member.display_name} joined the server",
@@ -122,6 +123,14 @@ class ModerationCog(commands.Cog):
             age_str = f"{days} days"
         
         embed.add_field(name="Account Age", value=age_str, inline=True)
+        
+        # Add role assignment status if join role is configured
+        if role_assigned is not None:
+            if role_assigned:
+                embed.add_field(name="Auto Role", value=f"✅ Assigned: {role_name}", inline=True)
+            else:
+                embed.add_field(name="Auto Role", value="❌ Failed to assign", inline=True)
+        
         embed.set_footer(text=f"User ID: {member.id}")
         
         return embed
@@ -248,37 +257,64 @@ class ModerationCog(commands.Cog):
             except (discord.HTTPException, aiohttp.ClientError):
                 pass  # Fail silently if webhook is invalid
 
+    async def check_for_kick(self, guild: discord.Guild, user_id: int):
+        """Check audit logs for recent kick events"""
+        try:
+            await asyncio.sleep(0.5)  # Small delay to ensure audit log is updated
+            async for entry in guild.audit_logs(action=discord.AuditLogAction.kick, limit=5):
+                if entry.target and entry.target.id == user_id:
+                    # Check if this kick happened recently (within last 10 seconds)
+                    time_diff = datetime.now(timezone.utc) - entry.created_at
+                    if time_diff.total_seconds() < 10:
+                        # Add to banned/kicked set and send kick embed
+                        self.recently_banned_kicked.add(user_id)
+                        
+                        embed = self.create_kick_embed(entry.target, entry.user, entry.reason)
+                        await self.send_log_message(guild.id, embed)
+                        return True
+        except discord.Forbidden:
+            pass
+        return False
+
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         """Handle member join events"""
         # Store join time for duration calculation
         self.member_join_times[member.id] = datetime.now(timezone.utc)
         
-        # Send log message
-        embed = self.create_join_embed(member)
-        await self.send_log_message(member.guild.id, embed)
-        
         # Auto-assign role if configured
         config = self.get_guild_config(member.guild.id)
         join_role_id = config.get('join_role')
         
+        role_assigned = None
+        role_name = None
+        
         if join_role_id:
             role = member.guild.get_role(join_role_id)
             if role:
+                role_name = role.name
                 try:
                     await member.add_roles(role, reason="Auto-assigned join role")
+                    role_assigned = True
                 except discord.Forbidden:
-                    pass  # Bot doesn't have permission
+                    role_assigned = False  # Bot doesn't have permission
+            else:
+                role_assigned = False  # Role not found
+        
+        # Send log message with role assignment status (removed role_id parameter)
+        embed = self.create_join_embed(member, role_assigned=role_assigned, role_name=role_name)
+        await self.send_log_message(member.guild.id, embed)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         """Handle member leave events"""
-        print(f"DEBUG: Member {member.name} left {member.guild.name}")  # Debug output
-        
         # Check if this user was recently banned or kicked
         if member.id in self.recently_banned_kicked:
-            print(f"DEBUG: User {member.name} was banned/kicked, skipping leave message")
             self.recently_banned_kicked.discard(member.id)  # Remove from set
+            return
+        
+        # Check for recent kick in audit logs
+        if await self.check_for_kick(member.guild, member.id):
             return
         
         # Calculate duration on server
@@ -287,12 +323,10 @@ class ModerationCog(commands.Cog):
             join_time = self.member_join_times[member.id]
             duration = self.calculate_duration(join_time)
             del self.member_join_times[member.id]
-            print(f"DEBUG: Member was on server for {duration}")  # Debug output
         
         # Send log message
         embed = self.create_leave_embed(member, duration)
         await self.send_log_message(member.guild.id, embed)
-        print(f"DEBUG: Sent leave embed for {member.name}")  # Debug output
 
     @commands.Cog.listener()
     async def on_member_ban(self, guild: discord.Guild, user: discord.User):
@@ -335,18 +369,6 @@ class ModerationCog(commands.Cog):
         
         embed = self.create_unban_embed(user, moderator)
         await self.send_log_message(guild.id, embed)
-
-    @commands.Cog.listener()
-    async def on_audit_log_entry_create(self, entry: discord.AuditLogEntry):
-        """Handle audit log entries for kicks"""
-        if entry.action == discord.AuditLogAction.kick:
-            # Add user to recently kicked set to prevent leave message
-            if entry.target:
-                self.recently_banned_kicked.add(entry.target.id)
-            
-            # Create kick embed
-            embed = self.create_kick_embed(entry.target, entry.user, entry.reason)
-            await self.send_log_message(entry.guild.id, embed)
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):

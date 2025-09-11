@@ -1,13 +1,321 @@
-"""Map storage and caching utilities for the Discord Map Bot."""
+"""Map storage and caching utilities for the Discord Map Bot - Improved Cache System."""
 
 import json
 import hashlib
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Literal, Union
 from datetime import datetime
 from io import BytesIO
 from PIL import Image
 import discord
+from collections import OrderedDict
+
+
+class LRUCache:
+    """Simple LRU cache for base maps with size limit."""
+    
+    def __init__(self, max_size: int = 50):
+        self.max_size = max_size
+        self.cache = OrderedDict()
+    
+    def get(self, key: str) -> Optional[Image.Image]:
+        if key in self.cache:
+            # Move to end (most recently used)
+            self.cache.move_to_end(key)
+            return self.cache[key].copy()
+        return None
+    
+    def put(self, key: str, value: Image.Image):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        else:
+            if len(self.cache) >= self.max_size:
+                # Remove least recently used
+                self.cache.popitem(last=False)
+        self.cache[key] = value.copy()
+    
+    def clear(self):
+        self.cache.clear()
+
+
+class UnifiedCacheManager:
+    """Unified cache management system for all map types."""
+    
+    def __init__(self, data_dir: Path, cache_dir: Path, logger):
+        self.data_dir = data_dir
+        self.cache_dir = cache_dir
+        self.log = logger
+        
+        # Ensure directories exist
+        self.data_dir.mkdir(exist_ok=True)
+        self.cache_dir.mkdir(exist_ok=True)
+        
+        # In-memory LRU cache for base maps
+        self.memory_cache = LRUCache(max_size=50)
+    
+    def _get_guild_cache_dir(self, guild_id: str) -> Path:
+        """Get guild-specific cache directory."""
+        guild_dir = self.data_dir / guild_id
+        guild_dir.mkdir(exist_ok=True)
+        return guild_dir
+    
+    def _has_custom_settings(self, guild_id: str, maps: Dict) -> bool:
+        """Check if guild has custom visual settings."""
+        map_data = maps.get(guild_id, {})
+        return bool(map_data.get('settings'))
+    
+    def _get_cache_location(self, guild_id: str, maps: Dict) -> Tuple[Path, str]:
+        """Determine cache location based on custom settings."""
+        if self._has_custom_settings(guild_id, maps):
+            return self._get_guild_cache_dir(guild_id), "guild directory"
+        else:
+            return self.cache_dir, "shared cache"
+    
+    def generate_base_map_cache_key(self, guild_id: str, maps: Dict, region: str, width: int, height: int) -> str:
+        """Generate cache key specifically for base maps (excludes pin data)."""
+        base_parts = ["base_map", region, str(width), str(height)]
+        
+        # Only include visual settings that affect the BASE MAP (not pins)
+        map_data = maps.get(guild_id, {})
+        settings = map_data.get('settings', {})
+        
+        if settings:
+            # Create hash only for settings that affect base map rendering
+            base_map_settings = {}
+            
+            # Colors affect base map
+            if 'colors' in settings:
+                base_map_settings['colors'] = settings['colors']
+            
+            # Borders affect base map  
+            if 'borders' in settings:
+                borders = settings['borders'].copy()
+                # Remove pin-specific settings that don't affect base map
+                borders.pop('pin', None)  # Remove any pin-related border settings
+                if borders:  # Only include if there are actual border settings
+                    base_map_settings['borders'] = borders
+            
+            # Pins settings do NOT affect base map, so exclude them
+            # This allows base map reuse when only pin color/size changes
+            
+            if base_map_settings:
+                settings_str = json.dumps(base_map_settings, sort_keys=True)
+                settings_hash = hashlib.md5(settings_str.encode()).hexdigest()[:8]
+                base_parts.append(settings_hash)
+            else:
+                base_parts.append("default")
+        else:
+            base_parts.append("default")
+        
+        return "_".join(base_parts)
+
+    def generate_settings_hash(self, guild_id: str, maps: Dict) -> str:
+        """Generate hash for visual settings that affect rendering."""
+        map_data = maps.get(guild_id, {})
+        settings = map_data.get('settings', {})
+        
+        if not settings:
+            return "default"
+        
+        # Include all visual settings
+        visual_settings = {}
+        for key in ['colors', 'borders', 'pins']:
+            if key in settings:
+                visual_settings[key] = settings[key]
+        
+        if not visual_settings:
+            return "default"
+        
+        settings_str = json.dumps(visual_settings, sort_keys=True)
+        return hashlib.md5(settings_str.encode()).hexdigest()[:8]
+    
+    def generate_cache_key(self, cache_type: str, guild_id: str, maps: Dict, **params) -> str:
+        """Generate unified cache key for any cache type."""
+        base_parts = [cache_type]
+        
+        # Add type-specific parameters
+        if cache_type == "base_map":
+            # Use specialized base map key generation
+            return self.generate_base_map_cache_key(guild_id, maps, params['region'], params['width'], params['height'])
+        elif cache_type == "final_map":
+            base_parts.append(params['region'])
+            # Add pin hash
+            pins = maps.get(guild_id, {}).get('pins', {})
+            pin_data = {uid: (pin['lat'], pin['lng']) for uid, pin in pins.items()}
+            pin_str = json.dumps(pin_data, sort_keys=True)
+            pin_hash = hashlib.md5(pin_str.encode()).hexdigest()[:8]
+            base_parts.append(pin_hash)
+        elif cache_type == "closeup":
+            base_parts.extend([params['closeup_type'], params['closeup_name']])
+            # Add pin hash for closeups too
+            pins = maps.get(guild_id, {}).get('pins', {})
+            pin_data = {uid: (pin['lat'], pin['lng']) for uid, pin in pins.items()}
+            pin_str = json.dumps(pin_data, sort_keys=True)
+            pin_hash = hashlib.md5(pin_str.encode()).hexdigest()[:8]
+            base_parts.append(pin_hash)
+        
+        # Add settings hash
+        settings_hash = self.generate_settings_hash(guild_id, maps)
+        base_parts.append(settings_hash)
+        
+        return "_".join(base_parts)
+    
+    async def get_cached_item(self, cache_type: str, guild_id: str, maps: Dict, **params) -> Optional[Union[Image.Image, discord.File, BytesIO]]:
+        """Get cached item of any type."""
+        cache_key = self.generate_cache_key(cache_type, guild_id, maps, **params)
+        
+        # Check memory cache for base maps
+        if cache_type == "base_map":
+            cached_image = self.memory_cache.get(cache_key)
+            if cached_image:
+                self.log.info(f"Using in-memory cached {cache_type} for guild {guild_id}")
+                return cached_image
+        
+        # Check disk cache
+        cache_dir, cache_location = self._get_cache_location(guild_id, maps)
+        cache_file = cache_dir / f"{cache_key}.png"
+        
+        if cache_file.exists():
+            try:
+                if cache_type == "base_map":
+                    image = Image.open(cache_file)
+                    # Store in memory cache too
+                    self.memory_cache.put(cache_key, image)
+                    self.log.info(f"Using disk cached {cache_type} for guild {guild_id} from {cache_location}")
+                    return image.copy()
+                elif cache_type == "final_map":
+                    filename = f"map_{cache_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    self.log.info(f"Using cached {cache_type} for guild {guild_id} from {cache_location}")
+                    return discord.File(cache_file, filename=filename)
+                elif cache_type == "closeup":
+                    with open(cache_file, 'rb') as f:
+                        image_data = f.read()
+                    img_buffer = BytesIO(image_data)
+                    self.log.info(f"Using cached {cache_type} for guild {guild_id} from {cache_location}")
+                    return img_buffer
+            except Exception as e:
+                self.log.warning(f"Error loading cached {cache_type}: {e}")
+        
+        self.log.info(f"No cached {cache_type} found for guild {guild_id}")
+        return None
+    
+    async def cache_item(self, cache_type: str, guild_id: str, maps: Dict, item: Union[Image.Image, BytesIO], **params):
+        """Cache item of any type."""
+        cache_key = self.generate_cache_key(cache_type, guild_id, maps, **params)
+        cache_dir, cache_location = self._get_cache_location(guild_id, maps)
+        cache_file = cache_dir / f"{cache_key}.png"
+        
+        try:
+            if cache_type == "base_map" and isinstance(item, Image.Image):
+                # Store in memory
+                self.memory_cache.put(cache_key, item)
+                # Store on disk
+                item.save(cache_file, 'PNG', optimize=True)
+            elif isinstance(item, BytesIO):
+                # Store on disk
+                item.seek(0)
+                with open(cache_file, 'wb') as f:
+                    f.write(item.read())
+            
+            self.log.info(f"Cached {cache_type} for guild {guild_id} in {cache_location}")
+        except Exception as e:
+            self.log.warning(f"Error caching {cache_type}: {e}")
+    
+    async def invalidate_cache(self, guild_id: str, cache_types: Optional[list] = None):
+        """Invalidate specific cache types for a guild - PRESERVES default base maps."""
+        if cache_types is None:
+            cache_types = ["base_map", "final_map", "closeup"]
+        
+        deleted_count = 0
+        
+        # Only remove CUSTOM base maps from guild cache, NOT shared default cache
+        if "base_map" in cache_types:
+            # Remove from guild cache only (custom base maps)
+            guild_cache_dir = self.data_dir / guild_id
+            if guild_cache_dir.exists():
+                for cache_file in guild_cache_dir.glob("base_map_*.png"):
+                    cache_file.unlink()
+                    deleted_count += 1
+                    self.log.info(f"Removed custom base map cache file: {cache_file.name}")
+            
+            # Clear memory cache for base maps (affects both custom and default)
+            self.memory_cache.clear()
+            self.log.info("Cleared base map memory cache")
+        
+        # Remove final maps from both shared and guild cache
+        if "final_map" in cache_types:
+            for cache_file in self.cache_dir.glob("final_map_*.png"):
+                cache_file.unlink()
+                deleted_count += 1
+                self.log.info(f"Removed shared final map cache file: {cache_file.name}")
+            
+            guild_cache_dir = self.data_dir / guild_id
+            if guild_cache_dir.exists():
+                for cache_file in guild_cache_dir.glob("final_map_*.png"):
+                    cache_file.unlink()
+                    deleted_count += 1
+                    self.log.info(f"Removed guild final map cache file: {cache_file.name}")
+        
+        # Remove closeups from both shared and guild cache
+        if "closeup" in cache_types:
+            for cache_file in self.cache_dir.glob("closeup_*.png"):
+                cache_file.unlink()
+                deleted_count += 1
+                self.log.info(f"Removed shared closeup cache file: {cache_file.name}")
+            
+            guild_cache_dir = self.data_dir / guild_id
+            if guild_cache_dir.exists():
+                for cache_file in guild_cache_dir.glob("closeup_*.png"):
+                    cache_file.unlink()
+                    deleted_count += 1
+                    self.log.info(f"Removed guild closeup cache file: {cache_file.name}")
+        
+        self.log.info(f"Invalidated {cache_types} cache for guild {guild_id} ({deleted_count} files removed) - PRESERVED default base maps")
+        
+    async def invalidate_all_cache_for_guild_deletion(self, guild_id: str):
+        """Complete cache invalidation when a guild map is deleted - removes everything."""
+        deleted_count = 0
+        
+        # Remove ALL base maps (both shared and guild)
+        for cache_file in self.cache_dir.glob("base_map_*.png"):
+            cache_file.unlink()
+            deleted_count += 1
+            self.log.info(f"Removed shared base map cache file: {cache_file.name}")
+        
+        # Remove from guild cache completely
+        guild_cache_dir = self.data_dir / guild_id
+        if guild_cache_dir.exists():
+            for cache_file in guild_cache_dir.glob("*.png"):
+                cache_file.unlink()
+                deleted_count += 1
+                self.log.info(f"Removed guild cache file: {cache_file.name}")
+        
+        # Clear memory cache
+        self.memory_cache.clear()
+        self.log.info("Cleared all in-memory cache")
+        
+        self.log.info(f"Complete cache invalidation for guild {guild_id} deletion ({deleted_count} files removed)")
+    
+    async def clear_all_cache(self) -> int:
+        """Clear all cached items."""
+        self.memory_cache.clear()
+        deleted_count = 0
+        
+        # Clear shared cache
+        cache_files = list(self.cache_dir.glob("*.png"))
+        for cache_file in cache_files:
+            cache_file.unlink()
+            deleted_count += 1
+        
+        # Clear guild-specific caches
+        for guild_dir in self.data_dir.iterdir():
+            if guild_dir.is_dir() and guild_dir.name.isdigit():
+                guild_cache_files = list(guild_dir.glob("*.png"))
+                for cache_file in guild_cache_files:
+                    cache_file.unlink()
+                    deleted_count += 1
+        
+        return deleted_count
 
 
 class MapStorage:
@@ -25,8 +333,11 @@ class MapStorage:
         # Global overview config file
         self.global_config_file = self.data_dir / "map_global_config.json"
         
-        # In-memory cache for base maps
-        self.base_map_cache = {}
+        # Unified cache manager
+        self.cache = UnifiedCacheManager(data_dir, cache_dir, logger)
+        
+        # Legacy property for backwards compatibility
+        self.base_map_cache = self.cache.memory_cache.cache
 
     def load_all_data(self) -> Dict:
         """Load all guild map data from individual files."""
@@ -96,341 +407,151 @@ class MapStorage:
         except Exception as e:
             self.log.error(f"Failed to save global config: {e}")
 
-    def get_cache_key(self, guild_id: int, maps: Dict) -> str:
-        """Generate a cache key based on guild pins and settings."""
-        map_data = maps.get(str(guild_id), {})
-        pins = map_data.get('pins', {})
-        region = map_data.get('region', 'world')
-        settings = map_data.get('settings', {})
-    
-        # Create hash from pins, region, and settings
-        pin_data = {}
-        for user_id, pin in pins.items():
-            pin_data[user_id] = (pin['lat'], pin['lng'])
-            
-        # Create comprehensive settings hash including all custom values
-        settings_for_cache = {}
-        if settings:
-            # Include all custom settings in cache key
-            if 'colors' in settings:
-                settings_for_cache['colors'] = settings['colors']
-            if 'borders' in settings:
-                settings_for_cache['borders'] = settings['borders']
-            if 'pins' in settings:
-                settings_for_cache['pins'] = settings['pins']
-    
-        # Create cache string with guaranteed order
-        cache_data = {
-            'region': region,
-            'pins': pin_data,
-            'settings': settings_for_cache
-        }
-    
-        cache_string = json.dumps(cache_data, sort_keys=True)
-        cache_key = hashlib.md5(cache_string.encode()).hexdigest()
-    
-        # Debug logging for custom settings
-        if settings_for_cache:
-            self.log.debug(f"Cache key for guild {guild_id} with custom settings: {cache_key}")
-            self.log.debug(f"Settings included in cache: {settings_for_cache}")
-    
-        return cache_key
-
-    def get_base_map_cache_key(self, region: str, width: int, height: int, guild_id: str = None, maps: Dict = None) -> str:
-        """Generate cache key for base map including custom colors if present."""
-        base_key = f"base_{region}_{width}_{height}"
-    
-        # Add custom settings to cache key if guild has them
-        if guild_id and maps:
-            map_data = maps.get(guild_id, {})
-            settings = map_data.get('settings', {})
-            if settings:
-                # Create comprehensive hash of all visual settings that affect base map
-                visual_settings = {}
-                if 'colors' in settings:
-                    visual_settings['colors'] = settings['colors']
-                if 'borders' in settings:
-                    visual_settings['borders'] = settings['borders']
-            
-                if visual_settings:
-                    settings_hash = hashlib.md5(json.dumps(visual_settings, sort_keys=True).encode()).hexdigest()[:8]
-                    base_key = f"{base_key}_{settings_hash}"
-                    self.log.debug(f"Base map cache key for guild {guild_id} with custom settings: {base_key}")
-    
-        return base_key
-
+    # OPTIMIZED cache interface methods
     async def get_cached_base_map(self, region: str, width: int, height: int, guild_id: str = None, maps: Dict = None) -> Optional[Image.Image]:
-        """Get cached base map if available."""
-        cache_key = self.get_base_map_cache_key(region, width, height, guild_id, maps)
-    
-        # Check in-memory cache first
-        if cache_key in self.base_map_cache:
-            self.log.info(f"Using in-memory cached base map for {region} (guild {guild_id})")
-            return self.base_map_cache[cache_key].copy()
-    
-        # Determine cache location based on custom settings
-        if guild_id and maps:
-            map_data = maps.get(guild_id, {})
-            has_custom_settings = bool(map_data.get('settings'))
-            
-            if has_custom_settings:
-                # Look for base map cache in guild-specific directory for custom maps
-                guild_cache_dir = self.data_dir / guild_id
-                cache_file = guild_cache_dir / f"base_{cache_key}.png"
-                cache_location = "guild directory"
-            else:
-                # Use shared cache directory for default maps
-                cache_file = self.cache_dir / f"{cache_key}.png"
-                cache_location = "shared cache"
-        else:
-            # Default location for maps without guild context
-            cache_file = self.cache_dir / f"{cache_key}.png"
-            cache_location = "shared cache"
-    
+        """Get cached base map with improved key generation."""
+        if not guild_id or not maps:
+            return None
+        
+        # Use specialized base map cache key
+        cache_key = self.cache.generate_base_map_cache_key(guild_id, maps, region, width, height)
+        
+        # Check memory cache
+        cached_image = self.cache.memory_cache.get(cache_key)
+        if cached_image:
+            self.log.info(f"Using in-memory cached base map for guild {guild_id}")
+            return cached_image
+        
+        # Check disk cache
+        cache_dir, cache_location = self.cache._get_cache_location(guild_id, maps)
+        cache_file = cache_dir / f"{cache_key}.png"
+        
         if cache_file.exists():
             try:
                 image = Image.open(cache_file)
                 # Store in memory cache too
-                self.base_map_cache[cache_key] = image.copy()
-                self.log.info(f"Using disk cached base map for {region} (guild {guild_id}) from {cache_location}")
+                self.cache.memory_cache.put(cache_key, image)
+                self.log.info(f"Using disk cached base map for guild {guild_id} from {cache_location}")
                 return image.copy()
             except Exception as e:
                 self.log.warning(f"Error loading cached base map: {e}")
-    
-        self.log.info(f"No cached base map found for {region} (guild {guild_id})")
+        
+        self.log.info(f"No cached base map found for guild {guild_id}")
         return None
 
     async def cache_base_map(self, region: str, width: int, height: int, image: Image.Image, guild_id: str = None, maps: Dict = None):
-        """Cache base map both in memory and on disk."""
-        cache_key = self.get_base_map_cache_key(region, width, height, guild_id, maps)
-    
-        # Store in memory
-        self.base_map_cache[cache_key] = image.copy()
-    
-        # Determine cache location based on custom settings
+        """Cache base map with improved key generation."""
         if guild_id and maps:
-            map_data = maps.get(guild_id, {})
-            has_custom_settings = bool(map_data.get('settings'))
-        
-            if has_custom_settings:
-                # Store base map cache in guild-specific directory for custom maps
-                guild_cache_dir = self.data_dir / guild_id
-                guild_cache_dir.mkdir(exist_ok=True)
-                cache_file = guild_cache_dir / f"base_{cache_key}.png"
-                cache_location = "guild directory"
-            else:
-                # Store in shared cache directory for default maps
-                cache_file = self.cache_dir / f"{cache_key}.png"
-                cache_location = "shared cache"
-        else:
-            # Default location for maps without guild context
-            cache_file = self.cache_dir / f"{cache_key}.png"
-            cache_location = "shared cache"
-    
-        # Store on disk
-        try:
-            image.save(cache_file, 'PNG', optimize=True)
-            self.log.info(f"Cached base map for {region} (guild {guild_id}) in {cache_location}")
-        except Exception as e:
-            self.log.warning(f"Error caching base map to disk: {e}")
+            cache_key = self.cache.generate_base_map_cache_key(guild_id, maps, region, width, height)
+            cache_dir, cache_location = self.cache._get_cache_location(guild_id, maps)
+            cache_file = cache_dir / f"{cache_key}.png"
+            
+            try:
+                # Store in memory
+                self.cache.memory_cache.put(cache_key, image)
+                # Store on disk
+                image.save(cache_file, 'PNG', optimize=True)
+                self.log.info(f"Cached base map for guild {guild_id} in {cache_location}")
+            except Exception as e:
+                self.log.warning(f"Error caching base map: {e}")
 
     async def get_cached_map(self, guild_id: int, maps: Dict) -> Optional[discord.File]:
-        """Get cached final map if available - checks guild directory for custom maps."""
-        guild_id_str = str(guild_id)
-        map_data = maps.get(guild_id_str, {})
-        
-        # Check if guild has custom settings
-        has_custom_settings = bool(map_data.get('settings'))
-        cache_key = self.get_cache_key(guild_id, maps)
-        
-        if has_custom_settings:
-            # Look for cache in guild-specific directory
-            guild_cache_dir = self.data_dir / guild_id_str
-            cache_file = guild_cache_dir / f"map_cache_{cache_key}.png"
-            cache_location = "guild directory"
-        else:
-            # Use shared cache directory for default maps
-            cache_file = self.cache_dir / f"map_{guild_id}_{cache_key}.png"
-            cache_location = "shared cache"
-        
-        if cache_file.exists():
-            try:
-                filename = f"map_{cache_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                self.log.info(f"Using cached final map for guild {guild_id} from {cache_location}")
-                return discord.File(cache_file, filename=filename)
-            except Exception as e:
-                self.log.warning(f"Error loading cached map: {e}")
-        
-        self.log.info(f"No cached final map found for guild {guild_id}")
-        return None
+        """Get cached final map if available."""
+        map_data = maps.get(str(guild_id), {})
+        region = map_data.get('region', 'world')
+        return await self.cache.get_cached_item("final_map", str(guild_id), maps, region=region)
 
     async def cache_map(self, guild_id: int, maps: Dict, image_buffer: BytesIO):
-        """Cache the final map image - in guild directory if customized, otherwise in shared cache."""
-        try:
-            guild_id_str = str(guild_id)
-            map_data = maps.get(guild_id_str, {})
-            cache_key = self.get_cache_key(guild_id, maps)
-            
-            # Check if guild has custom settings
-            has_custom_settings = bool(map_data.get('settings'))
-            
-            if has_custom_settings:
-                # Save to guild-specific directory
-                guild_cache_dir = self.data_dir / guild_id_str
-                guild_cache_dir.mkdir(exist_ok=True)
-                cache_file = guild_cache_dir / f"map_cache_{cache_key}.png"
-                cache_location = "guild directory"
-            else:
-                # Save to shared cache directory
-                cache_file = self.cache_dir / f"map_{guild_id}_{cache_key}.png"
-                cache_location = "shared cache"
-            
-            image_buffer.seek(0)
-            with open(cache_file, 'wb') as f:
-                f.write(image_buffer.read())
-            
-            self.log.info(f"Cached final map for guild {guild_id} in {cache_location}")
-        except Exception as e:
-            self.log.warning(f"Error caching final map: {e}")
+        """Cache the final map image."""
+        map_data = maps.get(str(guild_id), {})
+        region = map_data.get('region', 'world')
+        await self.cache.cache_item("final_map", str(guild_id), maps, image_buffer, region=region)
 
-    async def invalidate_map_cache(self, guild_id: int):
-        """Invalidate cached maps for a guild - checks both locations and base maps."""
-        try:
-            guild_id_str = str(guild_id)
-            deleted_count = 0
-        
-            # Remove final map cache from shared cache directory
-            cache_pattern = f"map_{guild_id}_*.png"
-            for cache_file in self.cache_dir.glob(cache_pattern):
-                cache_file.unlink()
-                deleted_count += 1
-                self.log.info(f"Removed shared final cache file: {cache_file.name}")
-        
-            # Remove final map cache from guild-specific directory
-            guild_cache_dir = self.data_dir / guild_id_str
-            if guild_cache_dir.exists():
-                cache_pattern = "map_cache_*.png"
-                for cache_file in guild_cache_dir.glob(cache_pattern):
-                    cache_file.unlink()
-                    deleted_count += 1
-                    self.log.info(f"Removed guild final cache file: {cache_file.name}")
-            
-                # WICHTIG: Auch base map cache aus guild directory entfernen
-                base_cache_pattern = "base_*.png"
-                for cache_file in guild_cache_dir.glob(base_cache_pattern):
-                    cache_file.unlink()
-                    deleted_count += 1
-                    self.log.info(f"Removed guild base cache file: {cache_file.name}")
-        
-            # Remove base map cache from shared cache directory  
-            base_cache_pattern = "base_*.png"
-            for cache_file in self.cache_dir.glob(base_cache_pattern):
-                cache_file.unlink()
-                deleted_count += 1
-                self.log.info(f"Removed shared base cache file: {cache_file.name}")
-        
-            # Clear in-memory base map cache completely to force regeneration
-            self.base_map_cache.clear()
-            self.log.info(f"Cleared all in-memory base map cache")
-                
-            self.log.info(f"Invalidated all cache for guild {guild_id} ({deleted_count} files removed)")
-        except Exception as e:
-            self.log.warning(f"Error invalidating cache: {e}")
+    async def get_cached_closeup(self, guild_id: int, maps: Dict, closeup_type: str, closeup_name: str) -> Optional[BytesIO]:
+        """Get cached closeup map if available."""
+        return await self.cache.get_cached_item("closeup", str(guild_id), maps, closeup_type=closeup_type, closeup_name=closeup_name)
+
+    async def cache_closeup(self, guild_id: int, maps: Dict, closeup_type: str, closeup_name: str, image_buffer: BytesIO):
+        """Cache closeup map image."""
+        await self.cache.cache_item("closeup", str(guild_id), maps, image_buffer, closeup_type=closeup_type, closeup_name=closeup_name)
 
     async def invalidate_final_map_cache_only(self, guild_id: int):
-        """Invalidate only final map cache, preserve base maps for efficiency."""
-        try:
-            guild_id_str = str(guild_id)
-            deleted_count = 0
+        """Invalidate only final map cache, preserve base maps for efficiency - IMPROVED targeting."""
+        guild_id_str = str(guild_id)
+        deleted_count = 0
         
-            # Remove only final map cache from shared cache directory
-            cache_pattern = f"map_{guild_id}_*.png"
-            for cache_file in self.cache_dir.glob(cache_pattern):
+        # Remove from shared cache - target final_map files specifically
+        for cache_file in self.cache_dir.glob("final_map_*.png"):
+            cache_file.unlink()
+            deleted_count += 1
+            self.log.info(f"Removed shared final map cache file: {cache_file.name}")
+        
+        # Remove from guild cache - target final_map files specifically
+        guild_cache_dir = self.data_dir / guild_id_str
+        if guild_cache_dir.exists():
+            for cache_file in guild_cache_dir.glob("final_map_*.png"):
                 cache_file.unlink()
                 deleted_count += 1
-                self.log.info(f"Removed shared final cache file: {cache_file.name}")
+                self.log.info(f"Removed guild final map cache file: {cache_file.name}")
         
-            # Remove only final map cache from guild-specific directory
-            guild_cache_dir = self.data_dir / guild_id_str
-            if guild_cache_dir.exists():
-                cache_pattern = "map_cache_*.png"
-                for cache_file in guild_cache_dir.glob(cache_pattern):
-                    cache_file.unlink()
-                    deleted_count += 1
-                    self.log.info(f"Removed guild final cache file: {cache_file.name}")
-        
-            # WICHTIG: Base maps bleiben erhalten!
-            self.log.info(f"Invalidated final map cache for guild {guild_id} ({deleted_count} files removed), preserved base maps")
-        except Exception as e:
-            self.log.warning(f"Error invalidating final cache: {e}")
+        # Do NOT clear memory cache - preserve base maps
+        self.log.info(f"Invalidated final map cache for guild {guild_id} ({deleted_count} files removed) - preserved base maps")
 
     async def invalidate_base_map_cache_only(self, guild_id: int):
-        """Invalidate only base map cache when colors/settings change."""
-        try:
-            guild_id_str = str(guild_id)
-            deleted_count = 0
+        """Invalidate base map cache when visual settings change - ONLY custom base maps."""
+        guild_id_str = str(guild_id)
+        deleted_count = 0
         
-            # Remove base map cache from guild-specific directory
-            guild_cache_dir = self.data_dir / guild_id_str
-            if guild_cache_dir.exists():
-                base_cache_pattern = "base_*.png"
-                for cache_file in guild_cache_dir.glob(base_cache_pattern):
-                    cache_file.unlink()
-                    deleted_count += 1
-                    self.log.info(f"Removed guild base cache file: {cache_file.name}")
-        
-            # Remove base map cache from shared cache directory  
-            base_cache_pattern = "base_*.png"
-            for cache_file in self.cache_dir.glob(base_cache_pattern):
+        # Only remove CUSTOM base maps from guild cache, preserve shared default cache
+        guild_cache_dir = self.data_dir / guild_id_str
+        if guild_cache_dir.exists():
+            for cache_file in guild_cache_dir.glob("base_map_*.png"):
                 cache_file.unlink()
                 deleted_count += 1
-                self.log.info(f"Removed shared base cache file: {cache_file.name}")
+                self.log.info(f"Removed custom base map cache file: {cache_file.name}")
         
-            # Clear in-memory base map cache for this guild
-            keys_to_remove = []
-            for key in self.base_map_cache.keys():
-                if guild_id_str in key:  # Guild-specific base map cache keys
-                    keys_to_remove.append(key)
+        # Clear memory cache for base maps (affects both custom and default)
+        self.cache.memory_cache.clear()
+        self.log.info("Cleared base map memory cache")
         
-            for key in keys_to_remove:
-                del self.base_map_cache[key]
+        self.log.info(f"Invalidated custom base map cache for guild {guild_id} ({deleted_count} files removed) - PRESERVED shared default base maps")
+    
+    # IMPROVED cache invalidation methods
+    async def invalidate_map_cache(self, guild_id: int):
+        """Invalidate cached maps for a guild - PRESERVES default base maps."""
+        await self.cache.invalidate_cache(str(guild_id), ["base_map", "final_map", "closeup"])
         
-            self.log.info(f"Invalidated base map cache for guild {guild_id} ({deleted_count} files removed)")
-        except Exception as e:
-            self.log.warning(f"Error invalidating base cache: {e}")
+    async def admin_clear_cache(self, guild_id: int):
+        """Admin-triggered cache clear - removes CUSTOM base maps only, preserves defaults.""" 
+        guild_id_str = str(guild_id)
+        deleted_count = 0
+        
+        # Remove ALL cache from guild directory (custom base maps, final maps, closeups)
+        guild_cache_dir = self.data_dir / guild_id_str
+        if guild_cache_dir.exists():
+            for cache_file in guild_cache_dir.glob("*.png"):
+                cache_file.unlink()
+                deleted_count += 1
+                self.log.info(f"Admin cleared guild cache file: {cache_file.name}")
+        
+        # Remove final maps and closeups from shared cache (but NOT default base maps)
+        for cache_file in self.cache_dir.glob("final_map_*.png"):
+            cache_file.unlink()
+            deleted_count += 1
+            self.log.info(f"Admin cleared shared final map: {cache_file.name}")
+            
+        for cache_file in self.cache_dir.glob("closeup_*.png"):
+            cache_file.unlink()
+            deleted_count += 1
+            self.log.info(f"Admin cleared shared closeup: {cache_file.name}")
+        
+        # Clear memory cache
+        self.cache.memory_cache.clear()
+        self.log.info("Admin cleared memory cache")
+        
+        self.log.info(f"Admin cleared cache for guild {guild_id} ({deleted_count} files removed) - PRESERVED shared default base maps")
+        return deleted_count
             
     async def clear_all_cache(self) -> int:
         """Clear all cached images and return count of deleted files."""
-        try:
-            # Clear in-memory cache
-            self.base_map_cache.clear()
-        
-            deleted_count = 0
-        
-            # Clear shared cache directory (both final and base maps)
-            cache_files = list(self.cache_dir.glob("*.png"))
-            for cache_file in cache_files:
-                cache_file.unlink()
-                deleted_count += 1
-        
-            # Clear guild-specific caches (both final and base maps)
-            for guild_dir in self.data_dir.iterdir():
-                if guild_dir.is_dir() and guild_dir.name.isdigit():
-                    # Final map cache
-                    guild_cache_files = list(guild_dir.glob("map_cache_*.png"))
-                    for cache_file in guild_cache_files:
-                        cache_file.unlink()
-                        deleted_count += 1
-                
-                    # Base map cache
-                    base_cache_files = list(guild_dir.glob("base_*.png"))
-                    for cache_file in base_cache_files:
-                        cache_file.unlink()
-                        deleted_count += 1
-        
-            return deleted_count
-        
-        except Exception as e:
-            self.log.error(f"Error clearing cache: {e}")
-            return 0
-            
+        return await self.cache.clear_all_cache()

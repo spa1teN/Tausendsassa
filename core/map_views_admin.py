@@ -1,4 +1,4 @@
-"""Admin Views for Discord Map Bot."""
+"""Admin Views for Discord Map Bot with separate modals."""
 
 import discord
 from datetime import datetime
@@ -9,46 +9,27 @@ if TYPE_CHECKING:
     from cogs.map import MapV2Cog
 
 
-class AdminSettingsModal(discord.ui.Modal, title='Map Admin Settings'):
-    def __init__(self, cog: 'MapV2Cog', guild_id: int, original_interaction: discord.Interaction, preview_settings: Dict = None):
+class ColorSettingsModal(discord.ui.Modal, title='Map Color Settings'):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int, original_interaction: discord.Interaction):
         super().__init__()
         self.cog = cog
         self.guild_id = guild_id
         self.original_interaction = original_interaction
         
-        # Load current map data to get existing settings
+        # Load current settings to display in fields
         map_data = self.cog.maps.get(str(guild_id), {})
         existing_settings = map_data.get('settings', {})
+        colors = existing_settings.get('colors', {})
+        borders = existing_settings.get('borders', {})
         
-        # Determine which settings to display
-        if preview_settings:
-            # Preview mode: show preview values
-            settings_to_show = preview_settings
-            self.cog.log.debug(f"Modal showing preview settings for guild {guild_id}")
-        elif existing_settings:
-            # Existing custom settings: show saved values
-            settings_to_show = existing_settings
-            self.cog.log.debug(f"Modal showing existing custom settings for guild {guild_id}")
-        else:
-            # No custom settings: show empty fields with defaults
-            settings_to_show = {}
-            self.cog.log.debug(f"Modal showing empty fields for guild {guild_id}")
-        
-        # Extract values from settings
-        colors = settings_to_show.get('colors', {})
-        borders = settings_to_show.get('borders', {})
-        pins = settings_to_show.get('pins', {})
-        
-        # Set field defaults
-        self.land_color.default = self._format_color_for_display(colors.get('land')) if colors.get('land') is not None else ""
-        self.water_color.default = self._format_color_for_display(colors.get('water')) if colors.get('water') is not None else ""
-        self.border_color.default = self._format_color_for_display(borders.get('country')) if borders.get('country') is not None else ""
-        self.pin_color.default = self._format_color_for_display(pins.get('color')) if pins.get('color') is not None else ""
-        self.pin_size.default = str(pins.get('size', "")) if pins.get('size') is not None else ""
+        # Set current values as defaults
+        self.land_color.default = self._format_color_for_display(colors.get('land', ''))
+        self.water_color.default = self._format_color_for_display(colors.get('water', ''))
+        self.border_color.default = self._format_color_for_display(borders.get('country', ''))
 
     def _format_color_for_display(self, color_value):
         """Convert color value to display format for text input."""
-        if color_value is None:
+        if not color_value:
             return ""
         elif isinstance(color_value, tuple) and len(color_value) == 3:
             return f"{color_value[0]},{color_value[1]},{color_value[2]}"
@@ -59,90 +40,72 @@ class AdminSettingsModal(discord.ui.Modal, title='Map Admin Settings'):
 
     land_color = discord.ui.TextInput(
         label='Land Color (name/RGB/hex)',
-        placeholder='beige or 240,240,220 or #F0F0DC',
+        placeholder='beige or 240,240,220 or #F0F0DC (empty for default)',
         required=False,
         max_length=20
     )
     
     water_color = discord.ui.TextInput(
         label='Water Color (name/RGB/hex)', 
-        placeholder='lightblue or 168,213,242 or #A8D5F2',
+        placeholder='lightblue or 168,213,242 or #A8D5F2 (empty for default)',
         required=False,
         max_length=20
     )
     
     border_color = discord.ui.TextInput(
-        label='International Border Color (name/RGB/hex)',
-        placeholder='black or 0,0,0 or #000000',
+        label='Border Color (countries/states)',
+        placeholder='black or 0,0,0 or #000000 (empty for default)',
         required=False,
         max_length=20
-    )
-    
-    pin_color = discord.ui.TextInput(
-        label='Pin Color (name/hex)',
-        placeholder='red or #FF4444',
-        required=False,
-        max_length=20
-    )
-    
-    pin_size = discord.ui.TextInput(
-        label='Pin Size (8-32)',
-        placeholder='16',
-        required=False,
-        max_length=2
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Show loading message immediately
+        # Parse and store color settings
+        config = self.cog.map_generator.map_config
+        
+        # Use existing settings as base
+        guild_id = str(self.guild_id)
+        map_data = self.cog.maps.get(guild_id, {})
+        current_settings = map_data.get('settings', {})
+        
+        # Parse colors with defaults
+        land_color = config.parse_color(self.land_color.value, config.DEFAULT_LAND_COLOR) if self.land_color.value else config.DEFAULT_LAND_COLOR
+        water_color = config.parse_color(self.water_color.value, config.DEFAULT_WATER_COLOR) if self.water_color.value else config.DEFAULT_WATER_COLOR
+        border_color = config.parse_color(self.border_color.value, config.DEFAULT_COUNTRY_BORDER_COLOR) if self.border_color.value else config.DEFAULT_COUNTRY_BORDER_COLOR
+        river_color = water_color
+        
+        # Prepare updated settings
+        updated_settings = current_settings.copy()
+        updated_settings['colors'] = {
+            'land': land_color,
+            'water': water_color
+        }
+        updated_settings['borders'] = {
+            'country': border_color,
+            'state': border_color,  # Same as country
+            'river': river_color
+        }
+        
+        # Generate preview
+        await self._show_preview(interaction, updated_settings)
+
+    async def _show_preview(self, interaction: discord.Interaction, settings: Dict):
+        """Show preview of color settings."""
+        # Show loading message
         loading_embed = discord.Embed(
-            title="ðŸŽ¨ Generating Preview",
+            title="🎨 Generating Preview",
             description="Just a moment, I'm rendering the preview...",
             color=0x7289da
         )
         await interaction.response.edit_message(embed=loading_embed, attachments=[], view=None)
         
         try:
-            guild_id = str(self.guild_id)
-            
-            # Parse colors using the color parser
-            config = self.cog.map_generator.map_config
-            
-            # Safe color parsing with proper defaults
-            land_color = config.parse_color(self.land_color.value, config.DEFAULT_LAND_COLOR) if self.land_color.value else config.DEFAULT_LAND_COLOR
-            water_color = config.parse_color(self.water_color.value, config.DEFAULT_WATER_COLOR) if self.water_color.value else config.DEFAULT_WATER_COLOR
-            country_color = config.parse_color(self.border_color.value, config.DEFAULT_COUNTRY_BORDER_COLOR) if self.border_color.value else config.DEFAULT_COUNTRY_BORDER_COLOR
-            pin_color = config.parse_color(self.pin_color.value, config.DEFAULT_PIN_COLOR) if self.pin_color.value else config.DEFAULT_PIN_COLOR
-            
-            # Parse pin size with validation
-            try:
-                pin_size = int(self.pin_size.value) if self.pin_size.value else config.DEFAULT_PIN_SIZE
-                pin_size = max(8, min(32, pin_size))  # Clamp between 8-32
-            except (ValueError, TypeError):
-                pin_size = config.DEFAULT_PIN_SIZE
-            
-            # Store preview settings temporarily
-            preview_settings = {
-                'colors': {
-                    'land': land_color,
-                    'water': water_color
-                },
-                'borders': {
-                    'country': country_color,
-                    'state': config.DEFAULT_STATE_BORDER_COLOR,
-                    'river': water_color  # Use water color for rivers
-                },
-                'pins': {
-                    'color': pin_color,
-                    'size': pin_size
-                }
-            }
-            
             # Generate preview
-            preview_image = await self.cog._generate_preview_map(int(self.guild_id), preview_settings)
+            preview_image = await self.cog._generate_preview_map(int(self.guild_id), settings)
             
             if not preview_image:
                 error_embed = discord.Embed(
-                    title="âŒ Preview Error",
+                    title="⛔ Preview Error",
                     description="Failed to generate preview. Please try again.",
                     color=0xff4444
                 )
@@ -151,13 +114,17 @@ class AdminSettingsModal(discord.ui.Modal, title='Map Admin Settings'):
             
             # Create preview embed
             embed = discord.Embed(
-                title="ðŸŽ¨ Map Settings Preview",
-                description="Here's how your map will look with the new settings:",
+                title="🎨 Color Settings Preview",
+                description="Here's how your map will look with the new color settings:",
                 color=0x7289da
             )
             
-            # Show color names if used
+            # Show color values
+            colors = settings['colors']
+            borders = settings['borders']
+            
             def format_color_display(color_value, input_value):
+                config = self.cog.map_generator.map_config
                 if input_value and input_value.lower() in config.COLOR_DICTIONARY:
                     return f"{input_value.title()}"
                 elif isinstance(color_value, tuple):
@@ -167,34 +134,24 @@ class AdminSettingsModal(discord.ui.Modal, title='Map Admin Settings'):
             
             embed.add_field(
                 name="Land Color", 
-                value=format_color_display(land_color, self.land_color.value),
+                value=format_color_display(colors['land'], self.land_color.value),
                 inline=True
             )
             embed.add_field(
                 name="Water Color", 
-                value=format_color_display(water_color, self.water_color.value),
+                value=format_color_display(colors['water'], self.water_color.value),
                 inline=True
             )
             embed.add_field(
-                name="International Borders", 
-                value=format_color_display(country_color, self.border_color.value),
-                inline=True
-            )
-            embed.add_field(
-                name="Pin Color", 
-                value=format_color_display(pin_color, self.pin_color.value),
-                inline=True
-            )
-            embed.add_field(
-                name="Pin Size", 
-                value=str(pin_size),
+                name="Borders", 
+                value=format_color_display(borders['country'], self.border_color.value),
                 inline=True
             )
             
-            # Send preview with confirmation buttons, replacing the loading message
-            view = MapSettingsPreviewView(self.cog, self.guild_id, preview_settings, self.original_interaction)
+            # Send preview with confirmation buttons
+            view = ColorSettingsPreviewView(self.cog, self.guild_id, settings, self.original_interaction)
             
-            filename = f"map_preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            filename = f"color_preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
             await interaction.edit_original_response(
                 embed=embed,
                 attachments=[discord.File(preview_image, filename=filename)],
@@ -202,13 +159,317 @@ class AdminSettingsModal(discord.ui.Modal, title='Map Admin Settings'):
             )
             
         except Exception as e:
-            self.cog.log.error(f"Error generating preview: {e}")
+            self.cog.log.error(f"Error generating color preview: {e}")
             error_embed = discord.Embed(
-                title="âŒ Preview Error",
+                title="⛔ Preview Error",
                 description="An error occurred while generating the preview.",
                 color=0xff4444
             )
             await interaction.edit_original_response(embed=error_embed, view=None)
+
+
+class PinSettingsModal(discord.ui.Modal, title='Pin Settings'):
+    def __init__(self, cog: 'MapV2Cog', guild_id: int, original_interaction: discord.Interaction):
+        super().__init__()
+        self.cog = cog
+        self.guild_id = guild_id
+        self.original_interaction = original_interaction
+        
+        # Load current settings to display in fields
+        map_data = self.cog.maps.get(str(guild_id), {})
+        existing_settings = map_data.get('settings', {})
+        pins = existing_settings.get('pins', {})
+        
+        # Set current values as defaults
+        self.pin_color.default = self._format_color_for_display(pins.get('color', ''))
+        self.pin_size.default = str(pins.get('size', '')) if pins.get('size') else ''
+
+    def _format_color_for_display(self, color_value):
+        """Convert color value to display format for text input."""
+        if not color_value:
+            return ""
+        elif isinstance(color_value, tuple) and len(color_value) == 3:
+            return f"{color_value[0]},{color_value[1]},{color_value[2]}"
+        elif isinstance(color_value, str):
+            return color_value
+        else:
+            return ""
+
+    pin_color = discord.ui.TextInput(
+        label='Pin Color (name/hex)',
+        placeholder='red or #FF4444 (leave empty for default)',
+        required=False,
+        max_length=20
+    )
+    
+    pin_size = discord.ui.TextInput(
+        label='Pin Size (8-32)',
+        placeholder='16 (leave empty for default)',
+        required=False,
+        max_length=2
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse and store pin settings
+        config = self.cog.map_generator.map_config
+        
+        # Use existing settings as base
+        guild_id = str(self.guild_id)
+        map_data = self.cog.maps.get(guild_id, {})
+        current_settings = map_data.get('settings', {})
+        
+        # Parse pin settings
+        pin_color = config.parse_color(self.pin_color.value, config.DEFAULT_PIN_COLOR) if self.pin_color.value else config.DEFAULT_PIN_COLOR
+        
+        try:
+            pin_size = int(self.pin_size.value) if self.pin_size.value else config.DEFAULT_PIN_SIZE
+            pin_size = max(8, min(32, pin_size))
+        except (ValueError, TypeError):
+            pin_size = config.DEFAULT_PIN_SIZE
+        
+        # Prepare updated settings
+        updated_settings = current_settings.copy()
+        if 'pins' not in updated_settings:
+            updated_settings['pins'] = {}
+        updated_settings['pins'].update({
+            'color': pin_color,
+            'size': pin_size
+        })
+        
+        # Generate preview
+        await self._show_preview(interaction, updated_settings)
+
+    async def _show_preview(self, interaction: discord.Interaction, settings: Dict):
+        """Show preview of pin settings with optimized performance."""
+        # Show loading message
+        loading_embed = discord.Embed(
+            title="📍 Generating Preview",
+            description="Just a moment, I'm rendering the preview...",
+            color=0x7289da
+        )
+        await interaction.response.edit_message(embed=loading_embed, attachments=[], view=None)
+        
+        try:
+            # Generate fast pin preview (reuses base map cache)
+            preview_image = await self.cog._generate_fast_pin_preview(int(self.guild_id), settings)
+            
+            if not preview_image:
+                error_embed = discord.Embed(
+                    title="⛔ Preview Error",
+                    description="Failed to generate preview. Please try again.",
+                    color=0xff4444
+                )
+                await interaction.edit_original_response(embed=error_embed, view=None)
+                return
+            
+            # Create preview embed
+            embed = discord.Embed(
+                title="📍 Pin Settings Preview",
+                description="Here's how your pins will look with the new settings:",
+                color=0x7289da
+            )
+            
+            # Show pin values
+            pins = settings['pins']
+            
+            def format_color_display(color_value, input_value):
+                config = self.cog.map_generator.map_config
+                if input_value and input_value.lower() in config.COLOR_DICTIONARY:
+                    return f"{input_value.title()}"
+                elif isinstance(color_value, tuple):
+                    return f"RGB({color_value[0]}, {color_value[1]}, {color_value[2]})"
+                else:
+                    return str(color_value)
+            
+            embed.add_field(
+                name="Pin Color", 
+                value=format_color_display(pins['color'], self.pin_color.value),
+                inline=True
+            )
+            embed.add_field(
+                name="Pin Size", 
+                value=str(pins['size']),
+                inline=True
+            )
+            
+            # Send preview with confirmation buttons
+            view = PinSettingsPreviewView(self.cog, self.guild_id, settings, self.original_interaction)
+            
+            filename = f"pin_preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            await interaction.edit_original_response(
+                embed=embed,
+                attachments=[discord.File(preview_image, filename=filename)],
+                view=view
+            )
+            
+        except Exception as e:
+            self.cog.log.error(f"Error generating pin preview: {e}")
+            error_embed = discord.Embed(
+                title="⛔ Preview Error",
+                description="An error occurred while generating the preview.",
+                color=0xff4444
+            )
+            await interaction.edit_original_response(embed=error_embed, view=None)
+
+
+class ColorSettingsPreviewView(discord.ui.View):
+    """View for confirming color settings after preview."""
+    
+    def __init__(self, cog: 'MapV2Cog', guild_id: int, settings: Dict, original_interaction: discord.Interaction):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.settings = settings
+        self.original_interaction = original_interaction
+
+    @discord.ui.button(label="Apply Colors", style=discord.ButtonStyle.success, emoji="✅")
+    async def apply_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._apply_settings(interaction)
+
+    @discord.ui.button(label="Adjust Colors", style=discord.ButtonStyle.secondary, emoji="🔧")
+    async def adjust_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = ColorSettingsModal(self.cog, self.guild_id, self.original_interaction)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="⛔")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="⛔ Color Settings Cancelled",
+            description="No changes were made to the map colors.",
+            color=0xff4444
+        )
+        await interaction.response.edit_message(embed=embed, attachments=[], view=None)
+
+    async def _apply_settings(self, interaction: discord.Interaction):
+        """Apply the color settings."""
+        saving_embed = discord.Embed(
+            title="💾 Saving Colors",
+            description="Saving color configuration...",
+            color=0x7289da
+        )
+        await interaction.response.edit_message(embed=saving_embed, attachments=[], view=None)
+        
+        try:
+            guild_id = str(self.guild_id)
+            
+            if guild_id not in self.cog.maps:
+                await interaction.edit_original_response(embed=discord.Embed(
+                    title="⛔ Error", description="No map exists for this server.", color=0xff4444), view=None)
+                return
+            
+            # Apply settings
+            if 'settings' not in self.cog.maps[guild_id]:
+                self.cog.maps[guild_id]['settings'] = {}
+            
+            self.cog.maps[guild_id]['settings'].update(self.settings)
+            await self.cog._save_data(guild_id)
+            
+            # Invalidate caches efficiently - colors affect base maps
+            await self.cog.storage.invalidate_base_map_cache_only(int(guild_id))
+            await self.cog.storage.invalidate_final_map_cache_only(int(guild_id))
+            
+            # Update main map
+            channel_id = self.cog.maps[guild_id]['channel_id']
+            await self.cog._update_map(int(guild_id), channel_id)
+            await self.cog._update_global_overview()
+            
+            success_embed = discord.Embed(
+                title="✅ Colors Applied Successfully",
+                description="Your map colors have been updated!",
+                color=0x00ff44
+            )
+            success_embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
+            
+            await interaction.edit_original_response(embed=success_embed, attachments=[], view=None)
+            
+        except Exception as e:
+            self.cog.log.error(f"Error applying color settings: {e}")
+            error_embed = discord.Embed(
+                title="⛔ Error",
+                description="An error occurred while saving the colors.",
+                color=0xff4444
+            )
+            await interaction.edit_original_response(embed=error_embed, view=None)
+
+
+class PinSettingsPreviewView(discord.ui.View):
+    """View for confirming pin settings after preview."""
+    
+    def __init__(self, cog: 'MapV2Cog', guild_id: int, settings: Dict, original_interaction: discord.Interaction):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.settings = settings
+        self.original_interaction = original_interaction
+
+    @discord.ui.button(label="Apply Pins", style=discord.ButtonStyle.success, emoji="✅")
+    async def apply_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._apply_settings(interaction)
+
+    @discord.ui.button(label="Adjust Pins", style=discord.ButtonStyle.secondary, emoji="🔧")
+    async def adjust_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = PinSettingsModal(self.cog, self.guild_id, self.original_interaction)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="⛔")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="⛔ Pin Settings Cancelled",
+            description="No changes were made to the pin settings.",
+            color=0xff4444
+        )
+        await interaction.response.edit_message(embed=embed, attachments=[], view=None)
+
+    async def _apply_settings(self, interaction: discord.Interaction):
+        """Apply the pin settings."""
+        saving_embed = discord.Embed(
+            title="💾 Saving Pins",
+            description="Saving pin configuration...",
+            color=0x7289da
+        )
+        await interaction.response.edit_message(embed=saving_embed, attachments=[], view=None)
+        
+        try:
+            guild_id = str(self.guild_id)
+            
+            if guild_id not in self.cog.maps:
+                await interaction.edit_original_response(embed=discord.Embed(
+                    title="⛔ Error", description="No map exists for this server.", color=0xff4444), view=None)
+                return
+            
+            # Apply settings
+            if 'settings' not in self.cog.maps[guild_id]:
+                self.cog.maps[guild_id]['settings'] = {}
+            
+            self.cog.maps[guild_id]['settings'].update(self.settings)
+            await self.cog._save_data(guild_id)
+            
+            # Only invalidate final map cache for pin changes (base map unchanged)
+            await self.cog.storage.invalidate_final_map_cache_only(int(guild_id))
+            
+            # Update main map
+            channel_id = self.cog.maps[guild_id]['channel_id']
+            await self.cog._update_map(int(guild_id), channel_id)
+            await self.cog._update_global_overview()
+            
+            success_embed = discord.Embed(
+                title="✅ Pins Applied Successfully",
+                description="Your pin settings have been updated!",
+                color=0x00ff44
+            )
+            success_embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
+            
+            await interaction.edit_original_response(embed=success_embed, attachments=[], view=None)
+            
+        except Exception as e:
+            self.cog.log.error(f"Error applying pin settings: {e}")
+            error_embed = discord.Embed(
+                title="⛔ Error",
+                description="An error occurred while saving the pin settings.",
+                color=0xff4444
+            )
+            await interaction.edit_original_response(embed=error_embed, view=None)
+
 
 class ProximitySettingsView(discord.ui.View):
     """View for setting proximity search on/off."""
@@ -230,7 +491,7 @@ class ProximitySettingsView(discord.ui.View):
     async def enable_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._set_proximity(interaction, True)
 
-    @discord.ui.button(label="Disable", style=discord.ButtonStyle.secondary, emoji="❌")
+    @discord.ui.button(label="Disable", style=discord.ButtonStyle.secondary, emoji="⛔")
     async def disable_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._set_proximity(interaction, False)
 
@@ -239,7 +500,7 @@ class ProximitySettingsView(discord.ui.View):
         
         guild_id = str(self.guild_id)
         if guild_id not in self.cog.maps:
-            await interaction.followup.send("❌ No map exists for this server.", ephemeral=True)
+            await interaction.followup.send("⛔ No map exists for this server.", ephemeral=True)
             return
         
         # Update setting
@@ -252,147 +513,12 @@ class ProximitySettingsView(discord.ui.View):
         
         # Update the view
         embed = discord.Embed(
-            title="📍 Proximity Search Settings",
+            title="🔍 Proximity Search Settings",
             description=f"Proximity search is now **{'enabled' if enabled else 'disabled'}** for this server.",
             color=0x00ff44 if enabled else 0xff4444
         )
         
         await interaction.edit_original_response(embed=embed, view=self)
-
-
-class MapSettingsPreviewView(discord.ui.View):
-    """View for confirming or adjusting map settings after preview."""
-    
-    def __init__(self, cog: 'MapV2Cog', guild_id: int, preview_settings: Dict, original_interaction: discord.Interaction):
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.guild_id = guild_id
-        self.preview_settings = preview_settings
-        self.original_interaction = original_interaction
-
-    @discord.ui.button(label="Apply Settings", style=discord.ButtonStyle.success, emoji="✅")
-    async def apply_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Show saving configuration loading message
-        saving_embed = discord.Embed(
-            title="💾 Saving Configuration",
-            description="Saving the configuration and rendering base map...",
-            color=0x7289da
-        )
-        await interaction.response.edit_message(embed=saving_embed, attachments=[], view=None)
-    
-        try:
-            guild_id = str(self.guild_id)
-        
-            if guild_id not in self.cog.maps:
-                await interaction.followup.send("❌ No map exists for this server.", ephemeral=True)
-                return
-            
-            # Apply the preview settings
-            if 'settings' not in self.cog.maps[guild_id]:
-                self.cog.maps[guild_id]['settings'] = {}
-        
-            self.cog.maps[guild_id]['settings']['colors'] = self.preview_settings['colors']
-            self.cog.maps[guild_id]['settings']['borders'] = self.preview_settings['borders']
-            self.cog.maps[guild_id]['settings']['pins'] = self.preview_settings['pins']
-        
-            # Save changes
-            await self.cog._save_data(guild_id)
-        
-            # Invalidate caches
-            await self.cog.storage.invalidate_base_map_cache_only(int(guild_id))
-            await self.cog.storage.invalidate_final_map_cache_only(int(guild_id))
-        
-            # Generate new base map with custom settings
-            map_data = self.cog.maps[guild_id]
-            region = map_data.get('region', 'world')
-            width, height = self.cog.map_generator.calculate_image_dimensions(region)
-            if region != "germany" and region != "usmainland":
-                height = int(height * 0.8)
-        
-            self.cog.log.info(f"Pre-generating base map with custom settings for guild {guild_id}")
-            base_map, _ = await self.cog.map_generator.render_geopandas_map(
-                region, width, height, guild_id, self.cog.maps
-            )
-        
-            if base_map:
-                await self.cog.storage.cache_base_map(region, width, height, base_map, guild_id, self.cog.maps)
-                self.cog.log.info(f"Pre-cached base map with custom settings for guild {guild_id}")
-        
-            channel_id = self.cog.maps[guild_id]['channel_id']
-        
-            # Try to use preview image for immediate update
-            try:
-                message = await self.original_interaction.original_response()
-                if message.attachments:
-                    preview_attachment = message.attachments[0]
-                    preview_data = await preview_attachment.read()
-                
-                    channel = self.cog.bot.get_channel(channel_id)
-                    if channel:
-                        existing_message_id = self.cog.maps[guild_id].get('message_id')
-                        if existing_message_id:
-                            try:
-                                map_message = await channel.fetch_message(existing_message_id)
-                                
-                                from core.map_views import MapPinButtonView
-                                region = self.cog.maps[guild_id].get('region', 'world')
-                                map_view = MapPinButtonView(self.cog, region, int(guild_id))
-                                
-                                filename = f"map_{region}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                                await map_message.edit(
-                                    attachments=[discord.File(BytesIO(preview_data), filename=filename)],
-                                    view=map_view
-                                )
-                            
-                                self.cog.log.info(f"Updated main map using preview image for guild {guild_id}")
-                            except Exception as e:
-                                self.cog.log.warning(f"Could not update main map with preview: {e}")
-                                await self.cog._update_map(int(guild_id), channel_id)
-                        else:
-                            await self.cog._update_map(int(guild_id), channel_id)
-                    else:
-                        await self.cog._update_map(int(guild_id), channel_id)
-                else:
-                    await self.cog._update_map(int(guild_id), channel_id)
-            except Exception as e:
-                self.cog.log.warning(f"Error using preview for main map update: {e}")
-                await self.cog._update_map(int(guild_id), channel_id)
-        
-            await self.cog._update_global_overview()
-        
-            # Show success message
-            success_embed = discord.Embed(
-                title="✅ Configuration Saved Successfully",
-                description="Your map has been updated with the new settings!\nBase map pre-cached for faster future updates.",
-                color=0x00ff44
-            )
-            success_embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
-        
-            await interaction.edit_original_response(embed=success_embed, attachments=[], view=None)
-        
-        except Exception as e:
-            self.cog.log.error(f"Error applying settings: {e}")
-            error_embed = discord.Embed(
-                title="❌ Configuration Error",
-                description="An error occurred while saving the configuration.",
-                color=0xff4444
-            )
-            await interaction.edit_original_response(embed=error_embed, view=None)
-
-    @discord.ui.button(label="Adjust Settings", style=discord.ButtonStyle.secondary, emoji="🔧")
-    async def adjust_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Show the settings modal again with current preview settings
-        modal = AdminSettingsModal(self.cog, self.guild_id, self.original_interaction, self.preview_settings)
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="❌ Settings Cancelled",
-            description="No changes were made to the map.",
-            color=0xff4444
-        )
-        await interaction.response.edit_message(embed=embed, attachments=[], view=None)
 
 
 class MapRemovalConfirmView(discord.ui.View):
@@ -409,7 +535,7 @@ class MapRemovalConfirmView(discord.ui.View):
         
         if guild_id not in self.cog.maps:
             embed = discord.Embed(
-                title="❌ Error",
+                title="⛔ Error",
                 description="No map exists for this server.",
                 color=0xff4444
             )
@@ -452,10 +578,10 @@ class MapRemovalConfirmView(discord.ui.View):
 
         await interaction.edit_original_response(embed=embed, view=None)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="⛔")
     async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
-            title="❌ Deletion Cancelled",
+            title="⛔ Deletion Cancelled",
             description="The map was not deleted.",
             color=0x7289da
         )
@@ -482,21 +608,25 @@ class AdminToolsView(discord.ui.View):
             label="Clear Cache",
             style=discord.ButtonStyle.secondary,
             emoji="🗑️",
-            row=1
+            row=2
         )
         clear_cache_button.callback = self.clear_cache
         self.add_item(clear_cache_button)
 
-    @discord.ui.button(label="Customize Map", style=discord.ButtonStyle.primary, emoji="🎨")
-    async def customize_map(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Load current settings from map data (not preview settings)
-        modal = AdminSettingsModal(self.cog, self.guild_id, interaction, preview_settings=None)
+    @discord.ui.button(label="Customize Colors", style=discord.ButtonStyle.primary, emoji="🎨", row=0)
+    async def customize_colors(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = ColorSettingsModal(self.cog, self.guild_id, interaction)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Proximity Settings", style=discord.ButtonStyle.secondary, emoji="📍")
+    @discord.ui.button(label="Customize Pins", style=discord.ButtonStyle.primary, emoji="📍", row=0)
+    async def customize_pins(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = PinSettingsModal(self.cog, self.guild_id, interaction)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Proximity Settings", style=discord.ButtonStyle.secondary, emoji="🔍", row=1)
     async def proximity_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
-            title="📍 Proximity Search Settings",
+            title="🔍 Proximity Search Settings",
             description="Enable or disable proximity search for this server.",
             color=0x7289da
         )
@@ -504,7 +634,7 @@ class AdminToolsView(discord.ui.View):
         view = ProximitySettingsView(self.cog, self.guild_id)
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="Delete Map", style=discord.ButtonStyle.danger, emoji="🗑️")
+    @discord.ui.button(label="Delete Map", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
     async def delete_map(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
             title="⚠️ Confirm Map Deletion",
@@ -516,16 +646,18 @@ class AdminToolsView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=view)
 
     async def clear_cache(self, interaction: discord.Interaction):
-        """Clear guild-specific cached maps."""
+        """Clear guild-specific cached maps - preserves default base maps."""
         await interaction.response.defer()
         
         try:
-            # Clear cache for this specific guild
-            await self.cog._invalidate_map_cache(self.guild_id)
+            # Use new admin clear cache method that preserves default base maps
+            deleted_count = await self.cog.storage.admin_clear_cache(self.guild_id)
             
             embed = discord.Embed(
                 title="✅ Cache Cleared",
-                description="Cached maps for this server have been cleared. The map will be regenerated with current settings.",
+                description=f"Cleared {deleted_count} cached files for this server.\n\n"
+                           f"**Removed:** Custom base maps, final maps, closeups\n"
+                           f"**Preserved:** Default base maps for faster loading",
                 color=0x00ff44
             )
             
@@ -534,7 +666,7 @@ class AdminToolsView(discord.ui.View):
         except Exception as e:
             self.cog.log.error(f"Error clearing guild cache: {e}")
             embed = discord.Embed(
-                title="❌ Error",
+                title="⛔ Error",
                 description="Failed to clear cache.",
                 color=0xff4444
             )

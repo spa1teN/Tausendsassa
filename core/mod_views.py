@@ -65,6 +65,11 @@ class ChannelSelectView(discord.ui.View):
         except discord.HTTPException as e:
             await interaction.response.send_message(f"❌ Failed to create webhook: {str(e)}", ephemeral=True)
 
+    async def on_timeout(self):
+        """Called when the view times out"""
+        for item in self.children:
+            item.disabled = True
+
 class RoleSelectView(discord.ui.View):
     def __init__(self, moderation_cog):
         super().__init__(timeout=300)
@@ -106,6 +111,11 @@ class RoleSelectView(discord.ui.View):
         )
         await interaction.followup.send(embed=success_embed, ephemeral=True)
 
+    async def on_timeout(self):
+        """Called when the view times out"""
+        for item in self.children:
+            item.disabled = True
+
 class ModerationDashboardView(discord.ui.View):
     def __init__(self, moderation_cog):
         super().__init__(timeout=300)
@@ -121,40 +131,7 @@ class ModerationDashboardView(discord.ui.View):
         
         if config.get('member_log_webhook'):
             # Disable member logging - also delete the webhook
-            webhook_url = config.get('member_log_webhook')
-            if webhook_url:
-                try:
-                    # Create a new aiohttp session for webhook deletion
-                    async with aiohttp.ClientSession() as session:
-                        webhook = discord.Webhook.from_url(webhook_url, session=session)
-                        await webhook.delete(reason="Member logging disabled")
-                except (discord.HTTPException, aiohttp.ClientError):
-                    pass  # Webhook might already be deleted
-            
-            # Remove webhook from config properly
-            guild_str = str(interaction.guild.id)
-            if guild_str in self.moderation_cog.config and 'member_log_webhook' in self.moderation_cog.config[guild_str]:
-                del self.moderation_cog.config[guild_str]['member_log_webhook']
-                self.moderation_cog.save_config()
-            
-            # Update the dashboard in place
-            dashboard_embed = self.moderation_cog.create_dashboard_embed(interaction.guild.id)
-            view = ModerationDashboardView(self.moderation_cog)
-            view.update_buttons(interaction.guild.id)
-            
-            await interaction.response.edit_message(
-                content=None,
-                embed=dashboard_embed, 
-                view=view
-            )
-            
-            # Send success message as followup
-            success_embed = discord.Embed(
-                title="✅ Member Logging Disabled",
-                description="Member logging has been disabled and webhook deleted.",
-                color=0xff0000
-            )
-            await interaction.followup.send(embed=success_embed, ephemeral=True)
+            await self._disable_member_logging(interaction, config)
         else:
             # Replace dashboard with channel selection
             view = ChannelSelectView(self.moderation_cog)
@@ -173,30 +150,8 @@ class ModerationDashboardView(discord.ui.View):
         config = self.moderation_cog.get_guild_config(interaction.guild.id)
         
         if config.get('join_role'):
-            # Disable join role properly
-            guild_str = str(interaction.guild.id)
-            if guild_str in self.moderation_cog.config and 'join_role' in self.moderation_cog.config[guild_str]:
-                del self.moderation_cog.config[guild_str]['join_role']
-                self.moderation_cog.save_config()
-            
-            # Update the dashboard in place
-            dashboard_embed = self.moderation_cog.create_dashboard_embed(interaction.guild.id)
-            view = ModerationDashboardView(self.moderation_cog)
-            view.update_buttons(interaction.guild.id)
-            
-            await interaction.response.edit_message(
-                content=None,
-                embed=dashboard_embed, 
-                view=view
-            )
-            
-            # Send success message as followup
-            success_embed = discord.Embed(
-                title="✅ Auto Join Role Disabled",
-                description="Auto role assignment for new members has been disabled.",
-                color=0xff0000
-            )
-            await interaction.followup.send(embed=success_embed, ephemeral=True)
+            # Disable join role
+            await self._disable_join_role(interaction)
         else:
             # Replace dashboard with role selection
             view = RoleSelectView(self.moderation_cog)
@@ -205,6 +160,69 @@ class ModerationDashboardView(discord.ui.View):
                 embed=None,
                 view=view
             )
+
+    async def _disable_member_logging(self, interaction: discord.Interaction, config: dict):
+        """Helper method to disable member logging"""
+        webhook_url = config.get('member_log_webhook')
+        if webhook_url:
+            try:
+                # Create a new aiohttp session for webhook deletion
+                async with aiohttp.ClientSession() as session:
+                    webhook = discord.Webhook.from_url(webhook_url, session=session)
+                    await webhook.delete(reason="Member logging disabled")
+            except (discord.HTTPException, aiohttp.ClientError):
+                pass  # Webhook might already be deleted
+        
+        # Remove webhook from config properly
+        guild_str = str(interaction.guild.id)
+        if guild_str in self.moderation_cog.config and 'member_log_webhook' in self.moderation_cog.config[guild_str]:
+            del self.moderation_cog.config[guild_str]['member_log_webhook']
+            self.moderation_cog.save_config()
+        
+        # Update the dashboard in place
+        dashboard_embed = self.moderation_cog.create_dashboard_embed(interaction.guild.id)
+        view = ModerationDashboardView(self.moderation_cog)
+        view.update_buttons(interaction.guild.id)
+        
+        await interaction.response.edit_message(
+            content=None,
+            embed=dashboard_embed, 
+            view=view
+        )
+        
+        # Send success message as followup
+        success_embed = discord.Embed(
+            title="✅ Member Logging Disabled",
+            description="Member logging has been disabled and webhook deleted.",
+            color=0xff0000
+        )
+        await interaction.followup.send(embed=success_embed, ephemeral=True)
+
+    async def _disable_join_role(self, interaction: discord.Interaction):
+        """Helper method to disable join role"""
+        guild_str = str(interaction.guild.id)
+        if guild_str in self.moderation_cog.config and 'join_role' in self.moderation_cog.config[guild_str]:
+            del self.moderation_cog.config[guild_str]['join_role']
+            self.moderation_cog.save_config()
+        
+        # Update the dashboard in place
+        dashboard_embed = self.moderation_cog.create_dashboard_embed(interaction.guild.id)
+        view = ModerationDashboardView(self.moderation_cog)
+        view.update_buttons(interaction.guild.id)
+        
+        await interaction.response.edit_message(
+            content=None,
+            embed=dashboard_embed, 
+            view=view
+        )
+        
+        # Send success message as followup
+        success_embed = discord.Embed(
+            title="✅ Auto Join Role Disabled",
+            description="Auto role assignment for new members has been disabled.",
+            color=0xff0000
+        )
+        await interaction.followup.send(embed=success_embed, ephemeral=True)
 
     async def on_timeout(self):
         """Called when the view times out"""

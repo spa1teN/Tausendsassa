@@ -90,7 +90,7 @@ class ContinentSelectionView(discord.ui.View):
                 )
             else:
                 error_embed = discord.Embed(
-                    title="❌ Generation Error",
+                    title="⛔ Generation Error",
                     description=f"Could not generate map for {display_name}",
                     color=0xff4444
                 )
@@ -102,7 +102,7 @@ class ContinentSelectionView(discord.ui.View):
         except Exception as e:
             self.cog.log.error(f"Error generating continent map: {e}")
             error_embed = discord.Embed(
-                title="❌ Generation Error",
+                title="⛔ Generation Error",
                 description="An error occurred while generating the continent close-up view.",
                 color=0xff4444
             )
@@ -178,7 +178,7 @@ class StateSelectionView(discord.ui.View):
                     )
                 else:
                     error_embed = discord.Embed(
-                        title="❌ Generation Error",
+                        title="⛔ Generation Error",
                         description=f"Could not generate map for {state_name}",
                         color=0xff4444
                     )
@@ -190,7 +190,7 @@ class StateSelectionView(discord.ui.View):
             except Exception as e:
                 self.cog.log.error(f"Error generating state map: {e}")
                 error_embed = discord.Embed(
-                    title="❌ Generation Error",
+                    title="⛔ Generation Error",
                     description="An error occurred while generating the close-up view.",
                     color=0xff4444
                 )
@@ -284,7 +284,7 @@ class MapMenuView(discord.ui.View):
         
         if guild_id not in self.cog.maps:
             embed = discord.Embed(
-                title="❌ Error",
+                title="⛔ Error",
                 description="No map exists for this server.",
                 color=0xff4444
             )
@@ -353,7 +353,7 @@ class MapMenuView(discord.ui.View):
             )
         else:
             embed = discord.Embed(
-                title="❌ Not Available",
+                title="⛔ Not Available",
                 description="Region close-up is not available for this map type.",
                 color=0xff4444
             )
@@ -366,7 +366,7 @@ class MapMenuView(discord.ui.View):
         # Double-check if proximity is enabled (shouldn't be needed but safety first)
         if not map_data.get('allow_proximity', False):
             embed = discord.Embed(
-                title="❌ Not Available",
+                title="⛔ Not Available",
                 description="Proximity search is disabled for this map.",
                 color=0xff4444
             )
@@ -377,7 +377,7 @@ class MapMenuView(discord.ui.View):
         user_id = str(interaction.user.id)
         if user_id not in map_data.get('pins', {}):
             embed = discord.Embed(
-                title="❌ No Pin Found",
+                title="⛔ No Pin Found",
                 description="You need to pin your location first to search for nearby members!",
                 color=0xff4444
             )
@@ -469,7 +469,7 @@ class UserPinOptionsView(discord.ui.View):
     
         if guild_id not in self.cog.maps:
             embed = discord.Embed(
-                title="❌ Error",
+                title="⛔ Error",
                 description="No map for this server.",
                 color=0xff4444
             )
@@ -478,7 +478,7 @@ class UserPinOptionsView(discord.ui.View):
 
         if user_id not in self.cog.maps[guild_id]['pins']:
             embed = discord.Embed(
-                title="❌ Error",
+                title="⛔ Error",
                 description="You don't have a pin on the map.",
                 color=0xff4444
             )
@@ -497,7 +497,7 @@ class UserPinOptionsView(discord.ui.View):
         del self.cog.maps[guild_id]['pins'][user_id]
         await self.cog._save_data(guild_id)
         
-        # VERBESSERUNG: Nur Final Map Cache invalidieren, Base Map beibehalten
+        # OPTIMIZATION: Only Final Map Cache invalidieren, Base Map beibehalten
         await self.cog.storage.invalidate_final_map_cache_only(int(guild_id))
         self.cog.log.info(f"Pin removal for guild {guild_id}: preserved base map cache for efficiency")
         
@@ -538,6 +538,14 @@ class UpdateLocationModal(discord.ui.Modal, title='Update Pin Location'):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
+        # Show loading message immediately
+        loading_embed = discord.Embed(
+            title="🗺️ Updating Map",
+            description="Updating pin location and rendering updated map...",
+            color=0x7289da
+        )
+        await self.original_interaction.edit_original_response(embed=loading_embed, view=None)
         
         # Handle the location update
         await self.cog._handle_pin_location_update(

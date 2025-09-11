@@ -1,4 +1,4 @@
-"""Proximity calculation utilities for the Discord Map Bot - FIXED VERSION."""
+"""Proximity calculation utilities for the Discord Map Bot - Updated for improved renderer."""
 
 import math
 from typing import Dict, List, Tuple, Optional
@@ -43,7 +43,7 @@ class ProximityCalculator:
                 nearby_users.append({
                     'user_id': other_user_id,
                     'username': other_pin.get('username', 'Unknown'),
-                    'location': other_pin.get('location', 'Unknown'),  # WICHTIG: Verwende original input statt display_name
+                    'location': other_pin.get('location', 'Unknown'),  # Use original input
                     'lat': other_lat,
                     'lng': other_lng,
                     'distance': distance
@@ -55,7 +55,7 @@ class ProximityCalculator:
 
     def calculate_map_bounds(self, user_lat: float, user_lng: float, distance_km: int) -> Tuple[float, float, float, float]:
         """Calculate map bounds around user location for given distance."""
-        # FIXED: More accurate conversion considering latitude
+        # More accurate conversion considering latitude
         lat_offset = distance_km / 111.0  # 1 degree latitude ≈ 111 km
         lng_offset = distance_km / (111.0 * math.cos(math.radians(user_lat)))
 
@@ -83,7 +83,7 @@ class ProximityCalculator:
         return radius_pixels
 
     async def generate_proximity_map(self, user_id: int, guild_id: int, distance_km: int, maps: Dict) -> Optional[Tuple[BytesIO, List[Dict]]]:
-        """Generate proximity map showing nearby users."""
+        """Generate proximity map showing nearby users using improved renderer with optimized caching."""
         try:
             map_data = maps.get(str(guild_id), {})
             pins = map_data.get('pins', {})
@@ -101,45 +101,49 @@ class ProximityCalculator:
             # Calculate map bounds
             minx, miny, maxx, maxy = self.calculate_map_bounds(user_lat, user_lng, distance_km)
             
-            # Generate map
+            # Generate map using improved unified renderer
             width, height = 1200, 900
-            
-            def to_px(lat, lon):
-                x = (lon - minx) / (maxx - minx) * width
-                y = (maxy - lat) / (maxy - miny) * height
-                return (int(x), int(y))
-        
-            # WICHTIG: Create base map mit custom colors und boundaries
             guild_id_str = str(guild_id)
-            base_map, _ = await self.map_generator.render_geopandas_map_bounds(
-                minx, miny, maxx, maxy, width, height, guild_id_str, maps
+            
+            # OPTIMIZATION: Use the new unified renderer for proximity maps with caching support
+            base_map, projection_func = await self.map_generator.render_base_map(
+                minx, miny, maxx, maxy, width, height, 
+                map_type="proximity", 
+                guild_id=guild_id_str, 
+                maps=maps,
+                zoom_level="proximity"
             )
             
             if not base_map:
                 # Fallback with custom water color
                 land_color, water_color = self.map_generator.get_map_colors(guild_id_str, maps)
                 base_map = Image.new('RGB', (width, height), color=water_color)
+                projection_func = self.map_generator.create_projection_function(minx, miny, maxx, maxy, width, height)
         
             draw = ImageDraw.Draw(base_map)
             
             # Draw radius circle with accurate calculation
-            center_x, center_y = to_px(user_lat, user_lng)
+            center_x, center_y = projection_func(user_lat, user_lng)
             radius_pixels = self.calculate_radius_pixels(distance_km, user_lat, minx, maxx, width)
             
-            # Draw circle outline
+            # Get custom border colors for the circle
+            country_color, state_color, river_color = self.map_generator.get_border_colors(guild_id_str, maps)
+            circle_color = country_color  # Use country border color for consistency
+            
+            # Draw circle outline with custom color
             draw.ellipse([
                 center_x - radius_pixels, center_y - radius_pixels,
                 center_x + radius_pixels, center_y + radius_pixels
-            ], outline='#FF0000', width=3)
+            ], outline=circle_color, width=3)
         
-            # Draw user pin (larger, different color)
+            # Draw user pin (larger, different color) - use a distinctive green
             user_pin_size = 12
             draw.ellipse([
                 center_x - user_pin_size, center_y - user_pin_size,
                 center_x + user_pin_size, center_y + user_pin_size
             ], fill='#00FF00', outline='white', width=3)
         
-            # WICHTIG: Draw nearby user pins with custom pin color
+            # Draw nearby user pins with custom pin color
             pin_color, _ = self.map_generator.get_pin_settings(guild_id_str, maps)
             
             for user_data in nearby_users:
@@ -147,7 +151,7 @@ class ProximityCalculator:
                 
                 # Check if pin is within map bounds (visible area)
                 if minx <= pin_lng <= maxx and miny <= pin_lat <= maxy:
-                    x, y = to_px(pin_lat, pin_lng)
+                    x, y = projection_func(pin_lat, pin_lng)
                     pin_size = 8
                     draw.ellipse([x - pin_size, y - pin_size, x + pin_size, y + pin_size],
                                  fill=pin_color, outline='white', width=2)

@@ -39,7 +39,7 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
                 distance_km = int(self.distance.value)
                 if distance_km <= 0 or distance_km > 2000:  # Reasonable limits
                     error_embed = discord.Embed(
-                        title="❌ Invalid Distance",
+                        title="⛔ Invalid Distance",
                         description="Please enter a distance between 1 and 2000 kilometers.",
                         color=0xff4444
                     )
@@ -47,7 +47,7 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
                     return
             except ValueError:
                 error_embed = discord.Embed(
-                    title="❌ Invalid Input",
+                    title="⛔ Invalid Input",
                     description="Please enter a valid number for the distance.",
                     color=0xff4444
                 )
@@ -60,7 +60,7 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
             
             if not result:
                 error_embed = discord.Embed(
-                    title="❌ Generation Error",
+                    title="⛔ Generation Error",
                     description="Could not generate proximity view. Please try again.",
                     color=0xff4444
                 )
@@ -122,7 +122,7 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
         except Exception as e:
             self.cog.log.error(f"Error generating proximity view: {e}")
             error_embed = discord.Embed(
-                title="❌ Generation Error",
+                title="⛔ Generation Error",
                 description="An error occurred while generating the proximity view.",
                 color=0xff4444
             )
