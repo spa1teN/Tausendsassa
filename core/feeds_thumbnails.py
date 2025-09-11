@@ -129,8 +129,9 @@ def find_thumbnail(entry: Any) -> Optional[str]:
       8. Bluesky post images
     """
     # 1. OpenGraph image from entry URL (NEW - highest priority)
+    # Skip OpenGraph for Bluesky posts to avoid getting profile pictures instead of post images
     entry_url = entry.get('link') or entry.get('url')
-    if entry_url:
+    if entry_url and "bsky.app/profile" not in entry_url:
         og_image = _fetch_og_image_from_url(entry_url)
         if og_image:
             return og_image
