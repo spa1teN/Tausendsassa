@@ -404,9 +404,15 @@ def _render_template(template: Dict[str, Any],
     def _fmt(value: Any) -> Any:
         if isinstance(value, str):
             safe = defaultdict(str)
-            # All entry fields
+            # All entry fields - clean HTML from text fields
             for k, v in entry.items():
-                safe[k] = str(v) if v is not None else ""
+                if v is not None:
+                    if k == 'title':  # Clean HTML from titles
+                        safe[k] = _strip_html(str(v))
+                    else:
+                        safe[k] = str(v)
+                else:
+                    safe[k] = ""
             # Reserved fields
             safe['link'] = entry.get('link', '')
             safe['thumbnail'] = thumb_url or ''

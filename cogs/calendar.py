@@ -41,6 +41,7 @@ class CalendarConfig:
         self.created_events: List[int] = []  # Discord event IDs
         self.event_title_to_id: Dict[str, int] = {}  # Map event titles to Discord event IDs
         self.last_sync = None
+        self.current_week_start = None  # Track which week the last message belongs to
         
     def to_dict(self) -> dict:
         return {
@@ -52,7 +53,8 @@ class CalendarConfig:
             'last_message_id': self.last_message_id,
             'created_events': self.created_events,
             'event_title_to_id': self.event_title_to_id,
-            'last_sync': self.last_sync.isoformat() if self.last_sync else None
+            'last_sync': self.last_sync.isoformat() if self.last_sync else None,
+            'current_week_start': self.current_week_start.isoformat() if self.current_week_start else None
         }
     
     @classmethod
@@ -69,7 +71,210 @@ class CalendarConfig:
         config.event_title_to_id = data.get('event_title_to_id', {})
         if data.get('last_sync'):
             config.last_sync = datetime.fromisoformat(data['last_sync'])
+        if data.get('current_week_start'):
+            config.current_week_start = datetime.fromisoformat(data['current_week_start'])
         return config
+
+
+class CalendarConfigModal(discord.ui.Modal):
+    """Modal for editing calendar blacklist and whitelist"""
+    
+    def __init__(self, cog: 'CalendarCog', guild_id: int, calendar_id: str, calendar_config: 'CalendarConfig'):
+        super().__init__(title=f"Edit Calendar: {calendar_id}")
+        self.cog = cog
+        self.guild_id = guild_id
+        self.calendar_id = calendar_id
+        self.calendar_config = calendar_config
+        
+        # Add blacklist field
+        self.blacklist_field = discord.ui.TextInput(
+            label="Blacklist Terms (comma separated)",
+            placeholder="term1, term2, term3",
+            default=", ".join(calendar_config.blacklist),
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=1000
+        )
+        self.add_item(self.blacklist_field)
+        
+        # Add whitelist field
+        self.whitelist_field = discord.ui.TextInput(
+            label="Whitelist Terms (comma separated)",
+            placeholder="term1, term2, term3",
+            default=", ".join(calendar_config.whitelist),
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=1000
+        )
+        self.add_item(self.whitelist_field)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        """Handle modal submission"""
+        await interaction.response.defer()
+        
+        try:
+            # Parse new blacklist
+            blacklist_text = self.blacklist_field.value.strip()
+            new_blacklist = [term.strip() for term in blacklist_text.split(',') if term.strip()] if blacklist_text else []
+            
+            # Parse new whitelist
+            whitelist_text = self.whitelist_field.value.strip()
+            new_whitelist = [term.strip() for term in whitelist_text.split(',') if term.strip()] if whitelist_text else []
+            
+            # Update calendar config
+            self.calendar_config.blacklist = new_blacklist
+            self.calendar_config.whitelist = new_whitelist
+            
+            # Save to disk
+            self.cog._save_guild_calendars(self.guild_id)
+            
+            # Create success embed
+            embed = discord.Embed(
+                title="✅ Calendar Configuration Updated",
+                color=0x00ff00
+            )
+            embed.add_field(name="Calendar ID", value=self.calendar_id, inline=False)
+            
+            if new_blacklist:
+                embed.add_field(
+                    name="Blacklisted Terms", 
+                    value=", ".join(f"`{term}`" for term in new_blacklist), 
+                    inline=False
+                )
+            else:
+                embed.add_field(name="Blacklisted Terms", value="None", inline=False)
+            
+            if new_whitelist:
+                embed.add_field(
+                    name="Whitelisted Terms", 
+                    value=", ".join(f"`{term}`" for term in new_whitelist), 
+                    inline=False
+                )
+            else:
+                embed.add_field(name="Whitelisted Terms", value="None", inline=False)
+            
+            embed.set_footer(text="Changes will take effect at the next hourly sync.")
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+            self.cog.log.info(f"Updated calendar config for {self.calendar_id} in guild {self.guild_id}")
+            
+        except Exception as e:
+            self.cog.log.error(f"Error updating calendar config: {e}")
+            await interaction.followup.send(
+                f"❌ An error occurred while updating the calendar configuration: {str(e)}",
+                ephemeral=True
+            )
+
+
+class CalendarConfigView(discord.ui.View):
+    """View for configuring calendars with dropdown selection"""
+    
+    def __init__(self, cog: 'CalendarCog', guild_id: int, calendars: Dict[str, 'CalendarConfig']):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.calendars = calendars
+        
+        # Create dropdown options
+        options = []
+        for cal_id, cal_config in calendars.items():
+            # Get channel names for display
+            guild = cog.bot.get_guild(guild_id)
+            text_channel = guild.get_channel(cal_config.text_channel_id) if guild else None
+            text_name = text_channel.name if text_channel else f"Channel {cal_config.text_channel_id}"
+            
+            # Create a readable description
+            description = f"Posts to #{text_name}"
+            if len(cal_config.blacklist) > 0 or len(cal_config.whitelist) > 0:
+                filter_count = len(cal_config.blacklist) + len(cal_config.whitelist)
+                description += f" • {filter_count} filter terms"
+            
+            options.append(discord.SelectOption(
+                label=cal_id,
+                value=cal_id,
+                description=description[:100]  # Discord limit
+            ))
+        
+        # Add the dropdown
+        self.calendar_select = discord.ui.Select(
+            placeholder="Select a calendar to configure...",
+            options=options[:25]  # Discord limit
+        )
+        self.calendar_select.callback = self.calendar_selected
+        self.add_item(self.calendar_select)
+    
+    async def calendar_selected(self, interaction: discord.Interaction):
+        """Handle calendar selection for configuration"""
+        selected_calendar = self.calendar_select.values[0]
+        calendar_config = self.calendars[selected_calendar]
+        
+        # Create detailed embed with calendar information
+        guild = self.cog.bot.get_guild(self.guild_id)
+        text_channel = guild.get_channel(calendar_config.text_channel_id) if guild else None
+        voice_channel = guild.get_channel(calendar_config.voice_channel_id) if guild else None
+        
+        embed = discord.Embed(
+            title=f"📅 Calendar Configuration: {selected_calendar}",
+            color=0x5865F2
+        )
+        
+        # Basic info
+        embed.add_field(name="Calendar ID", value=selected_calendar, inline=True)
+        embed.add_field(name="Text Channel", value=text_channel.mention if text_channel else f"Channel {calendar_config.text_channel_id}", inline=True)
+        embed.add_field(name="Voice Channel", value=voice_channel.mention if voice_channel else f"Channel {calendar_config.voice_channel_id}", inline=True)
+        embed.add_field(name="iCal URL", value=calendar_config.ical_url, inline=False)
+        
+        # Filter terms
+        if calendar_config.blacklist:
+            embed.add_field(
+                name="Blacklisted Terms", 
+                value=", ".join(f"`{term}`" for term in calendar_config.blacklist), 
+                inline=False
+            )
+        else:
+            embed.add_field(name="Blacklisted Terms", value="None", inline=False)
+        
+        if calendar_config.whitelist:
+            embed.add_field(
+                name="Whitelisted Terms", 
+                value=", ".join(f"`{term}`" for term in calendar_config.whitelist), 
+                inline=False
+            )
+        else:
+            embed.add_field(name="Whitelisted Terms", value="None", inline=False)
+        
+        # Last sync info
+        if calendar_config.last_sync:
+            embed.add_field(
+                name="Last Sync", 
+                value=f"<t:{int(calendar_config.last_sync.timestamp())}:R>", 
+                inline=True
+            )
+        
+        # Statistics
+        embed.add_field(
+            name="Discord Events Created", 
+            value=str(len(calendar_config.created_events)), 
+            inline=True
+        )
+        
+        # Create view with edit button
+        view = discord.ui.View(timeout=300)
+        edit_button = discord.ui.Button(
+            label="Edit Filters",
+            style=discord.ButtonStyle.primary,
+            emoji="✏️"
+        )
+        
+        async def edit_button_callback(button_interaction):
+            modal = CalendarConfigModal(self.cog, self.guild_id, selected_calendar, calendar_config)
+            await button_interaction.response.send_modal(modal)
+        
+        edit_button.callback = edit_button_callback
+        view.add_item(edit_button)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 class CalendarRemoveView(discord.ui.View):
@@ -153,9 +358,13 @@ class CalendarCog(commands.Cog):
         # Start the update task
         self.calendar_update_task.start()
         
+        # Start event status monitoring task
+        self.event_status_task.start()
+        
     def cog_unload(self):
         """Cleanup when cog is unloaded"""
         self.calendar_update_task.cancel()
+        self.event_status_task.cancel()
     
     def _load_all_guild_configs(self):
         """Load calendar configurations for all guilds"""
@@ -375,6 +584,39 @@ class CalendarCog(commands.Cog):
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+    @app_commands.command(name="cal_config", description="Configure existing calendar filters and settings")
+    async def cal_config(self, interaction: discord.Interaction):
+        """Configure an existing iCal calendar"""
+        
+        # Permission check - admin only
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ You need administrator permissions to use this command.", 
+                ephemeral=True
+            )
+            return
+        
+        guild_id = interaction.guild_id
+        
+        # Check if there are any calendars to configure
+        if guild_id not in self.guild_calendars or not self.guild_calendars[guild_id]:
+            await interaction.response.send_message(
+                "❌ No calendars found for this server. Use `/cal_add` to add one first.",
+                ephemeral=True
+            )
+            return
+        
+        # Create the configuration view with dropdown
+        view = CalendarConfigView(self, guild_id, self.guild_calendars[guild_id])
+        
+        embed = discord.Embed(
+            title="📅 Calendar Configuration",
+            description="Select a calendar to view details and edit filters:",
+            color=0x5865F2
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
     async def remove_calendar(self, guild_id: int, calendar_id: str) -> bool:
         """Remove a calendar and clean up associated data"""
         try:
@@ -435,6 +677,65 @@ class CalendarCog(commands.Cog):
         """Wait for bot to be ready before starting the task"""
         await self.bot.wait_until_ready()
 
+    @tasks.loop(minutes=5)
+    async def event_status_task(self):
+        """Task that runs every 5 minutes to monitor and update Discord event statuses"""
+        now = datetime.now(timezone.utc)
+        events_started = 0
+        events_ended = 0
+        events_cleaned = 0
+        
+        for guild_id, calendars in self.guild_calendars.items():
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                continue
+                
+            for calendar_id, calendar_config in calendars.items():
+                for event_id in calendar_config.created_events.copy():
+                    try:
+                        discord_event = await guild.fetch_scheduled_event(event_id)
+                        
+                        # Check if event should be started
+                        if (discord_event.status == discord.EventStatus.scheduled and 
+                            discord_event.start_time <= now):
+                            
+                            # Start the event
+                            await discord_event.start()
+                            self.log.info(f"🟢 Auto-started Discord event: {discord_event.name} in {guild.name}")
+                            events_started += 1
+                        
+                        # Check if event should be ended
+                        elif (discord_event.status == discord.EventStatus.active and 
+                              discord_event.end_time and discord_event.end_time <= now):
+                            
+                            # End the event
+                            await discord_event.end()
+                            self.log.info(f"🔴 Auto-ended Discord event: {discord_event.name} in {guild.name}")
+                            events_ended += 1
+                        
+                    except discord.NotFound:
+                        # Event was deleted, remove from our tracking
+                        calendar_config.created_events.remove(event_id)
+                        # Also remove from title mapping
+                        for title, mapped_id in list(calendar_config.event_title_to_id.items()):
+                            if mapped_id == event_id:
+                                del calendar_config.event_title_to_id[title]
+                                break
+                        # Save updated config
+                        self._save_guild_calendars(guild_id)
+                        events_cleaned += 1
+                    except Exception as e:
+                        self.log.warning(f"Error managing event status for event {event_id}: {e}")
+        
+        # Log summary if any events were managed
+        if events_started > 0 or events_ended > 0 or events_cleaned > 0:
+            self.log.info(f"📅 Event status check completed: {events_started} started, {events_ended} ended, {events_cleaned} cleaned up")
+
+    @event_status_task.before_loop
+    async def before_event_status(self):
+        """Wait for bot to be ready before starting the event status task"""
+        await self.bot.wait_until_ready()
+
     async def _sync_calendar(self, guild_id: int, calendar_id: str, calendar_config: CalendarConfig):
         """Sync a single calendar - fetch events, post summary, create Discord events"""
         self.log.info(f"Syncing calendar {calendar_id} for guild {guild_id}")
@@ -449,10 +750,10 @@ class CalendarCog(commands.Cog):
             
             # Filter events by blacklist and get this week's events
             filtered_events = self._filter_events(events, calendar_config.blacklist, calendar_config.whitelist)
-            weekly_events = self._get_weekly_events(filtered_events)
+            weekly_events, week_start = self._get_weekly_events(filtered_events)
             
             # Post or update weekly summary
-            await self._post_weekly_summary(guild_id, calendar_config, weekly_events)
+            await self._post_weekly_summary(guild_id, calendar_config, weekly_events, week_start)
             
             # Manage Discord events
             await self._manage_discord_events(guild_id, calendar_config, weekly_events)
@@ -572,7 +873,7 @@ class CalendarCog(commands.Cog):
         
         return filtered
 
-    def _get_weekly_events(self, events: List[dict]) -> List[dict]:
+    def _get_weekly_events(self, events: List[dict]) -> tuple[List[dict], datetime]:
         """Get events for the current week (Monday to Sunday)"""
         now = datetime.now()
         
@@ -605,9 +906,9 @@ class CalendarCog(commands.Cog):
         
         # Sort by start time
         weekly_events.sort(key=lambda x: x.get('start', datetime.min))
-        return weekly_events
+        return weekly_events, week_start
 
-    async def _post_weekly_summary(self, guild_id: int, calendar_config: CalendarConfig, events: List[dict]):
+    async def _post_weekly_summary(self, guild_id: int, calendar_config: CalendarConfig, events: List[dict], week_start: datetime):
         """Post or update the weekly summary message"""
         guild = self.bot.get_guild(guild_id)
         if not guild:
@@ -620,24 +921,48 @@ class CalendarCog(commands.Cog):
         # Create summary embed
         embed = self._create_summary_embed(events, calendar_config, guild_id)
         
-        # Delete old message if it exists
-        if calendar_config.last_message_id:
+        # Check if we're in a new week compared to the last message
+        is_new_week = (calendar_config.current_week_start is None or 
+                      calendar_config.current_week_start != week_start)
+        
+        if is_new_week or not calendar_config.last_message_id:
+            # Delete old message if it exists for new week
+            if calendar_config.last_message_id:
+                try:
+                    old_message = await channel.fetch_message(calendar_config.last_message_id)
+                    await old_message.delete()
+                except Exception as e:
+                    self.log.warning(f"Could not delete old summary message: {e}")
+            
+            # Post new message for new week
+            try:
+                message = await channel.send(embed=embed)
+                calendar_config.last_message_id = message.id
+                calendar_config.current_week_start = week_start
+                self.log.info(f"Posted new weekly summary to {channel.name} (message ID: {message.id})")
+            except Exception as e:
+                self.log.error(f"Error posting weekly summary: {e}")
+        else:
+            # Update existing message within the same week
             try:
                 old_message = await channel.fetch_message(calendar_config.last_message_id)
-                await old_message.delete()
+                await old_message.edit(embed=embed)
+                self.log.info(f"Updated weekly summary in {channel.name} (message ID: {calendar_config.last_message_id})")
             except Exception as e:
-                self.log.warning(f"Could not delete old summary message: {e}")
-        
-        # Post new message
-        try:
-            message = await channel.send(embed=embed)
-            calendar_config.last_message_id = message.id
-            self.log.info(f"Posted weekly summary to {channel.name} (message ID: {message.id})")
-        except Exception as e:
-            self.log.error(f"Error posting weekly summary: {e}")
+                self.log.warning(f"Could not update existing message, posting new one: {e}")
+                # Fallback to posting new message
+                try:
+                    message = await channel.send(embed=embed)
+                    calendar_config.last_message_id = message.id
+                    calendar_config.current_week_start = week_start
+                    self.log.info(f"Posted new weekly summary (fallback) to {channel.name} (message ID: {message.id})")
+                except Exception as e2:
+                    self.log.error(f"Error posting fallback weekly summary: {e2}")
 
     def _create_summary_embed(self, events: List[dict], calendar_config: CalendarConfig, guild_id: int) -> discord.Embed:
         """Create an embed for the weekly summary"""
+        from core.timezone_util import to_guild_timezone
+        
         embed = discord.Embed(
             title="📅 Weekly Calendar Summary",
             color=0x5865F2
@@ -652,8 +977,10 @@ class CalendarCog(commands.Cog):
         for event in events:
             event_start = event.get('start')
             if event_start:
-                if hasattr(event_start, 'date'):
-                    day = event_start.date()
+                # Convert to guild timezone for display
+                if isinstance(event_start, datetime):
+                    guild_start = to_guild_timezone(event_start, guild_id)
+                    day = guild_start.date()
                 else:
                     day = event_start
                 
@@ -674,7 +1001,11 @@ class CalendarCog(commands.Cog):
                 start = event.get('start')
                 
                 if start:
-                    if hasattr(start, 'strftime'):
+                    if isinstance(start, datetime):
+                        # Convert to guild timezone for display
+                        guild_start = to_guild_timezone(start, guild_id)
+                        time_str = guild_start.strftime("%H:%M")
+                    elif hasattr(start, 'strftime'):
                         time_str = start.strftime("%H:%M")
                     else:
                         time_str = "All day"
@@ -696,7 +1027,9 @@ class CalendarCog(commands.Cog):
                 inline=False
             )
         
-        embed.set_footer(text=f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        # Use guild timezone for footer timestamp
+        now_guild = to_guild_timezone(datetime.now(timezone.utc), guild_id)
+        embed.set_footer(text=f"Last updated: {now_guild.strftime('%Y-%m-%d %H:%M')}")
         return embed
 
     async def _manage_discord_events(self, guild_id: int, calendar_config: CalendarConfig, events: List[dict]):

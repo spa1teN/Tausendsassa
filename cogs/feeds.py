@@ -14,7 +14,7 @@ from discord.ext import commands, tasks
 from core import feeds_rss as rss
 from core.feeds_config import (
     POLL_INTERVAL_MINUTES, RATE_LIMIT_SECONDS, FAILURE_THRESHOLD, 
-    AUTHORIZED_USERS, GLOBAL_MONITOR_CHANNEL_ID, COLOR_CHOICES,
+    AUTHORIZED_USERS, COLOR_CHOICES,
     is_bluesky_feed_url, create_bluesky_embed_template, create_standard_embed_template
 )
 from core.feeds_views import FeedRemoveView, FeedConfigureView
@@ -45,10 +45,6 @@ class FeedCog(commands.Cog):
         # Health stats per guild
         self.stats: Dict[int, Dict[str, dict]] = {}
         
-        # Global monitor message tracking
-        self.monitor_message_file = self.config_base / "monitor_message.json"
-        self.monitor_message_id: Optional[int] = None
-        self._load_monitor_message_id()
         
         # Start retry handler
         retry_handler.start_cleanup_task()
@@ -64,7 +60,7 @@ class FeedCog(commands.Cog):
         """Load configuration for a specific guild"""
         config_path = self._get_guild_config_path(guild_id)
         if not config_path.exists():
-            return {"feeds": [], "monitor_channel_id": None}
+            return {"feeds": []}
         
         try:
             import yaml
@@ -73,7 +69,7 @@ class FeedCog(commands.Cog):
                 return config
         except Exception as e:
             self.log.error(f"Failed to load config for guild {guild_id}: {e}")
-            return {"feeds": [], "monitor_channel_id": None}
+            return {"feeds": []}
 
     def _save_guild_config(self, guild_id: int, config: dict):
         """Save configuration for a specific guild"""
@@ -164,26 +160,7 @@ class FeedCog(commands.Cog):
         except Exception as e:
             self.log.warning(f"Error saving webhook cache: {e}")
 
-    def _load_monitor_message_id(self):
-        """Load the global monitor message ID"""
-        if not self.monitor_message_file.exists():
-            return
-        
-        try:
-            with self.monitor_message_file.open(encoding="utf-8") as f:
-                data = json.load(f)
-                self.monitor_message_id = data.get("message_id")
-        except Exception as e:
-            self.log.warning(f"Error loading monitor message ID: {e}")
 
-    def _save_monitor_message_id(self, message_id: int):
-        """Save the global monitor message ID"""
-        try:
-            with self.monitor_message_file.open("w", encoding="utf-8") as f:
-                json.dump({"message_id": message_id}, f)
-            self.monitor_message_id = message_id
-        except Exception as e:
-            self.log.error(f"Error saving monitor message ID: {e}")
 
     async def _get_or_create_webhook(self, channel: discord.TextChannel, 
                                    feed_name: str) -> Optional[discord.Webhook]:
@@ -254,7 +231,7 @@ class FeedCog(commands.Cog):
         self.log.info(f"Cleaned up all data for removed guild {guild_id}")
 
     # Polling Logic
-    async def _poll_single_feed(self, guild_id: int, feed_cfg: dict, guild_stats: dict, monitor_channel_id: Optional[int]) -> List[dict]:
+    async def _poll_single_feed(self, guild_id: int, feed_cfg: dict, guild_stats: dict) -> List[dict]:
         """Poll a single feed and return list of embeds to post"""
         name = feed_cfg.get("name")
         feed_url = feed_cfg.get("feed_url", "")
@@ -294,8 +271,6 @@ class FeedCog(commands.Cog):
             # Get failure count from retry handler for more accurate tracking
             consecutive_failures = retry_handler.get_failure_count(operation_id)
             
-            # Send alert if threshold exceeded
-            await self._maybe_alert(guild_id, name, consecutive_failures, monitor_channel_id)
             
             self.log.error(
                 f"❌ Error polling feed {name} in guild {guild_id} (attempt {consecutive_failures}): {e}",
@@ -316,10 +291,9 @@ class FeedCog(commands.Cog):
         
         for guild_id, config in self.guild_configs.items():
             guild_stats = self.stats.get(guild_id, {})
-            monitor_channel_id = config.get("monitor_channel_id")
             
             for feed_cfg in config.get("feeds", []):
-                task = self._poll_single_feed(guild_id, feed_cfg, guild_stats, monitor_channel_id)
+                task = self._poll_single_feed(guild_id, feed_cfg, guild_stats)
                 all_tasks.append(task)
                 
                 channel = self.bot.get_channel(feed_cfg["channel_id"])
@@ -413,8 +387,6 @@ class FeedCog(commands.Cog):
         if posts_made > 0 or updates_made > 0:
             self.log.info(f"📊 Completed in {total_time:.1f}s: {posts_made} new posts, {updates_made} updates")
         
-        # Update global monitor after processing feeds
-        await self._update_global_monitor()
 
     async def _post_via_bot_single(self, channel, embed, feed_cfg, name) -> Optional[discord.Message]:
         """Post single embed via bot with thread button"""
@@ -467,73 +439,7 @@ class FeedCog(commands.Cog):
 
 
     # Helper Methods
-    async def _maybe_alert(self, guild_id: int, feed_name: str, failures: int, monitor_channel_id: Optional[int]):
-        """Send alert if failure threshold reached"""
-        if failures == FAILURE_THRESHOLD and monitor_channel_id:
-            channel = self.bot.get_channel(monitor_channel_id)
-            if channel:
-                await channel.send(
-                    f"⚠️ Feed **{feed_name}** has {failures} consecutive failures."
-                )
 
-    async def _update_global_monitor(self):
-        """Update the global monitor with all feed information"""
-        if not GLOBAL_MONITOR_CHANNEL_ID:
-            # Only log this warning once per session to avoid spam
-            if not hasattr(self, '_monitor_warning_logged'):
-                self.log.info("Global monitor disabled - GLOBAL_MONITOR_CHANNEL_ID environment variable not set")
-                self._monitor_warning_logged = True
-            return
-            
-        monitor_channel = self.bot.get_channel(GLOBAL_MONITOR_CHANNEL_ID)
-        if not monitor_channel:
-            self.log.warning("Global monitor channel not found")
-            return
-
-        # Build embed with all feed information
-        embed = discord.Embed(
-            title="🌐 Global RSS Feed Monitor",
-            color=0x00FF00,
-            timestamp=get_current_time()
-        )
-        
-        total_feeds = 0
-        for guild_id, config in self.guild_configs.items():
-            guild = self.bot.get_guild(guild_id)
-            guild_name = guild.name if guild else f"Unknown Guild ({guild_id})"
-            
-            feeds = config.get("feeds", [])
-            if not feeds:
-                continue
-                
-            feed_list = []
-            for feed in feeds:
-                feed_list.append(f"• {feed['name']}: `{feed['feed_url']}`")
-            
-            embed.add_field(
-                name=f"{guild_name} (ID: {guild_id})",
-                value="\n".join(feed_list) if feed_list else "No feeds",
-                inline=False
-            )
-            total_feeds += len(feeds)
-        
-        embed.description = f"Monitoring {total_feeds} feeds across {len(self.guild_configs)} servers"
-        
-        try:
-            if self.monitor_message_id:
-                try:
-                    message = await monitor_channel.fetch_message(self.monitor_message_id)
-                    await message.edit(embed=embed)
-                    return
-                except discord.NotFound:
-                    self.monitor_message_id = None
-            
-            # Create new monitor message
-            message = await monitor_channel.send(embed=embed)
-            self._save_monitor_message_id(message.id)
-            
-        except Exception as e:
-            self.log.error(f"Failed to update global monitor: {e}")
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):

@@ -64,10 +64,6 @@ class BotConfig:
         users_str = os.getenv("AUTHORIZED_USERS", "485051896655249419,506551160354766848,703896034820096000")
         return [int(user_id.strip()) for user_id in users_str.split(",") if user_id.strip()]
     
-    @property
-    def global_monitor_channel_id(self) -> Optional[int]:
-        channel_id = os.getenv("GLOBAL_MONITOR_CHANNEL_ID", "1403336394801414234")
-        return int(channel_id) if channel_id else None
     
     # Map Configuration
     @property

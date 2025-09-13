@@ -9,7 +9,6 @@ MAX_POST_AGE_SECONDS = config.max_post_age_seconds
 RATE_LIMIT_SECONDS = config.rate_limit_seconds
 FAILURE_THRESHOLD = config.failure_threshold
 AUTHORIZED_USERS = config.authorized_users
-GLOBAL_MONITOR_CHANNEL_ID = config.global_monitor_channel_id
 
 # Predefined color choices for easier selection
 COLOR_CHOICES = [

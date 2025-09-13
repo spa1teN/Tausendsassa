@@ -5,19 +5,29 @@ A powerful, modular Discord bot featuring RSS feed integration, interactive maps
 ## Features
 
 - 🗞️ **RSS Feed Integration**: Monitor and post RSS/Atom feeds with customizable formatting and colors
+  - HTML entity cleaning for titles (fixes `&quot;` and other entities)
+  - Smart text truncation with word boundaries
+  - Bluesky and standard RSS feed support
+  - Webhook-based posting with thread creation buttons
 - 🗺️ **Interactive Maps**: World, regional, and local maps with user location pins and customization
   - Real-time progress updates during map rendering
   - Proximity maps showing nearby users within embeds
   - Smart user display: clickable mentions for current members, usernames for former members
   - Color preview with live rendering feedback
-- 📅 **Calendar Integration**: iCal calendar management with Discord event creation
-  - Admin-only commands for adding/removing calendars
-  - Automatic Discord event creation from calendar items
-  - Weekly summaries with clickable event links
-  - Smart filtering with blacklist/whitelist support
-  - Hourly synchronization with Google Calendar, Outlook, and other iCal feeds
+  - Optimized country bounds system (no more overseas territory issues)
+- 📅 **Calendar Integration**: Full iCal calendar management with Discord event automation
+  - Admin-only commands for adding/removing/configuring calendars (`/cal_add`, `/cal_remove`, `/cal_config`)
+  - **Automatic Discord event lifecycle management** - events start and end precisely according to iCal times
+  - Weekly summaries with smart message updating (only creates new messages for new weeks)
+  - Smart filtering with blacklist/whitelist support (blacklist prevails in conflicts)
+  - Hourly synchronization with Google Calendar, Outlook, and any standard iCal feeds
+  - Guild timezone-aware timestamps and summaries
+  - Clickable event links in weekly summaries
 - 🛡️ **Moderation Tools**: Server management and user moderation capabilities
-- 📊 **System Monitoring**: Health checks, performance metrics, and status tracking
+- 📊 **System Monitoring**: Comprehensive health checks and server overview
+  - `/owner_monitor` - System health, device info, and bot statistics
+  - `/owner_server_monitor` - Multi-server overview with feeds, maps, and calendar counts
+  - Real-time status tracking with auto-updating messages
 - 💾 **Automated Backups**: Regular configuration backups with Discord webhook delivery
 - 🌍 **Timezone Support**: Guild-specific timezone configuration for consistent timestamps
 - 🎨 **Unified Color System**: Support for color names, RGB values, and HEX codes across all features
@@ -105,9 +115,10 @@ python3 bot.py
 ├── cogs/                  # Feature modules (Discord cogs)
 │   ├── feeds.py          # RSS feed monitoring and posting
 │   ├── map.py            # Interactive map system
-│   ├── calendar.py       # iCal calendar integration and event management
+│   ├── calendar.py       # iCal calendar integration with automatic event management
 │   ├── moderation.py     # Server moderation tools
 │   ├── monitor.py        # System health monitoring
+│   ├── server_monitor.py # Multi-server overview monitoring
 │   ├── backup.py         # Automated backup system
 │   └── help.py           # Help and documentation
 ├── core/                  # Shared utilities and business logic
@@ -271,20 +282,27 @@ CMD ["python3", "bot.py"]
 - `logs/{cog_name}.log` - Per-cog specific logs
 - Automatic rotation at midnight with 1 day retention
 
-### New Admin Commands
+### Admin Commands
 - `/timezone <timezone>` - Set guild-specific timezone for all embed timestamps (admin only)
+- `/cal_add` - Add iCal calendar with text/voice channels, URL, and optional filters (admin only)
+- `/cal_remove` - Remove calendars via dropdown selection (admin only)
+- `/cal_config` - Configure calendar filters (blacklist/whitelist) via interactive interface (admin only)
 
-### Recent Improvements
-- **Centralized Progress Handler** - Unified progress display system for all map rendering with persistent image display
-- **Map rendering with live previews** - Real-time progress with intermediate map images during generation
-- **Enhanced color support** - Feed customization now accepts color names ('orange'), RGB values ('255,165,0'), and HEX codes  
-- **Guild-aware timezones** - Feed timestamps now respect server timezone settings
-- **Improved feed UI** - Consistent ephemeral message editing instead of creating new messages
-- **Comprehensive cache cleanup** - Map color changes now properly remove all old cached files
-- **Interactive help buttons** - Direct links to GitHub repository and Discord development server
-- **Enhanced RSS Processing** - Improved HTML entity decoding and smart text truncation (500 char limit with word-boundary `[...]`)
-- **Optimized Map Bounds** - Hybrid country bounds system eliminates overseas territory display issues (no more Morocco in Spain maps, etc.)
-- **Critical Stability Fixes** - Resolved async/await warnings, PIL image crashes, and map rendering failures for improved reliability
+### Owner Commands
+- `/owner_monitor` - Comprehensive system health monitoring with auto-updating messages
+- `/owner_server_monitor` - Multi-server overview showing feeds, maps, and calendar statistics
+- `/owner_poll_now` - Force immediate RSS feed polling
+- `/owner_backup_now` - Create manual configuration backup
+
+### Latest Improvements (September 2025)
+- **Automatic Calendar Event Lifecycle** - Discord events now automatically start and end according to iCal times
+- **Smart Calendar Summary Management** - Weekly summaries update existing messages within the week, create new ones for new weeks
+- **Enhanced Calendar Configuration** - New `/cal_config` command with dropdown selection and modal-based filter editing
+- **HTML Entity Cleaning** - RSS feed titles now properly decode HTML entities (`&quot;`, `&amp;`, etc.)
+- **Guild Timezone Integration** - Calendar summaries and timestamps respect server timezone settings
+- **Streamlined Server Monitoring** - New `/owner_server_monitor` command provides centralized overview of all servers
+- **Removed Individual Monitor Functions** - Cleaned up obsolete monitoring code from feeds and maps for better maintainability
+- **Multi-Server Statistics** - Track feeds, map regions, pin counts, and calendar counts across all connected servers
 
 ### Health Monitoring
 - Use `/monitor` command for system status
