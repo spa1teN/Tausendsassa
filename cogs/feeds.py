@@ -234,9 +234,6 @@ class FeedCog(commands.Cog):
             self.log.info("▶ Starting cleanup_loop...")
             self.cleanup_loop.start()
 
-        if not self.monitor_update_loop.is_running():
-            self.log.info("▶ Starting monitor_update_loop...")
-            self.monitor_update_loop.start()
 
     @commands.Cog.listener()
     async def on_guild_remove(self, guild: discord.Guild):
@@ -415,6 +412,9 @@ class FeedCog(commands.Cog):
         total_time = (datetime.utcnow() - start_time).total_seconds()
         if posts_made > 0 or updates_made > 0:
             self.log.info(f"📊 Completed in {total_time:.1f}s: {posts_made} new posts, {updates_made} updates")
+        
+        # Update global monitor after processing feeds
+        await self._update_global_monitor()
 
     async def _post_via_bot_single(self, channel, embed, feed_cfg, name) -> Optional[discord.Message]:
         """Post single embed via bot with thread button"""
@@ -454,10 +454,6 @@ class FeedCog(commands.Cog):
             except Exception:
                 self.log.exception(f"Error during cleanup for guild {guild_id}")
 
-    @tasks.loop(minutes=30)  # Update monitor every 30 minutes
-    async def monitor_update_loop(self):
-        """Update the global feed monitor"""
-        await self._update_global_monitor()
 
     @poll_loop.before_loop
     async def before_poll(self):
@@ -469,10 +465,6 @@ class FeedCog(commands.Cog):
         await self.bot.wait_until_ready()
         self.log.info("✓ cleanup_loop is ready")
 
-    @monitor_update_loop.before_loop
-    async def before_monitor_update(self):
-        await self.bot.wait_until_ready()
-        self.log.info("✓ monitor_update_loop is ready")
 
     # Helper Methods
     async def _maybe_alert(self, guild_id: int, feed_name: str, failures: int, monitor_channel_id: Optional[int]):
@@ -487,6 +479,10 @@ class FeedCog(commands.Cog):
     async def _update_global_monitor(self):
         """Update the global monitor with all feed information"""
         if not GLOBAL_MONITOR_CHANNEL_ID:
+            # Only log this warning once per session to avoid spam
+            if not hasattr(self, '_monitor_warning_logged'):
+                self.log.info("Global monitor disabled - GLOBAL_MONITOR_CHANNEL_ID environment variable not set")
+                self._monitor_warning_logged = True
             return
             
         monitor_channel = self.bot.get_channel(GLOBAL_MONITOR_CHANNEL_ID)

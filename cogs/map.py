@@ -79,7 +79,7 @@ class MapV2Cog(commands.Cog):
         """Called when the cog is loaded. Re-register persistent views."""
         try:
             # Clear base map cache on restart for fresh start
-            self.storage.cache.memory_cache.clear()
+            await self.storage.cache.memory_cache.clear()
             self.log.info("Cleared all base map cache on restart")
         
             # Register all persistent views for existing maps

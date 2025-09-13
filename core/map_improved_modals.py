@@ -89,14 +89,14 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
                     distance = user_data.get('distance', 0)
                     username = user_data.get('username', 'Unknown User')
                     
-                    # Try to create a mention, but fall back to username if user left server
+                    # Try to get member display name, but fall back to username if user left server
                     try:
                         if user_id_str:
                             # Check if user is still in the guild
                             guild = self.original_interaction.guild
                             member = guild.get_member(int(user_id_str))
                             if member:
-                                user_display = f"<@{user_id_str}>"
+                                user_display = f"@{member.display_name}"
                             else:
                                 user_display = f"@{username}"
                         else:

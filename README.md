@@ -284,6 +284,7 @@ CMD ["python3", "bot.py"]
 - **Interactive help buttons** - Direct links to GitHub repository and Discord development server
 - **Enhanced RSS Processing** - Improved HTML entity decoding and smart text truncation (500 char limit with word-boundary `[...]`)
 - **Optimized Map Bounds** - Hybrid country bounds system eliminates overseas territory display issues (no more Morocco in Spain maps, etc.)
+- **Critical Stability Fixes** - Resolved async/await warnings, PIL image crashes, and map rendering failures for improved reliability
 
 ### Health Monitoring
 - Use `/monitor` command for system status

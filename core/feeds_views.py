@@ -102,6 +102,9 @@ class FeedRemoveSelect(discord.ui.Select):
         
         self.cog.poll_loop.restart()
         
+        # Update the global monitor immediately
+        await self.cog._update_global_monitor()
+        
         await interaction.response.edit_message(
             content=f"✅ Feed **{feed_name}** removed from this server.",
             view=None
@@ -303,6 +306,9 @@ class FeedConfigModal(discord.ui.Modal):
         self.cog._save_guild_config(self.guild_id, config)
         self.cog.guild_configs[self.guild_id] = config
         
+        # Update the global monitor immediately
+        await self.cog._update_global_monitor()
+        
         await interaction.response.send_message(
             f"✅ Feed **{self.name_input.value}** updated successfully!", ephemeral=True
         )
@@ -380,6 +386,9 @@ class ChannelSelect(discord.ui.Select):
         }
         
         self.parent_view.cog.poll_loop.restart()
+        
+        # Update the global monitor immediately
+        await self.parent_view.cog._update_global_monitor()
         
         # Get channel name for confirmation
         channel = self.parent_view.cog.bot.get_channel(channel_id)

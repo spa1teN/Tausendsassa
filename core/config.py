@@ -66,7 +66,7 @@ class BotConfig:
     
     @property
     def global_monitor_channel_id(self) -> Optional[int]:
-        channel_id = os.getenv("GLOBAL_MONITOR_CHANNEL_ID")
+        channel_id = os.getenv("GLOBAL_MONITOR_CHANNEL_ID", "1403336394801414234")
         return int(channel_id) if channel_id else None
     
     # Map Configuration

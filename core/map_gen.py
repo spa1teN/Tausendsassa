@@ -362,6 +362,7 @@ class MapGenerator:
                         intermediate_img = img.copy()
                         img_buffer = BytesIO()
                         intermediate_img.save(img_buffer, format='PNG', optimize=True)
+                        img_buffer.seek(0)
                         await progress_callback("Land masses drawn, adding water bodies...", 45, img_buffer)
                     except Exception as e:
                         await progress_callback("Land masses drawn, adding water bodies...", 45)
@@ -377,6 +378,7 @@ class MapGenerator:
                         intermediate_img = img.copy()
                         img_buffer = BytesIO()
                         intermediate_img.save(img_buffer, format='PNG', optimize=True)
+                        img_buffer.seek(0)
                         await progress_callback("Water bodies drawn, adding borders...", 60, img_buffer)
                     except Exception as e:
                         await progress_callback("Water bodies drawn, adding borders...", 60)
@@ -418,6 +420,7 @@ class MapGenerator:
                         intermediate_img = img.copy()
                         img_buffer = BytesIO()
                         intermediate_img.save(img_buffer, format='PNG', optimize=True)
+                        img_buffer.seek(0)
                         await progress_callback("Base map complete, finalizing...", 98, img_buffer)
                     except Exception as e:
                         await progress_callback("Base map complete, finalizing...", 98)
