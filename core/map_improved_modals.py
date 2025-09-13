@@ -73,15 +73,24 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
             
             proximity_image, nearby_users = result
             
-            # Create result embed
+            # Create result embed (just the map, no user list)
             embed = discord.Embed(
-                title=f"🔍 Nearby Members ({distance_km}km radius)",
+                title=f"🔍 Proximity Map ({distance_km}km radius)",
                 color=0x7289da,
                 timestamp=datetime.now()
             )
             
+            # Add summary to embed
+            embed.add_field(
+                name="📊 Summary",
+                value=f"**{len(nearby_users)}** members found within **{distance_km}km**",
+                inline=False
+            )
+            
+            # Prepare nearby users message content (separate from embed)
+            nearby_message = None
             if nearby_users:
-                # Add nearby users to embed - USE ORIGINAL INPUT AND USER MENTIONS
+                # Build nearby users as regular message content
                 user_list = []
                 for user_data in nearby_users:
                     user_id_str = user_data.get('user_id', '')
@@ -104,35 +113,17 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
                     except (ValueError, AttributeError):
                         user_display = f"@{username}"
                     
-                    user_list.append(f"{user_display} - {location_input} ({distance:.1f}km)")
+                    user_list.append(f"• {user_display} - {location_input} ({distance:.1f}km)")
                 
-                # Split into multiple fields if too many users
-                max_per_field = 10
-                for i in range(0, len(user_list), max_per_field):
-                    field_users = user_list[i:i+max_per_field]
-                    field_name = f"👥 Found Members" if i == 0 else f"👥 Found Members (cont.)"
-                    embed.add_field(
-                        name=field_name,
-                        value="\n".join(field_users),
-                        inline=False
-                    )
+                nearby_message = f"**👥 Nearby Members:**\n" + "\n".join(user_list)
             else:
-                embed.add_field(
-                    name="👥 Found Members",
-                    value="No members found within the specified radius.",
-                    inline=False
-                )
+                nearby_message = "**👥 Nearby Members:**\nNo members found within the specified radius."
             
-            embed.add_field(
-                name="📊 Summary",
-                value=f"**{len(nearby_users)}** members within **{distance_km}km**",
-                inline=False
-            )
-            
-            # Replace loading message with results and embed the map within the embed
+            # Replace loading message with results - embed the map within the embed and send nearby members as regular content
             filename = f"proximity_{distance_km}km_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
             embed.set_image(url=f"attachment://{filename}")
             await self.original_interaction.edit_original_response(
+                content=nearby_message,
                 embed=embed,
                 attachments=[discord.File(proximity_image, filename=filename)],
                 view=None
