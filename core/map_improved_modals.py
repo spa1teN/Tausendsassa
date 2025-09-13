@@ -87,10 +87,24 @@ class ProximityModal(discord.ui.Modal, title='Find Nearby Members'):
                     user_id_str = user_data.get('user_id', '')
                     location_input = user_data.get('location', 'Unknown')  # Use original user input
                     distance = user_data.get('distance', 0)
+                    username = user_data.get('username', 'Unknown User')
                     
-                    # Create user mention instead of username
-                    user_mention = f"<@{user_id_str}>" if user_id_str else "Unknown User"
-                    user_list.append(f"{user_mention} - {location_input} ({distance:.1f}km)")
+                    # Try to create a mention, but fall back to username if user left server
+                    try:
+                        if user_id_str:
+                            # Check if user is still in the guild
+                            guild = self.original_interaction.guild
+                            member = guild.get_member(int(user_id_str))
+                            if member:
+                                user_display = f"<@{user_id_str}>"
+                            else:
+                                user_display = f"@{username}"
+                        else:
+                            user_display = f"@{username}"
+                    except (ValueError, AttributeError):
+                        user_display = f"@{username}"
+                    
+                    user_list.append(f"{user_display} - {location_input} ({distance:.1f}km)")
                 
                 # Split into multiple fields if too many users
                 max_per_field = 10

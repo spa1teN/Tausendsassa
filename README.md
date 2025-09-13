@@ -1,6 +1,6 @@
 # Tausendsassa Discord Bot
 
-A powerful, modular Discord bot featuring RSS feed integration, interactive maps, moderation tools, and comprehensive monitoring. Built with discord.py 2.x using a modern cog-based architecture.
+A powerful, modular Discord bot featuring RSS feed integration, interactive maps, calendar management, moderation tools, and comprehensive monitoring. Built with discord.py 2.x using a modern cog-based architecture.
 
 ## Features
 
@@ -8,7 +8,14 @@ A powerful, modular Discord bot featuring RSS feed integration, interactive maps
 - 🗺️ **Interactive Maps**: World, regional, and local maps with user location pins and customization
   - Real-time progress updates during map rendering
   - Proximity maps showing nearby users within embeds
+  - Smart user display: clickable mentions for current members, usernames for former members
   - Color preview with live rendering feedback
+- 📅 **Calendar Integration**: iCal calendar management with Discord event creation
+  - Admin-only commands for adding/removing calendars
+  - Automatic Discord event creation from calendar items
+  - Weekly summaries with clickable event links
+  - Smart filtering with blacklist/whitelist support
+  - Hourly synchronization with Google Calendar, Outlook, and other iCal feeds
 - 🛡️ **Moderation Tools**: Server management and user moderation capabilities
 - 📊 **System Monitoring**: Health checks, performance metrics, and status tracking
 - 💾 **Automated Backups**: Regular configuration backups with Discord webhook delivery
@@ -98,6 +105,7 @@ python3 bot.py
 ├── cogs/                  # Feature modules (Discord cogs)
 │   ├── feeds.py          # RSS feed monitoring and posting
 │   ├── map.py            # Interactive map system
+│   ├── calendar.py       # iCal calendar integration and event management
 │   ├── moderation.py     # Server moderation tools
 │   ├── monitor.py        # System health monitoring
 │   ├── backup.py         # Automated backup system

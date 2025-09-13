@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Last Updated:** September 11, 2025
+**Last Updated:** September 13, 2025
 
 Welcome to Tausendsassa (hereinafter "Bot"). These Terms of Service ("Terms") govern your use of the Bot and its associated services. Please read them carefully.
 
@@ -13,9 +13,10 @@ By using the Bot, you agree to these Terms. If you do not agree, please do not u
 The Bot provides the following services:
 1. **RSS Feed Integration**: Displays RSS/Atom feeds in Discord channels with customizable formatting
 2. **Interactive Map System**: Allows users to pin their locations on world, regional, and local maps with customization options
-3. **Moderation Tools**: Provides server moderation capabilities and user management
-4. **System Monitoring**: Tracks bot health, performance metrics, and system status
-5. **Automated Backups**: Creates regular backups of configuration data
+3. **Calendar Integration**: Synchronizes iCal calendars with Discord, creating events and weekly summaries
+4. **Moderation Tools**: Provides server moderation capabilities and user management
+5. **System Monitoring**: Tracks bot health, performance metrics, and system status
+6. **Automated Backups**: Creates regular backups of configuration data
 
 ## 3. User Responsibilities
 
@@ -24,13 +25,15 @@ The Bot provides the following services:
 3. **Content Compliance**: Do not use the Bot to distribute illegal content, spam, or violate Discord's Terms of Service
 4. **Location Data**: When using map features, ensure you only share location information you're comfortable making visible to server members
 5. **Feed Sources**: Ensure RSS feeds you configure comply with their respective terms of service
+6. **Calendar Data**: When configuring iCal calendars, ensure you have permission to sync and display the calendar events. Be mindful that calendar events will be visible to Discord server members
 
 ## 4. Data Collection and Use
 
-1. **Configuration Data**: The Bot stores server-specific settings, feed configurations, and map customizations
+1. **Configuration Data**: The Bot stores server-specific settings, feed configurations, map customizations, and calendar configurations
 2. **User Interactions**: Basic interaction data is logged for functionality and troubleshooting
 3. **Location Data**: If you use map features, your disclosed location is stored and visible to server members
-4. **No Personal Data**: The Bot does not collect personal information beyond what's necessary for functionality
+4. **Calendar Data**: Calendar URLs and event information are fetched and processed to create Discord events and summaries
+5. **No Personal Data**: The Bot does not collect personal information beyond what's necessary for functionality
 
 ## 5. Service Availability
 

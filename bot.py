@@ -172,7 +172,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-COGS = ["cogs.feeds", "cogs.map", "cogs.monitor", "cogs.moderation", "cogs.whenistrumpgone", "cogs.help", "cogs.backup"]
+COGS = ["cogs.feeds", "cogs.map", "cogs.monitor", "cogs.moderation", "cogs.whenistrumpgone", "cogs.help", "cogs.backup", "cogs.calendar"]
 
 # ─── Enhanced Bot-Klasse ────────────────────────────────────────────────────
 class Tausendsassa(commands.Bot):

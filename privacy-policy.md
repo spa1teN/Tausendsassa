@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last Updated:** September 11, 2025
+**Last Updated:** September 13, 2025
 
 This Privacy Policy describes how Tausendsassa Discord Bot ("Bot") collects, uses, and protects your information.
 
@@ -16,7 +16,9 @@ This Privacy Policy describes how Tausendsassa Discord Bot ("Bot") collects, use
 - **RSS Feed URLs**: Feed sources you configure for monitoring
 - **Location Information**: Geographic locations you voluntarily share via map features
 - **Map Customizations**: Color preferences and map settings
-- **Server Settings**: Feed configurations and moderation preferences
+- **Calendar URLs**: iCal/ICS calendar feeds you configure for event synchronization
+- **Calendar Filters**: Blacklist and whitelist terms for event filtering
+- **Server Settings**: Feed configurations, calendar settings, and moderation preferences
 
 ### Technical Data
 - **Log Data**: Error logs, system performance metrics, and operational status
@@ -27,6 +29,7 @@ This Privacy Policy describes how Tausendsassa Discord Bot ("Bot") collects, use
 ### Core Functionality
 - **RSS Feeds**: Monitor and post feed updates to configured channels
 - **Interactive Maps**: Display user locations and render customized maps
+- **Calendar Integration**: Fetch iCal data, create Discord events, and post weekly summaries
 - **User Management**: Track cooldowns and manage user interactions
 - **System Operation**: Maintain bot functionality and troubleshoot issues
 
@@ -40,6 +43,7 @@ This Privacy Policy describes how Tausendsassa Discord Bot ("Bot") collects, use
 ### Local Storage
 - Configuration files stored in `config/` directory on host server
 - Map cache images stored locally for performance optimization
+- Calendar configurations and event mappings stored per guild
 - Log files maintained with automatic rotation (5MB max, 3 backups)
 
 ### Data Security
@@ -50,6 +54,7 @@ This Privacy Policy describes how Tausendsassa Discord Bot ("Bot") collects, use
 ### Data Retention
 - **Configuration Data**: Retained while bot is active on your server
 - **Location Data**: Stored until you remove your pin or leave the server
+- **Calendar Data**: Stored until calendar is removed via `/cal_remove` command
 - **Log Data**: Automatically rotated and cleaned based on size limits
 - **Cache Data**: Managed automatically with size limits and cleanup
 
@@ -62,15 +67,18 @@ We do not sell, trade, or rent your personal information to third parties.
 - **Discord Integration**: Required data shared with Discord for bot functionality
 - **Legal Requirements**: Data may be disclosed if required by law
 - **OpenStreetMap**: Location queries sent to geocoding service for map features
+- **iCal Services**: Calendar URLs are accessed to fetch event data (Google Calendar, Outlook, etc.)
 
 ### Server Visibility
 - Map pins and locations are visible to all members of servers where you've shared them
 - RSS feed configurations are visible to server administrators
+- Calendar events and summaries are visible to all server members in configured channels
 
 ## 5. Your Rights and Choices
 
 ### Data Control
 - **Remove Pins**: Delete your location data using bot commands
+- **Remove Calendars**: Server administrators can remove calendars using `/cal_remove`
 - **Leave Servers**: Automatically removes your pins when you leave a server
 - **Contact Admins**: Request data deletion through server administrators
 

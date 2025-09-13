@@ -8,6 +8,9 @@
 ### **Moderation Features**
 > - `/mod_dashboard`: manage this bot's moderation settings **(Admin only)**
 > - `/clear`: deletes a given number of messages from the channel **(Admin only)**
+### **iCal to voice-event Feature**
+> - `/cal_add`: adds an iCal-link
+> - `/cal_remove`: removes an iCal-link
 ### **Miscellaneous**
 > - `/ping`: test bot responsiveness
 > - `/when_is_trump_gone`: liberation day
