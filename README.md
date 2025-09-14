@@ -18,6 +18,7 @@ A powerful, modular Discord bot featuring RSS feed integration, interactive maps
 - 📅 **Calendar Integration**: Full iCal calendar management with Discord event automation
   - Admin-only commands for adding/removing/configuring calendars (`/cal_add`, `/cal_remove`, `/cal_config`)
   - **Automatic Discord event lifecycle management** - events start and end precisely according to iCal times
+  - **Event reminders** - automated reminders sent 1 hour before events with optional role pings
   - Weekly summaries with smart message updating (only creates new messages for new weeks)
   - Smart filtering with blacklist/whitelist support (blacklist prevails in conflicts)
   - Hourly synchronization with Google Calendar, Outlook, and any standard iCal feeds
@@ -284,7 +285,7 @@ CMD ["python3", "bot.py"]
 
 ### Admin Commands
 - `/timezone <timezone>` - Set guild-specific timezone for all embed timestamps (admin only)
-- `/cal_add` - Add iCal calendar with text/voice channels, URL, and optional filters (admin only)
+- `/cal_add` - Add iCal calendar with text/voice channels, URL, optional filters, and optional reminder role (admin only)
 - `/cal_remove` - Remove calendars via dropdown selection (admin only)
 - `/cal_config` - Configure calendar filters (blacklist/whitelist) via interactive interface (admin only)
 
@@ -295,6 +296,7 @@ CMD ["python3", "bot.py"]
 - `/owner_backup_now` - Create manual configuration backup
 
 ### Latest Improvements (September 2025)
+- **Calendar Event Reminders** - Automated reminders sent 1 hour before events with optional role pings
 - **Automatic Calendar Event Lifecycle** - Discord events now automatically start and end according to iCal times
 - **Smart Calendar Summary Management** - Weekly summaries update existing messages within the week, create new ones for new weeks
 - **Enhanced Calendar Configuration** - New `/cal_config` command with dropdown selection and modal-based filter editing

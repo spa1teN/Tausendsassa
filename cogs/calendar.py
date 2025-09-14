@@ -31,7 +31,8 @@ class CalendarConfig:
     """Configuration for a single calendar"""
     
     def __init__(self, text_channel_id: int, voice_channel_id: int, ical_url: str, 
-                 blacklist: List[str] = None, whitelist: List[str] = None, last_message_id: Optional[int] = None):
+                 blacklist: List[str] = None, whitelist: List[str] = None, last_message_id: Optional[int] = None,
+                 reminder_role_id: Optional[int] = None):
         self.text_channel_id = text_channel_id
         self.voice_channel_id = voice_channel_id 
         self.ical_url = ical_url
@@ -42,6 +43,8 @@ class CalendarConfig:
         self.event_title_to_id: Dict[str, int] = {}  # Map event titles to Discord event IDs
         self.last_sync = None
         self.current_week_start = None  # Track which week the last message belongs to
+        self.reminder_role_id = reminder_role_id  # Role to ping for reminders (optional)
+        self.sent_reminders: Dict[str, datetime] = {}  # Track sent reminders to avoid duplicates
         
     def to_dict(self) -> dict:
         return {
@@ -54,7 +57,9 @@ class CalendarConfig:
             'created_events': self.created_events,
             'event_title_to_id': self.event_title_to_id,
             'last_sync': self.last_sync.isoformat() if self.last_sync else None,
-            'current_week_start': self.current_week_start.isoformat() if self.current_week_start else None
+            'current_week_start': self.current_week_start.isoformat() if self.current_week_start else None,
+            'reminder_role_id': self.reminder_role_id,
+            'sent_reminders': {k: v.isoformat() for k, v in self.sent_reminders.items()}
         }
     
     @classmethod
@@ -65,7 +70,8 @@ class CalendarConfig:
             ical_url=data['ical_url'],
             blacklist=data.get('blacklist', []),
             whitelist=data.get('whitelist', []),
-            last_message_id=data.get('last_message_id')
+            last_message_id=data.get('last_message_id'),
+            reminder_role_id=data.get('reminder_role_id')
         )
         config.created_events = data.get('created_events', [])
         config.event_title_to_id = data.get('event_title_to_id', {})
@@ -73,6 +79,9 @@ class CalendarConfig:
             config.last_sync = datetime.fromisoformat(data['last_sync'])
         if data.get('current_week_start'):
             config.current_week_start = datetime.fromisoformat(data['current_week_start'])
+        # Load sent reminders
+        sent_reminders_data = data.get('sent_reminders', {})
+        config.sent_reminders = {k: datetime.fromisoformat(v) for k, v in sent_reminders_data.items()}
         return config
 
 
@@ -244,6 +253,28 @@ class CalendarConfigView(discord.ui.View):
         else:
             embed.add_field(name="Whitelisted Terms", value="None", inline=False)
         
+        # Reminder role info
+        if calendar_config.reminder_role_id:
+            role = guild.get_role(calendar_config.reminder_role_id) if guild else None
+            if role:
+                embed.add_field(
+                    name="Reminder Role",
+                    value=role.mention,
+                    inline=True
+                )
+            else:
+                embed.add_field(
+                    name="Reminder Role",
+                    value=f"Role {calendar_config.reminder_role_id} (not found)",
+                    inline=True
+                )
+        else:
+            embed.add_field(
+                name="Reminder Role",
+                value="None (no role pings)",
+                inline=True
+            )
+        
         # Last sync info
         if calendar_config.last_sync:
             embed.add_field(
@@ -361,10 +392,14 @@ class CalendarCog(commands.Cog):
         # Start event status monitoring task
         self.event_status_task.start()
         
+        # Start reminder task
+        self.reminder_task.start()
+        
     def cog_unload(self):
         """Cleanup when cog is unloaded"""
         self.calendar_update_task.cancel()
         self.event_status_task.cancel()
+        self.reminder_task.cancel()
     
     def _load_all_guild_configs(self):
         """Load calendar configurations for all guilds"""
@@ -420,7 +455,8 @@ class CalendarCog(commands.Cog):
         voice_channel="Voice channel to use as location for Discord events", 
         ical_url="URL to the iCal calendar file",
         blacklist="Comma-separated list of terms to exclude from events (optional)",
-        whitelist="Comma-separated list of terms to include events (optional)"
+        whitelist="Comma-separated list of terms to include events (optional)",
+        reminder_role="Role to ping in reminders 1 hour before events (optional)"
     )
     async def cal_add(
         self, 
@@ -430,7 +466,8 @@ class CalendarCog(commands.Cog):
         voice_channel: discord.VoiceChannel,
         ical_url: str,
         blacklist: Optional[str] = None,
-        whitelist: Optional[str] = None
+        whitelist: Optional[str] = None,
+        reminder_role: Optional[discord.Role] = None
     ):
         """Add a new iCal calendar for tracking"""
         
@@ -504,7 +541,8 @@ class CalendarCog(commands.Cog):
                 voice_channel_id=voice_channel.id,
                 ical_url=ical_url,
                 blacklist=blacklist_terms,
-                whitelist=whitelist_terms
+                whitelist=whitelist_terms,
+                reminder_role_id=reminder_role.id if reminder_role else None
             )
             
             # Save to memory and disk
@@ -535,7 +573,20 @@ class CalendarCog(commands.Cog):
                     inline=False
                 )
             
-            embed.set_footer(text="The calendar will be synced automatically every hour.")
+            if reminder_role:
+                embed.add_field(
+                    name="Reminder Role",
+                    value=reminder_role.mention,
+                    inline=True
+                )
+            else:
+                embed.add_field(
+                    name="Reminder Role",
+                    value="None (no role pings)",
+                    inline=True
+                )
+            
+            embed.set_footer(text="The calendar will be synced automatically every hour. Reminders are sent 1 hour before events.")
             
             await interaction.followup.send(embed=embed, ephemeral=True)
             
@@ -724,6 +775,13 @@ class CalendarCog(commands.Cog):
                         # Save updated config
                         self._save_guild_calendars(guild_id)
                         events_cleaned += 1
+                    except discord.HTTPException as e:
+                        if "Channel already has an active event" in str(e):
+                            # This is expected when trying to start overlapping events
+                            # Just log at debug level to reduce log noise
+                            self.log.debug(f"Event {event_id} cannot start due to active event in channel: {e}")
+                        else:
+                            self.log.warning(f"HTTP error managing event status for event {event_id}: {e}")
                     except Exception as e:
                         self.log.warning(f"Error managing event status for event {event_id}: {e}")
         
@@ -734,6 +792,77 @@ class CalendarCog(commands.Cog):
     @event_status_task.before_loop
     async def before_event_status(self):
         """Wait for bot to be ready before starting the event status task"""
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=15)
+    async def reminder_task(self):
+        """Task that runs every 15 minutes to send reminders for upcoming events (1 hour before)"""
+        now = datetime.now(timezone.utc)
+        reminder_time = now + timedelta(hours=1)
+        reminders_sent = 0
+        
+        for guild_id, calendars in self.guild_calendars.items():
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                continue
+                
+            for calendar_id, calendar_config in calendars.items():
+                try:
+                    # Fetch latest calendar events
+                    events = await self._fetch_calendar_events(calendar_config.ical_url)
+                    if not events:
+                        continue
+                    
+                    # Filter events
+                    filtered_events = self._filter_events(events, calendar_config.blacklist, calendar_config.whitelist)
+                    
+                    # Check for events starting in about 1 hour
+                    for event in filtered_events:
+                        event_start = event.get('start')
+                        if not event_start:
+                            continue
+                        
+                        # Convert to datetime if needed
+                        if not isinstance(event_start, datetime):
+                            event_start = datetime.combine(event_start, datetime.min.time())
+                        
+                        # Ensure timezone-aware datetime
+                        if event_start.tzinfo is None:
+                            event_start = event_start.replace(tzinfo=timezone.utc)
+                        
+                        # Check if event starts within the next hour (45-75 minutes from now)
+                        time_until_event = event_start - now
+                        if timedelta(minutes=45) <= time_until_event <= timedelta(minutes=75):
+                            
+                            # Generate unique reminder key
+                            reminder_key = f"{calendar_id}_{event['title']}_{event_start.isoformat()}"
+                            
+                            # Check if reminder was already sent
+                            if reminder_key in calendar_config.sent_reminders:
+                                # Check if reminder was sent recently (within last 2 hours to avoid duplicates)
+                                if now - calendar_config.sent_reminders[reminder_key] < timedelta(hours=2):
+                                    continue
+                            
+                            # Send reminder
+                            success = await self._send_event_reminder(guild_id, calendar_config, event, event_start)
+                            if success:
+                                calendar_config.sent_reminders[reminder_key] = now
+                                self._save_guild_calendars(guild_id)
+                                reminders_sent += 1
+                    
+                except Exception as e:
+                    self.log.error(f"Error processing reminders for calendar {calendar_id} in guild {guild_id}: {e}")
+        
+        # Log summary if any reminders were sent
+        if reminders_sent > 0:
+            self.log.info(f"📢 Sent {reminders_sent} event reminders")
+        
+        # Clean up old sent reminders (older than 7 days)
+        await self._cleanup_old_reminders()
+
+    @reminder_task.before_loop
+    async def before_reminder_task(self):
+        """Wait for bot to be ready before starting the reminder task"""
         await self.bot.wait_until_ready()
 
     async def _sync_calendar(self, guild_id: int, calendar_id: str, calendar_config: CalendarConfig):
@@ -833,7 +962,10 @@ class CalendarCog(commands.Cog):
             return parsed_events
             
         except Exception as e:
-            self.log.error(f"Error fetching calendar from {ical_url}: {e}")
+            # Log more detailed error information
+            error_type = type(e).__name__
+            error_msg = str(e) if str(e) else "Unknown error"
+            self.log.error(f"Error fetching calendar from {ical_url}: {error_type}: {error_msg}")
             return None
 
     def _filter_events(self, events: List[dict], blacklist: List[str], whitelist: List[str] = None) -> List[dict]:
@@ -1133,6 +1265,119 @@ class CalendarCog(commands.Cog):
                     self.log.info(f"Deleted Discord event: {event_title}")
                 except Exception as e:
                     self.log.warning(f"Could not delete Discord event {event_title}: {e}")
+
+    async def _send_event_reminder(self, guild_id: int, calendar_config: CalendarConfig, event: dict, event_start: datetime) -> bool:
+        """Send a reminder message for an upcoming event"""
+        try:
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                return False
+            
+            channel = guild.get_channel(calendar_config.text_channel_id)
+            if not channel:
+                return False
+            
+            # Create reminder embed
+            from core.timezone_util import to_guild_timezone
+            
+            embed = discord.Embed(
+                title="📢 Event Reminder",
+                color=0xffa500  # Orange color
+            )
+            
+            # Convert to guild timezone for display
+            guild_start = to_guild_timezone(event_start, guild_id)
+            
+            embed.add_field(
+                name="Event",
+                value=event.get('title', 'No Title'),
+                inline=False
+            )
+            
+            embed.add_field(
+                name="Starts at",
+                value=f"<t:{int(event_start.timestamp())}:F> ({guild_start.strftime('%H:%M')})",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="Time until start",
+                value=f"<t:{int(event_start.timestamp())}:R>",
+                inline=True
+            )
+            
+            if event.get('description'):
+                description = event['description'][:500]  # Truncate if too long
+                embed.add_field(
+                    name="Description",
+                    value=description,
+                    inline=False
+                )
+            
+            if event.get('location'):
+                embed.add_field(
+                    name="Location",
+                    value=event['location'],
+                    inline=False
+                )
+            
+            # Add Discord event link if available
+            event_title = event.get('title', 'No Title')
+            if event_title in calendar_config.event_title_to_id:
+                discord_event_id = calendar_config.event_title_to_id[event_title]
+                event_link = f"https://discord.com/events/{guild_id}/{discord_event_id}"
+                embed.add_field(
+                    name="Discord Event",
+                    value=f"[View Event]({event_link})",
+                    inline=True
+                )
+            
+            embed.set_footer(text="Event starts in approximately 1 hour")
+            
+            # Prepare message content with role ping if configured
+            content = None
+            if calendar_config.reminder_role_id:
+                role = guild.get_role(calendar_config.reminder_role_id)
+                if role:
+                    content = f"{role.mention} Event starting soon!"
+                else:
+                    self.log.warning(f"Reminder role {calendar_config.reminder_role_id} not found in guild {guild_id}")
+            
+            # Send the reminder
+            await channel.send(content=content, embed=embed)
+            
+            self.log.info(f"Sent reminder for event '{event_title}' in guild {guild_id}")
+            return True
+            
+        except Exception as e:
+            self.log.error(f"Error sending event reminder: {e}")
+            return False
+
+    async def _cleanup_old_reminders(self):
+        """Clean up old sent reminders to prevent memory growth"""
+        try:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(days=7)
+            cleaned_count = 0
+            
+            for guild_id, calendars in self.guild_calendars.items():
+                for calendar_id, calendar_config in calendars.items():
+                    # Remove old reminders
+                    old_keys = [key for key, timestamp in calendar_config.sent_reminders.items() 
+                               if timestamp < cutoff_time]
+                    
+                    for key in old_keys:
+                        del calendar_config.sent_reminders[key]
+                        cleaned_count += 1
+                    
+                    # Save if changes were made
+                    if old_keys:
+                        self._save_guild_calendars(guild_id)
+            
+            if cleaned_count > 0:
+                self.log.info(f"Cleaned up {cleaned_count} old reminder entries")
+                
+        except Exception as e:
+            self.log.error(f"Error cleaning up old reminders: {e}")
 
 
 async def setup(bot):
