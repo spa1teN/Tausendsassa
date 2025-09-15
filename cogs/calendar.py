@@ -305,7 +305,7 @@ class CalendarConfigView(discord.ui.View):
         edit_button.callback = edit_button_callback
         view.add_item(edit_button)
         
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class CalendarRemoveView(discord.ui.View):

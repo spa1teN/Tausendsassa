@@ -21,8 +21,8 @@ class FeedListView(discord.ui.View):
         feeds = config.get("feeds", [])
         
         if not feeds:
-            await interaction.response.send_message(
-                "No feeds configured for this server.", ephemeral=True
+            await interaction.response.edit_message(
+                content="No feeds configured for this server.", view=None
             )
             return
         
@@ -37,8 +37,8 @@ class FeedListView(discord.ui.View):
         feeds = config.get("feeds", [])
         
         if not feeds:
-            await interaction.response.send_message(
-                "No feeds configured for this server.", ephemeral=True
+            await interaction.response.edit_message(
+                content="No feeds configured for this server.", view=None
             )
             return
         
@@ -61,11 +61,11 @@ class FeedRemoveView(discord.ui.View):
         
         # Create dropdown options
         options = []
-        for feed in feeds[:25]:  # Discord limit
+        for i, feed in enumerate(feeds[:25]):  # Discord limit
             options.append(discord.SelectOption(
                 label=feed["name"],
                 description=f"URL: {feed['feed_url'][:50]}..." if len(feed['feed_url']) > 50 else feed['feed_url'],
-                value=feed["name"]
+                value=f"{i}_{feed['name']}"
             ))
         
         if options:
@@ -85,7 +85,9 @@ class FeedRemoveSelect(discord.ui.Select):
         self.guild_id = guild_id
     
     async def callback(self, interaction: discord.Interaction):
-        feed_name = self.values[0]
+        feed_identifier = self.values[0]
+        # Extract the name from the identifier (format: "index_name")
+        feed_name = feed_identifier.split("_", 1)[1] if "_" in feed_identifier else feed_identifier
         
         # Remove the feed
         config = self.cog._load_guild_config(self.guild_id)
@@ -100,10 +102,12 @@ class FeedRemoveSelect(discord.ui.Select):
         if self.guild_id in self.cog.stats:
             self.cog.stats[self.guild_id].pop(feed_name, None)
         
-        self.cog.poll_loop.restart()
-        
-        # Update the global monitor immediately
-        await self.cog._update_global_monitor()
+        # Restart poll loop in background to avoid blocking interaction
+        try:
+            self.cog.poll_loop.restart()
+        except Exception as e:
+            # Log error but don't let it break the interaction
+            self.cog.log.warning(f"Failed to restart poll loop: {e}")
         
         await interaction.response.edit_message(
             content=f"✅ Feed **{feed_name}** removed from this server.",
@@ -119,11 +123,11 @@ class FeedConfigureView(discord.ui.View):
         
         # Create dropdown options
         options = []
-        for feed in feeds[:25]:  # Discord limit
+        for i, feed in enumerate(feeds[:25]):  # Discord limit
             options.append(discord.SelectOption(
                 label=feed["name"],
                 description=f"Channel: #{feed.get('channel_name', 'unknown')}",
-                value=feed["name"]
+                value=f"{i}_{feed['name']}"
             ))
         
         if options:
@@ -143,7 +147,9 @@ class FeedConfigureSelect(discord.ui.Select):
         self.guild_id = guild_id
     
     async def callback(self, interaction: discord.Interaction):
-        feed_name = self.values[0]
+        feed_identifier = self.values[0]
+        # Extract the name from the identifier (format: "index_name")
+        feed_name = feed_identifier.split("_", 1)[1] if "_" in feed_identifier else feed_identifier
         
         # Find the feed config
         config = self.cog._load_guild_config(self.guild_id)
@@ -228,7 +234,8 @@ class FeedConfigModal(discord.ui.Modal):
             # List some available colors for help
             from core.colors import get_available_colors
             available = ', '.join(get_available_colors()[:10])  # Show first 10
-            await interaction.response.send_message(
+            await interaction.response.defer(ephemeral=True)
+            await interaction.followup.send(
                 f"❌ Invalid color: `{self.color_input.value}`\n\n"
                 f"**Examples:**\n"
                 f"• Color names: `{available}`, etc.\n"
@@ -246,7 +253,8 @@ class FeedConfigModal(discord.ui.Modal):
             elif crosspost_str in ["false", "0", "no"]:
                 crosspost = False
             else:
-                await interaction.response.send_message(
+                await interaction.response.defer(ephemeral=True)
+                await interaction.followup.send(
                     f"❌ Invalid crosspost value: {self.crosspost_input.value}. Use true or false.", ephemeral=True
                 )
                 return
@@ -305,9 +313,6 @@ class FeedConfigModal(discord.ui.Modal):
         
         self.cog._save_guild_config(self.guild_id, config)
         self.cog.guild_configs[self.guild_id] = config
-        
-        # Update the global monitor immediately
-        await self.cog._update_global_monitor()
         
         await interaction.response.send_message(
             f"✅ Feed **{self.name_input.value}** updated successfully!", ephemeral=True
@@ -385,10 +390,12 @@ class ChannelSelect(discord.ui.Select):
             "last_run": None, "last_success": None, "failures": 0
         }
         
-        self.parent_view.cog.poll_loop.restart()
-        
-        # Update the global monitor immediately
-        await self.parent_view.cog._update_global_monitor()
+        # Restart poll loop in background to avoid blocking interaction
+        try:
+            self.parent_view.cog.poll_loop.restart()
+        except Exception as e:
+            # Log error but don't let it break the interaction
+            self.parent_view.cog.log.warning(f"Failed to restart poll loop: {e}")
         
         # Get channel name for confirmation
         channel = self.parent_view.cog.bot.get_channel(channel_id)
