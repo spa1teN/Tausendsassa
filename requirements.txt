@@ -25,6 +25,7 @@ fiona==1.10.1
 fonttools==4.59.0
 frozenlist==1.7.0
 geopandas==1.1.1
+icalendar==6.3.1
 ics==0.7.2
 idna==3.10
 ipython==8.12.3
@@ -67,6 +68,7 @@ python-dateutil==2.9.0.post0
 pytz==2025.2
 PyYAML==6.0.2
 pyzmq==27.0.1
+recurring_ical_events==3.4.0
 referencing==0.36.2
 requests==2.32.4
 rpds-py==0.27.0
@@ -86,7 +88,6 @@ tzdata==2025.2
 urllib3==2.5.0
 wcwidth==0.2.13
 webencodings==0.5.1
+x_wr_timezone==2.0.1
 yarg==0.1.9
 yarl==1.20.1
-icalendar>=6.1.0
-recurring-ical-events==3.4.0

@@ -110,6 +110,7 @@ class RetryHandler:
         # Network-related exceptions are retryable
         retryable_exceptions = (
             asyncio.TimeoutError,
+            TimeoutError,  # Generic timeout error
             ConnectionError,
             OSError,  # Includes network errors
         )

@@ -296,6 +296,8 @@ CMD ["python3", "bot.py"]
 - `/owner_backup_now` - Create manual configuration backup
 
 ### Latest Improvements (September 2025)
+- **Enhanced Calendar Reliability** - Fixed timeout handling in calendar HTTP requests with proper retry logic
+- **Improved Error Handling** - Better timeout error detection and logging with configurable HTTP timeouts
 - **Calendar Event Reminders** - Automated reminders sent 1 hour before events with optional role pings
 - **Automatic Calendar Event Lifecycle** - Discord events now automatically start and end according to iCal times
 - **Smart Calendar Summary Management** - Weekly summaries update existing messages within the week, create new ones for new weeks
@@ -305,6 +307,7 @@ CMD ["python3", "bot.py"]
 - **Streamlined Server Monitoring** - New `/owner_server_monitor` command provides centralized overview of all servers
 - **Removed Individual Monitor Functions** - Cleaned up obsolete monitoring code from feeds and maps for better maintainability
 - **Multi-Server Statistics** - Track feeds, map regions, pin counts, and calendar counts across all connected servers
+- **Robust Retry System** - Enhanced retry handler now properly catches TimeoutError and other network exceptions
 
 ### Health Monitoring
 - Use `/monitor` command for system status
@@ -345,6 +348,7 @@ Include:
 **Bot not responding**: Check Discord token and bot permissions
 **Map rendering fails**: Verify Natural Earth shapefiles are in `data/` directory
 **RSS feeds not updating**: Check feed URLs and network connectivity
+**Calendar timeout errors**: The bot now automatically retries failed calendar requests with exponential backoff
 **Permission errors**: Ensure bot has required Discord permissions
 
 ### Debug Mode

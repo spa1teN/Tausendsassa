@@ -900,7 +900,8 @@ class CalendarCog(commands.Cog):
             # Use retry handler for reliability
             async def fetch_ical():
                 session = await http_client.get_session()
-                async with session.get(ical_url, timeout=15) as response:
+                timeout = config.http_timeout
+                async with session.get(ical_url, timeout=timeout) as response:
                     if response.status != 200:
                         raise Exception(f"HTTP {response.status}")
                     return await response.text()
@@ -965,7 +966,12 @@ class CalendarCog(commands.Cog):
             # Log more detailed error information
             error_type = type(e).__name__
             error_msg = str(e) if str(e) else "Unknown error"
-            self.log.error(f"Error fetching calendar from {ical_url}: {error_type}: {error_msg}")
+            
+            # Add more context for timeout errors
+            if isinstance(e, (asyncio.TimeoutError, TimeoutError)):
+                self.log.error(f"Timeout fetching calendar from {ical_url} (configured timeout: {config.http_timeout}s): {error_type}: {error_msg}")
+            else:
+                self.log.error(f"Error fetching calendar from {ical_url}: {error_type}: {error_msg}")
             return None
 
     def _filter_events(self, events: List[dict], blacklist: List[str], whitelist: List[str] = None) -> List[dict]:
