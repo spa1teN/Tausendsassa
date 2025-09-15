@@ -20,6 +20,13 @@
 > - `/ping`: test bot responsiveness
 > - `/when_is_trump_gone`: liberation day
 > - `/timezone`: lets you specify a timezone for your server
+> - `/help`: display bot help and feature information
 
+### **Owner-Only Commands**
+> - `/owner_monitor`: comprehensive system health monitoring with auto-updating messages
+> - `/owner_server_monitor`: multi-server overview showing feeds, maps, and calendar statistics
+> - `/owner_poll_now`: force immediate RSS feed polling
+> - `/owner_backup_now`: create manual configuration backup
+> - `/owner_backup_status`: show backup system status and recent backups
 
 -# *note: all commands starting in `/owner_...` can only be used by the bot-owner!*

@@ -79,6 +79,7 @@ export DISCORD_TOKEN="your_discord_bot_token_here"
 
 # Optional (with defaults)
 export LOG_WEBHOOK_URL="discord_webhook_url_for_logging"
+export BACKUP_WEBHOOK_URL="discord_webhook_url_for_backup_uploads"
 export BOT_OWNER_ID="your_discord_user_id"
 export RSS_POLL_INTERVAL_MINUTES="1.0"
 export RSS_RATE_LIMIT_SECONDS="30"
@@ -294,8 +295,11 @@ CMD ["python3", "bot.py"]
 - `/owner_server_monitor` - Multi-server overview showing feeds, maps, and calendar statistics
 - `/owner_poll_now` - Force immediate RSS feed polling
 - `/owner_backup_now` - Create manual configuration backup
+- `/owner_backup_status` - Show backup system status and recent backups
 
 ### Latest Improvements (September 2025)
+- **Security Fix** - Removed hardcoded webhook URLs, moved to environment variables (BACKUP_WEBHOOK_URL)
+- **Issue Documentation** - Added comprehensive `issues.md` file cataloguing 27 known issues with severity levels
 - **Enhanced Calendar Reliability** - Fixed timeout handling in calendar HTTP requests with proper retry logic
 - **Improved Error Handling** - Better timeout error detection and logging with configurable HTTP timeouts
 - **Calendar Event Reminders** - Automated reminders sent 1 hour before events with optional role pings

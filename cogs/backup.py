@@ -24,10 +24,16 @@ class BackupTask(commands.Cog):
         # Configuration
         self.config_path = Path("config")
         self.backup_path = Path("backups")
-        self.log_webhook_url = "https://discord.com/api/webhooks/1414271435895083059/2iNuWF_yc3KUUkpyxm3woDtDY1zw1d6iGbSvKAcdz8DZ0i4wNwu9GTcVZ-6OV9S72IUu"
+        self.log_webhook_url = os.getenv("BACKUP_WEBHOOK_URL")
         
         # Ensure backup directory exists
         self.backup_path.mkdir(exist_ok=True)
+        
+        # Validate webhook URL
+        if not self.log_webhook_url:
+            self.logger.warning("⚠️ BACKUP_WEBHOOK_URL not set - backup uploads to Discord disabled")
+        else:
+            self.logger.info(f"✅ Backup webhook configured")
         
         # Start the daily backup task
         self.daily_backup.start()
@@ -58,8 +64,11 @@ class BackupTask(commands.Cog):
             backup_file = await self.create_config_backup()
             
             if backup_file:
-                # Send backup to webhook
-                await self.upload_backup_to_webhook(backup_file)
+                # Send backup to webhook (if configured)
+                if self.log_webhook_url:
+                    await self.upload_backup_to_webhook(backup_file)
+                else:
+                    self.logger.info("📄 Backup created locally (webhook not configured)")
                 
                 # Clean up old backups (keep last 7 days)
                 await self.cleanup_old_backups()
@@ -136,6 +145,10 @@ class BackupTask(commands.Cog):
     
     async def upload_backup_to_webhook(self, backup_file: Path):
         """Upload the backup file to Discord via webhook"""
+        if not self.log_webhook_url:
+            self.logger.warning("⚠️ Cannot upload backup - webhook URL not configured")
+            return
+            
         try:
             # Check file size (Discord limit is 25MB for webhooks)
             file_size = backup_file.stat().st_size
@@ -219,6 +232,10 @@ class BackupTask(commands.Cog):
     
     async def send_backup_notification(self, title: str, description: str, color: int):
         """Send a notification embed to the webhook"""
+        if not self.log_webhook_url:
+            self.logger.warning(f"⚠️ Cannot send notification '{title}' - webhook URL not configured")
+            return
+            
         try:
             embed = {
                 "title": title,
@@ -298,11 +315,15 @@ class BackupTask(commands.Cog):
             backup_file = await self.create_config_backup()
             
             if backup_file:
-                await self.upload_backup_to_webhook(backup_file)
+                if self.log_webhook_url:
+                    await self.upload_backup_to_webhook(backup_file)
+                else:
+                    self.logger.info("📄 Manual backup created locally (webhook not configured)")
                 
+                webhook_status = "and uploaded" if self.log_webhook_url else "(local only - webhook not configured)"
                 embed = discord.Embed(
                     title="✅ Manual Backup Complete",
-                    description=f"Config backup created and uploaded successfully.\n\n**File:** `{backup_file.name}`",
+                    description=f"Config backup created {webhook_status}.\n\n**File:** `{backup_file.name}`",
                     color=0x00ff00
                 )
                 await interaction.followup.send(embed=embed)
