@@ -915,7 +915,7 @@ class CalendarCog(commands.Cog):
             cal = Calendar.from_ical(content)
             
             # Get events for the next 4 weeks (to catch recurring events)
-            start_date = datetime.now()
+            start_date = datetime.now(timezone.utc)
             end_date = start_date + timedelta(weeks=4)
             
             # Try using recurring_ical_events with error handling for timezone issues
@@ -1013,7 +1013,7 @@ class CalendarCog(commands.Cog):
 
     def _get_weekly_events(self, events: List[dict]) -> tuple[List[dict], datetime]:
         """Get events for the current week (Monday to Sunday)"""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         
         # Calculate start of current week (Monday)
         days_since_monday = now.weekday()
@@ -1027,23 +1027,31 @@ class CalendarCog(commands.Cog):
         for event in events:
             event_start = event.get('start')
             if event_start:
-                # Handle both datetime and date objects
-                if hasattr(event_start, 'date'):
-                    event_date = event_start.date()
+                # Convert event_start to datetime for comparison
+                if isinstance(event_start, datetime):
+                    event_datetime = event_start
+                    # Ensure timezone-aware datetime
+                    if event_datetime.tzinfo is None:
+                        event_datetime = event_datetime.replace(tzinfo=timezone.utc)
                 else:
-                    event_date = event_start
-                
-                # Convert to datetime for comparison
-                if isinstance(event_date, datetime):
-                    event_datetime = event_date
-                else:
-                    event_datetime = datetime.combine(event_date, datetime.min.time())
+                    # event_start is a date object, convert to datetime
+                    event_datetime = datetime.combine(event_start, datetime.min.time())
+                    event_datetime = event_datetime.replace(tzinfo=timezone.utc)
                 
                 if week_start <= event_datetime <= week_end:
                     weekly_events.append(event)
         
         # Sort by start time
-        weekly_events.sort(key=lambda x: x.get('start', datetime.min))
+        def sort_key(event):
+            start = event.get('start')
+            if start is None:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            elif isinstance(start, datetime):
+                return start if start.tzinfo else start.replace(tzinfo=timezone.utc)
+            else:  # date object
+                return datetime.combine(start, datetime.min.time()).replace(tzinfo=timezone.utc)
+        
+        weekly_events.sort(key=sort_key)
         return weekly_events, week_start
 
     async def _post_weekly_summary(self, guild_id: int, calendar_config: CalendarConfig, events: List[dict], week_start: datetime):
