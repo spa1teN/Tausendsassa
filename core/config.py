@@ -1,6 +1,6 @@
 # core/config.py
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional
 import logging
 
 log = logging.getLogger("tausendsassa.config")
@@ -53,11 +53,22 @@ class BotConfig:
     
     @property
     def max_retries(self) -> int:
-        return int(os.getenv("RSS_MAX_RETRIES", "3"))
+        return int(os.getenv("RSS_MAX_RETRIES", "5"))
     
     @property
     def base_retry_delay(self) -> float:
         return float(os.getenv("RSS_BASE_RETRY_DELAY", "2.0"))
+    
+    @property
+    def feed_specific_timeouts(self) -> Dict[str, int]:
+        """Feed-specific timeout overrides for slow feeds"""
+        return {
+            # Problematic feeds from logs that need longer timeouts
+            'bluesky': 90,  # Bluesky feed had 22 consecutive failures
+            'bbc': 90,      # BBC News had multiple failures
+            'postillon': 90,  # Der Postillon had multiple failures
+            'google.com/calendar': 120,  # Google Calendar timeouts
+        }
     
     @property
     def authorized_users(self) -> List[int]:
@@ -82,7 +93,7 @@ class BotConfig:
     # HTTP Configuration
     @property
     def http_timeout(self) -> int:
-        return int(os.getenv("HTTP_TIMEOUT", "30"))
+        return int(os.getenv("HTTP_TIMEOUT", "60"))
     
     @property
     def max_connections(self) -> int:

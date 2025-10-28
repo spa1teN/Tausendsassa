@@ -900,7 +900,12 @@ class CalendarCog(commands.Cog):
             # Use retry handler for reliability
             async def fetch_ical():
                 session = await http_client.get_session()
+                # Use feed-specific timeout for known slow calendar providers
                 timeout = config.http_timeout
+                for pattern, custom_timeout in config.feed_specific_timeouts.items():
+                    if pattern in ical_url.lower():
+                        timeout = custom_timeout
+                        break
                 async with session.get(ical_url, timeout=timeout) as response:
                     if response.status != 200:
                         raise Exception(f"HTTP {response.status}")

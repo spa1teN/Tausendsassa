@@ -14,6 +14,7 @@ import yaml
 
 from core.feeds_state import State
 from core.feeds_thumbnails import find_thumbnail
+from core.config import config
 
 # Configuration constants
 TZ = ZoneInfo("Europe/Berlin")
@@ -80,6 +81,19 @@ def _create_content_hash(entry) -> str:
     content_string = "|".join(content_parts)
     return hashlib.md5(content_string.encode('utf-8')).hexdigest()
 
+def _get_feed_timeout(url: str) -> int:
+    """Get appropriate timeout for a feed URL based on known slow feeds"""
+    feed_timeouts = config.feed_specific_timeouts
+    url_lower = url.lower()
+    
+    # Check if URL contains any of the known slow feed patterns
+    for pattern, timeout in feed_timeouts.items():
+        if pattern in url_lower:
+            return timeout
+    
+    # Default to global HTTP timeout
+    return config.http_timeout
+
 def _create_feed_hash(parsed_feed) -> str:
     """Create hash of entire feed for change detection"""
     entries_data = []
@@ -115,8 +129,10 @@ def _fetch_with_cache(url: str) -> Optional[Tuple[feedparser.FeedParserDict, boo
         headers['If-Modified-Since'] = cache_data['last_modified']
     
     try:
+        # Get appropriate timeout for this feed
+        timeout = _get_feed_timeout(url)
         # Use requests instead of feedparser directly for better caching control
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=timeout)
         
         # Handle 304 Not Modified
         if response.status_code == 304:
