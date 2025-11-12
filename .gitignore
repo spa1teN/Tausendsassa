@@ -1,0 +1,10 @@
+.venv/
+backups/
+*/__pycache__/
+config/
+data/
+logs/
+CLAUDE.md
+.env
+.backup/
+*~

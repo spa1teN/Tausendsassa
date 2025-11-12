@@ -16,6 +16,10 @@ from core.cache_manager import cache_manager
 from core.http_client import http_client
 from core.validation import run_full_validation, log_validation_results
 
+from dotenv import load_dotenv
+load_dotenv()
+
+
 # ─── Webhook Log Handler ────────────────────────────────────────────────────
 class WebhookLogHandler(logging.Handler):
     """Custom logging handler that sends logs to Discord via webhook as embeds"""

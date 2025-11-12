@@ -60,8 +60,7 @@ class ModerationCog(commands.Cog):
         
         embed = discord.Embed(
             title="🛡️ Moderation Dashboard",
-            color=0x5865f2,
-            timestamp=get_current_time(guild_id)
+            color=0x5865f2
         )
         
         # Member logging configuration
@@ -110,8 +109,7 @@ class ModerationCog(commands.Cog):
         """Create embed for member join event"""
         embed = discord.Embed(
             title=f"{member.display_name} joined the server",
-            color=0x00ff00,  # Green for joins
-            timestamp=get_current_time(member.guild.id)
+            color=0x00ff00  # Green for joins
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         
@@ -130,11 +128,15 @@ class ModerationCog(commands.Cog):
         # Add role assignment status if join role is configured
         if role_assigned is not None:
             if role_assigned:
-                embed.add_field(name="Auto Role", value=f"✅ Assigned: {role_name}", inline=True)
+                # Get role ID from the member's guild to use proper mention format
+                config = self.get_guild_config(member.guild.id)
+                role_id = config.get('join_role')
+                if role_id:
+                    embed.add_field(name="Auto Role", value=f"<@&{role_id}>", inline=True)
+                else:
+                    embed.add_field(name="Auto Role", value=f"Assigned: @{role_name}", inline=True)
             else:
                 embed.add_field(name="Auto Role", value="❌ Failed to assign", inline=True)
-        
-        embed.set_footer(text=f"User ID: {member.id}")
         
         return embed
 
@@ -142,15 +144,13 @@ class ModerationCog(commands.Cog):
         """Create embed for member leave event"""
         embed = discord.Embed(
             title=f"{member.display_name} left the server",
-            color=0xff0000,  # Red for leaves
-            timestamp=get_current_time(member.guild.id)
+            color=0xff0000  # Red for leaves
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         
         if duration:
             embed.add_field(name="Time on Server", value=duration, inline=True)
         
-        embed.set_footer(text=f"User ID: {member.id}")
         
         return embed
 
@@ -158,8 +158,7 @@ class ModerationCog(commands.Cog):
         """Create embed for ban event"""
         embed = discord.Embed(
             title=f"{user.display_name} was banned",
-            color=0x8b0000,  # Dark red for bans
-            timestamp=get_current_time(guild.id)
+            color=0x8b0000  # Dark red for bans
         )
         embed.set_thumbnail(url=user.display_avatar.url)
         
@@ -169,7 +168,6 @@ class ModerationCog(commands.Cog):
         if reason:
             embed.add_field(name="Reason", value=reason, inline=True)
         
-        embed.set_footer(text=f"User ID: {user.id}")
         
         return embed
 
@@ -177,8 +175,7 @@ class ModerationCog(commands.Cog):
         """Create embed for kick event"""
         embed = discord.Embed(
             title=f"{user.display_name} was kicked",
-            color=0xff4500,  # Orange red for kicks
-            timestamp=get_current_time(guild.id)
+            color=0xff4500  # Orange red for kicks
         )
         embed.set_thumbnail(url=user.display_avatar.url)
         
@@ -187,7 +184,7 @@ class ModerationCog(commands.Cog):
         if reason:
             embed.add_field(name="Reason", value=reason, inline=True)
         
-        embed.set_footer(text=f"User ID: {user.id}")
+        
         
         return embed
 
@@ -195,8 +192,7 @@ class ModerationCog(commands.Cog):
         """Create embed for timeout event"""
         embed = discord.Embed(
             title=f"{member.display_name} was timed out",
-            color=0xffa500,  # Orange for timeouts
-            timestamp=get_current_time(member.guild.id)
+            color=0xffa500  # Orange for timeouts
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         
@@ -206,7 +202,6 @@ class ModerationCog(commands.Cog):
         if reason:
             embed.add_field(name="Reason", value=reason, inline=False)
         
-        embed.set_footer(text=f"User ID: {member.id}")
         
         return embed
 
@@ -214,15 +209,14 @@ class ModerationCog(commands.Cog):
         """Create embed for unban event"""
         embed = discord.Embed(
             title=f"{user.display_name} was unbanned",
-            color=0x90ee90,  # Light green for unbans
-            timestamp=get_current_time(guild.id)
+            color=0x90ee90  # Light green for unbans
         )
         embed.set_thumbnail(url=user.display_avatar.url)
         
         if moderator:
             embed.add_field(name="Unbanned by", value=f"<@{moderator.id}>", inline=True)
         
-        embed.set_footer(text=f"User ID: {user.id}")
+        
         
         return embed
 
@@ -256,9 +250,18 @@ class ModerationCog(commands.Cog):
                 # Create a new aiohttp session for webhook requests
                 async with aiohttp.ClientSession() as session:
                     webhook = discord.Webhook.from_url(webhook_url, session=session)
-                    await webhook.send(embed=embed)
-            except (discord.HTTPException, aiohttp.ClientError):
-                pass  # Fail silently if webhook is invalid
+                    # Read pb.png file and send it with the webhook
+                    with open('pb.png', 'rb') as f:
+                        pb_file = discord.File(f, 'pb.png')
+                        await webhook.send(embed=embed, file=pb_file, avatar_url="attachment://pb.png")
+            except (discord.HTTPException, aiohttp.ClientError, FileNotFoundError):
+                # Fallback to sending without profile picture if pb.png is not found
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        webhook = discord.Webhook.from_url(webhook_url, session=session)
+                        await webhook.send(embed=embed)
+                except (discord.HTTPException, aiohttp.ClientError):
+                    pass  # Fail silently if webhook is invalid
 
     async def check_for_kick(self, guild: discord.Guild, user_id: int):
         """Check audit logs for recent kick events"""
@@ -443,8 +446,7 @@ class ModerationCog(commands.Cog):
             embed = discord.Embed(
                 title="🧹 Messages Cleared",
                 description=f"Successfully deleted {deleted_count} message{'s' if deleted_count != 1 else ''} from {channel.mention}",
-                color=0x00ff00,
-                timestamp=get_current_time(interaction.guild.id)
+                color=0x00ff00
             )
             embed.set_footer(text=f"Cleared by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
             
@@ -458,48 +460,6 @@ class ModerationCog(commands.Cog):
             else:
                 await interaction.followup.send("❌ An error occurred while deleting messages.", ephemeral=True)
 
-    @app_commands.command(name="timezone", description="Set the timezone for this server's embeds")
-    @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(timezone="Timezone name (e.g., 'Europe/Berlin', 'America/New_York', 'UTC')")
-    async def set_timezone(self, interaction: discord.Interaction, timezone: str):
-        """Set guild-specific timezone for embed timestamps"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
-            return
-        
-        # Import here to avoid circular imports
-        import pytz
-        
-        # Validate timezone
-        try:
-            pytz.timezone(timezone)
-        except pytz.exceptions.UnknownTimeZoneError:
-            await interaction.response.send_message(
-                f"❌ Unknown timezone: `{timezone}`\n\n"
-                "Common timezones:\n"
-                "• `Europe/Berlin` (Germany)\n"
-                "• `America/New_York` (US Eastern)\n"
-                "• `America/Los_Angeles` (US Pacific)\n"
-                "• `Asia/Tokyo` (Japan)\n"
-                "• `UTC` (Coordinated Universal Time)\n\n"
-                "See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones",
-                ephemeral=True
-            )
-            return
-        
-        # Save timezone configuration
-        if save_guild_timezone(interaction.guild.id, timezone):
-            embed = discord.Embed(
-                title="⏰ Timezone Updated",
-                description=f"Server timezone has been set to: `{timezone}`\n\nAll embed timestamps will now use this timezone.",
-                color=0x00ff00,
-                timestamp=get_current_time(interaction.guild.id)
-            )
-            embed.set_footer(text=f"Set by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        else:
-            await interaction.response.send_message("❌ Failed to save timezone configuration.", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(ModerationCog(bot))
