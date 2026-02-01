@@ -72,7 +72,7 @@ services:
       - SYSTEM_METRICS_INTERVAL=${SYSTEM_METRICS_INTERVAL:-60}
       - MONITOR_UPDATE_INTERVAL=${MONITOR_UPDATE_INTERVAL:-300}
     volumes:
-      - ./data:/app/data:ro           # Natural Earth shapefiles (read-only)
+      - ./data:/app/data           # Natural Earth shapefiles (read-only)
       - ./logs:/app/logs              # Log files
       - map_cache:/app/data/map_cache # Map cache (persistent)
       - ./pb.png:/app/pb.png:ro       # Profile picture for webhooks
