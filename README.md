@@ -83,6 +83,12 @@ sudo systemctl enable --now tausendsassa-browser
 docker-compose up -d
 ```
 
+**Volume Structure:**
+- `cogs/map_data/` - Natural Earth shapefiles, map cache, avatar cache (shared between bot and db-browser)
+- `logs/` - Application logs
+
+The bot and db-browser automatically detect Docker vs Systemd runtime and adjust their monitoring displays accordingly.
+
 ## Project Structure
 
 ```
@@ -92,11 +98,14 @@ docker-compose up -d
 │   ├── feeds.py        # RSS monitoring
 │   ├── map.py          # Geographic maps
 │   ├── calendar.py     # iCal integration
-│   └── ...
+│   ├── monitor.py      # System monitoring
+│   └── map_data/       # Map data directory
+│       ├── ne_10m_*.shp    # Natural Earth shapefiles
+│       ├── map_cache/      # Base map cache
+│       └── avatar_cache/   # Discord CDN cache
 ├── core/               # Shared utilities
 ├── db/                 # Database layer
-├── resources/          # Static files
-└── cogs/map_data/      # Map shapefiles and cache
+└── resources/          # Static files
 ```
 
 ## Database Browser
@@ -104,10 +113,12 @@ docker-compose up -d
 Access at `http://your-server:8080`
 
 Features:
-- System metrics (CPU, RAM, Disk)
+- System metrics (CPU, RAM, Disk, Uptime)
+- Runtime mode indicator (Docker/Systemd)
 - Guild, feed, calendar, map overview
 - Log viewer
 - Cog status monitoring
+- Discord CDN proxy for avatars/icons
 
 ## Commands
 

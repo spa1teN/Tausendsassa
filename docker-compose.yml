@@ -72,10 +72,8 @@ services:
       - SYSTEM_METRICS_INTERVAL=${SYSTEM_METRICS_INTERVAL:-60}
       - MONITOR_UPDATE_INTERVAL=${MONITOR_UPDATE_INTERVAL:-300}
     volumes:
-      - ./data:/app/data           # Natural Earth shapefiles (read-only)
-      - ./logs:/app/logs              # Log files
-      - map_cache:/app/data/map_cache # Map cache (persistent)
-      - ./pb.png:/app/pb.png:ro       # Profile picture for webhooks
+      - ./cogs/map_data:/app/cogs/map_data  # Natural Earth shapefiles + map cache
+      - ./logs:/app/logs                     # Log files
     networks:
       - tausendsassa-network
 
@@ -95,6 +93,11 @@ services:
       - DB_NAME=${DB_NAME:-tausendsassa}
       - DB_USER=${DB_USER:-tausendsassa}
       - DB_PASSWORD=${DB_PASSWORD:?Database password required}
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+    volumes:
+      - ./logs:/app/logs:ro                  # Log viewer (read-only)
+      - ./cogs/map_data:/app/cogs/map_data   # Map images + avatar cache (writable)
+      - ./resources:/app/resources:ro        # Favicon (read-only)
     ports:
       - "8080:8080"
     networks:
@@ -103,8 +106,6 @@ services:
 volumes:
   postgres_data:
     name: tausendsassa-postgres-data
-  map_cache:
-    name: tausendsassa-map-cache
 
 networks:
   tausendsassa-network:

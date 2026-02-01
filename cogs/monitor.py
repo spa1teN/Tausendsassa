@@ -18,6 +18,22 @@ from pathlib import Path
 from core.timezone_util import get_german_time
 
 
+def is_running_in_docker() -> bool:
+    """Check if we're running inside a Docker container."""
+    # Check for .dockerenv file
+    if Path("/.dockerenv").exists():
+        return True
+    # Check cgroup for docker/container references
+    try:
+        with open("/proc/1/cgroup", "r") as f:
+            content = f.read()
+            if "docker" in content or "container" in content:
+                return True
+    except (FileNotFoundError, PermissionError):
+        pass
+    return False
+
+
 class Monitor(commands.Cog):
     """Monitor cog for system and bot health monitoring"""
 
@@ -259,8 +275,67 @@ class Monitor(commands.Cog):
             self.log.error(f"Error getting device info: {e}")
             return {}
 
+    def get_runtime_status(self) -> Dict[str, Any]:
+        """Get runtime status - Docker or Systemd depending on environment."""
+        if is_running_in_docker():
+            return self.get_docker_status()
+        return self.get_systemd_status()
+
+    def get_docker_status(self) -> Dict[str, Any]:
+        """Get Docker container status for the bot."""
+        try:
+            # Get container info from environment or process
+            container_id = None
+
+            # Try to get container ID from cgroup
+            try:
+                with open("/proc/1/cgroup", "r") as f:
+                    for line in f:
+                        if "docker" in line:
+                            # Extract container ID from path
+                            parts = line.strip().split("/")
+                            if parts:
+                                container_id = parts[-1][:12]
+                                break
+            except (FileNotFoundError, PermissionError):
+                pass
+
+            # Get container uptime from PID 1
+            uptime_str = "Unknown"
+            try:
+                proc = psutil.Process(1)
+                start_time = datetime.fromtimestamp(proc.create_time())
+                uptime = datetime.now() - start_time
+                days = uptime.days
+                hours, remainder = divmod(uptime.seconds, 3600)
+                minutes, _ = divmod(remainder, 60)
+                if days > 0:
+                    uptime_str = f"{days}d {hours}h {minutes}m"
+                else:
+                    uptime_str = f"{hours}h {minutes}m"
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+            return {
+                'runtime_mode': 'docker',
+                'service_name': 'tausendsassa-bot',
+                'container_id': container_id or 'unknown',
+                'status': 'running',
+                'uptime': uptime_str,
+                'details': f'Container ID: {container_id or "unknown"}\nUptime: {uptime_str}'
+            }
+
+        except Exception as e:
+            self.log.error(f"Error in Docker status check: {e}")
+            return {
+                'runtime_mode': 'docker',
+                'service_name': 'docker',
+                'status': 'error',
+                'details': f'Error checking Docker status: {e}'
+            }
+
     def get_systemd_status(self) -> Dict[str, Any]:
-        """Get systemd service status for the bot"""
+        """Get systemd service status for the bot."""
         try:
             # Try to find the systemd service
             # Common service names - adjust as needed
@@ -285,6 +360,7 @@ class Monitor(commands.Cog):
                         )
 
                         return {
+                            'runtime_mode': 'systemd',
                             'service_name': service_name,
                             'status': result.stdout.strip(),
                             'details': status_result.stdout[:1000]  # Limit output
@@ -300,6 +376,7 @@ class Monitor(commands.Cog):
                     continue
 
             return {
+                'runtime_mode': 'systemd',
                 'service_name': 'unknown',
                 'status': 'not found',
                 'details': 'No systemd service found for common bot names'
@@ -308,6 +385,7 @@ class Monitor(commands.Cog):
         except Exception as e:
             self.log.error(f"Error in systemd status check: {e}")
             return {
+                'runtime_mode': 'systemd',
                 'service_name': 'error',
                 'status': 'error',
                 'details': f'Error checking systemd status: {e}'
@@ -365,7 +443,7 @@ class Monitor(commands.Cog):
         """Generate all monitor embeds with current data"""
         # Collect all monitoring data
         device_info = self.get_device_info()
-        systemd_info = self.get_systemd_status()
+        runtime_info = self.get_runtime_status()
         cog_info = self.get_cog_info()
         bot_info = self.get_bot_info()
 
@@ -437,25 +515,38 @@ class Monitor(commands.Cog):
 
         embeds.append(device_embed)
 
-        # Systemd Status Embed (separate embed)
-        systemd_embed = discord.Embed(
-            title="Systemd Service Status",
+        # Runtime Status Embed (Docker or Systemd)
+        runtime_mode = runtime_info.get('runtime_mode', 'unknown')
+        is_docker = runtime_mode == 'docker'
+
+        runtime_embed = discord.Embed(
+            title="Docker Container Status" if is_docker else "Systemd Service Status",
             color=0x0099ff,
             timestamp=get_german_time()
         )
 
-        status = systemd_info.get('status', 'unknown')
-        color = 0x00ff00 if status == 'active' else 0xff9900 if status == 'inactive' else 0xff0000
-        systemd_embed.color = color
+        status = runtime_info.get('status', 'unknown')
+        color = 0x00ff00 if status in ('active', 'running') else 0xff9900 if status == 'inactive' else 0xff0000
+        runtime_embed.color = color
 
-        systemd_embed.add_field(
-            name="Service Information",
-            value=f"Service: {systemd_info.get('service_name', 'unknown')}\n"
-                  f"Status: **{status.upper()}**",
-            inline=False
-        )
+        if is_docker:
+            runtime_embed.add_field(
+                name="Container Information",
+                value=f"Container: {runtime_info.get('service_name', 'unknown')}\n"
+                      f"Container ID: `{runtime_info.get('container_id', 'unknown')}`\n"
+                      f"Status: **{status.upper()}**\n"
+                      f"Uptime: {runtime_info.get('uptime', 'unknown')}",
+                inline=False
+            )
+        else:
+            runtime_embed.add_field(
+                name="Service Information",
+                value=f"Service: {runtime_info.get('service_name', 'unknown')}\n"
+                      f"Status: **{status.upper()}**",
+                inline=False
+            )
 
-        embeds.append(systemd_embed)
+        embeds.append(runtime_embed)
 
         # Cog Information Embed (separate embed)
         cog_embed = discord.Embed(

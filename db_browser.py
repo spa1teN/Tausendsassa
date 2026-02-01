@@ -118,24 +118,86 @@ def load_favicon():
             FAVICON_B64 = base64.b64encode(f.read()).decode()
 
 
-def get_bot_uptime() -> str:
-    """Get bot uptime from process or PID file."""
+def is_running_in_docker() -> bool:
+    """Check if we're running inside a Docker container."""
+    # Check for .dockerenv file
+    if Path("/.dockerenv").exists():
+        return True
+    # Check cgroup for docker/container references
+    try:
+        with open("/proc/1/cgroup", "r") as f:
+            content = f.read()
+            if "docker" in content or "container" in content:
+                return True
+    except (FileNotFoundError, PermissionError):
+        pass
+    return False
+
+
+def format_uptime(start_time: datetime) -> str:
+    """Format uptime from a start timestamp."""
+    uptime = datetime.now() - start_time
+    days = uptime.days
+    hours, remainder = divmod(uptime.seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    if days > 0:
+        return f"{days}d {hours}h {minutes}m"
+    return f"{hours}h {minutes}m"
+
+
+def get_bot_uptime_from_log() -> Optional[str]:
+    """Try to get bot uptime from the main log file (first log entry)."""
+    log_file = BASE_PATH / "logs" / "tausendsassa.log"
+    if not log_file.exists():
+        return None
+
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            # Read first line to get bot start time
+            first_line = f.readline()
+            if first_line:
+                # Log format: "2024-01-15 10:30:45 - INFO - ..."
+                timestamp_str = first_line[:19]  # "2024-01-15 10:30:45"
+                start_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                return format_uptime(start_time)
+    except (ValueError, IndexError, OSError):
+        pass
+    return None
+
+
+def get_bot_uptime() -> tuple[str, str]:
+    """Get bot uptime and runtime mode.
+
+    Returns:
+        Tuple of (uptime_string, mode) where mode is 'systemd' or 'docker'
+    """
+    # Check if running in Docker
+    if is_running_in_docker():
+        # In Docker: Try to get uptime from log file
+        uptime = get_bot_uptime_from_log()
+        if uptime:
+            return (uptime, "docker")
+
+        # Fallback: Use this container's uptime (PID 1)
+        try:
+            proc = psutil.Process(1)
+            start_time = datetime.fromtimestamp(proc.create_time())
+            return (format_uptime(start_time), "docker")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+        return ("Unknown", "docker")
+
+    # Systemd mode: Use PID file
     pid_file = Path("/run/tausendsassa/bot.pid")
     try:
         if pid_file.exists():
             pid = int(pid_file.read_text().strip())
             proc = psutil.Process(pid)
             start_time = datetime.fromtimestamp(proc.create_time())
-            uptime = datetime.now() - start_time
-            days = uptime.days
-            hours, remainder = divmod(uptime.seconds, 3600)
-            minutes, _ = divmod(remainder, 60)
-            if days > 0:
-                return f"{days}d {hours}h {minutes}m"
-            return f"{hours}h {minutes}m"
+            return (format_uptime(start_time), "systemd")
     except (FileNotFoundError, psutil.NoSuchProcess, ValueError):
         pass
-    return "Unknown"
+    return ("Unknown", "systemd")
 
 
 def get_system_metrics() -> Dict[str, Any]:
@@ -143,7 +205,8 @@ def get_system_metrics() -> Dict[str, Any]:
     cpu_percent = psutil.cpu_percent(interval=0.1)
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
-    
+    uptime, runtime_mode = get_bot_uptime()
+
     return {
         "cpu_percent": cpu_percent,
         "memory_percent": memory.percent,
@@ -152,7 +215,8 @@ def get_system_metrics() -> Dict[str, Any]:
         "disk_percent": disk.percent,
         "disk_used_gb": disk.used / (1024**3),
         "disk_total_gb": disk.total / (1024**3),
-        "uptime": get_bot_uptime(),
+        "uptime": uptime,
+        "runtime_mode": runtime_mode,
     }
 
 
@@ -681,6 +745,7 @@ async def home() -> HTMLResponse:
       <div class="stat-card">
         <h3>Uptime</h3>
         <div class="value">{metrics['uptime']}</div>
+        <div class="sub"><span class="pill {'green' if metrics['runtime_mode'] == 'docker' else 'gray'}">{metrics['runtime_mode'].upper()}</span></div>
       </div>
     </div>
 
