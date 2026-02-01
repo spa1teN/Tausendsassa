@@ -39,7 +39,7 @@ COPY core/ ./core/
 COPY cogs/ ./cogs/
 COPY db/ ./db/
 COPY scripts/ ./scripts/
-COPY commands.md .
+COPY resources/commands.md ./resources/
 COPY pb.png .
 
 # Create necessary directories

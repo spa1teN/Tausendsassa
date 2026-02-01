@@ -57,7 +57,7 @@ backups/
 
 # Documentation (not needed in container)
 *.md
-!resources/commands.md
+!commands.md
 docs/
 
 # Test files
