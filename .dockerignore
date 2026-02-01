@@ -1,0 +1,85 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info
+dist
+build
+eggs
+parts
+var
+sdist
+develop-eggs
+.installed.cfg
+lib
+lib64
+venv
+.venv
+ENV
+env
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs (will be mounted as volume)
+logs/
+*.log
+
+# Config data (migrated to database)
+config/
+!config/.gitkeep
+
+# Cache
+data/map_cache/
+*.pyc
+.cache
+.pytest_cache
+
+# Backups
+backups/
+
+# Documentation (not needed in container)
+*.md
+!commands.md
+docs/
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Development files
+*.ipynb
+.ipynb_checkpoints
+Makefile
+
+# Docker files (prevent recursive copy)
+docker-compose*.yml
+Dockerfile*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db

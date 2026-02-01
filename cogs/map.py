@@ -31,28 +31,28 @@ IMAGE_WIDTH = 1500
 
 class MapV2Cog(commands.Cog):
     """Cog for managing maps with user pins displayed as images."""
-    
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.log = bot.get_cog_logger("map")
-        
+
         # Import config here to avoid circular imports
         from core.config import config
         self.config = config
-        
+
         # Setup directories
-        self.data_dir = Path(__file__).parent.parent / "config"
-        self.cache_dir = Path(__file__).parent.parent / "data/map_cache"
-        
-        # Initialize modular components
+        self.data_dir = Path(__file__).parent / "map_data"
+        self.cache_dir = Path(__file__).parent / "map_data/map_cache"
+
+        # Initialize modular components (storage still used for image caching)
         self.storage = MapStorage(self.data_dir, self.cache_dir, self.log)
         self.map_generator = MapGenerator(self.data_dir, self.cache_dir, self.log)
         self.proximity_calc = ProximityCalculator(self.map_generator, self.log)
-        
-        # Load data and configs
-        self.global_config = self.storage.load_global_config()
-        self.maps = self.storage.load_all_data()
-        
+
+        # In-memory cache - loaded from database in cog_load()
+        self.global_config: Dict = {}
+        self.maps: Dict[str, Dict] = {}
+
         # Cooldown tracking for pin updates
         self.pin_cooldowns = {}  # user_id -> last_update_timestamp
     
@@ -76,8 +76,19 @@ class MapV2Cog(commands.Cog):
         self.pin_cooldowns[user_id] = datetime.now()
 
     async def cog_load(self):
-        """Called when the cog is loaded. Re-register persistent views."""
+        """Called when the cog is loaded. Load data from database and re-register persistent views."""
         try:
+            # Load data from database
+            if hasattr(self.bot, 'db') and self.bot.db:
+                self.maps = await self.bot.db.maps.load_all_maps()
+                self.global_config = await self.bot.db.maps.get_all_global_config()
+                self.log.info(f"Loaded {len(self.maps)} maps from database")
+            else:
+                # Fallback to file-based loading if no database
+                self.maps = self.storage.load_all_data()
+                self.global_config = self.storage.load_global_config()
+                self.log.warning("Database not available, using file-based storage")
+
             # Clear base map cache on restart for fresh start
             await self.storage.cache.memory_cache.clear()
             self.log.info("Cleared all base map cache on restart")
@@ -203,15 +214,63 @@ class MapV2Cog(commands.Cog):
                 )
                 await progress_message.edit(embed=error_embed)
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Clean up when cog is unloaded."""
-        # Save all guild data
-        for guild_id in self.maps.keys():
-            asyncio.create_task(self._save_data(guild_id))
+        # Save all guild data synchronously before DB closes
+        for guild_id in list(self.maps.keys()):
+            try:
+                await self._save_data(guild_id)
+            except Exception as e:
+                self.log.warning(f"Could not save map data for {guild_id} during unload: {e}")
 
     async def _save_data(self, guild_id: str):
-        """Save map data for specific guild."""
-        await self.storage.save_data(guild_id, self.maps)
+        """Save map data for specific guild to database."""
+        if hasattr(self.bot, 'db') and self.bot.db:
+            guild_id_int = int(guild_id)
+            if guild_id in self.maps:
+                # Save to database
+                await self.bot.db.maps.save_map_data(guild_id_int, self.maps[guild_id])
+            else:
+                # Delete from database if removed from maps
+                await self.bot.db.maps.delete_settings(guild_id_int)
+        else:
+            # Fallback to file-based storage
+            await self.storage.save_data(guild_id, self.maps)
+
+    async def _save_global_config(self):
+        """Save global config to database."""
+        if hasattr(self.bot, 'db') and self.bot.db:
+            for key, value in self.global_config.items():
+                await self.bot.db.maps.set_global_config(key, value)
+        else:
+            # Fallback to file-based storage
+            await self.storage.save_global_config(self.global_config)
+
+    async def _save_pin(self, guild_id: int, user_id: int, pin_data: Dict):
+        """Save a single pin to database (more efficient than saving all data)."""
+        if hasattr(self.bot, 'db') and self.bot.db:
+            await self.bot.db.maps.set_pin(
+                guild_id=guild_id,
+                user_id=user_id,
+                latitude=pin_data['lat'],
+                longitude=pin_data['lng'],
+                username=pin_data.get('username'),
+                display_name=pin_data.get('display_name'),
+                location=pin_data.get('location'),
+                color=pin_data.get('color', '#FF0000'),
+                avatar_hash=pin_data.get('avatar_hash')
+            )
+        else:
+            # Fallback to file-based storage
+            await self.storage.save_data(str(guild_id), self.maps)
+
+    async def _delete_pin(self, guild_id: int, user_id: int):
+        """Delete a single pin from database."""
+        if hasattr(self.bot, 'db') and self.bot.db:
+            await self.bot.db.maps.delete_pin(guild_id, user_id)
+        else:
+            # Fallback to file-based storage
+            await self.storage.save_data(str(guild_id), self.maps)
 
     async def _invalidate_map_cache(self, guild_id: int):
         """Invalidate cached maps for a guild."""
@@ -289,7 +348,7 @@ class MapV2Cog(commands.Cog):
     def _create_projection_function(self, region: str, width: int, height: int):
         """Create projection function for cached maps."""
         # Use the new method that checks shapefile bounds first
-        data_path = Path(__file__).parent.parent / "data"
+        data_path = Path(__file__).parent / "map_data"
         bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
         (lat0, lon0), (lat1, lon1) = bounds
         minx, miny, maxx, maxy = lon0, lat0, lon1, lat1
@@ -297,7 +356,7 @@ class MapV2Cog(commands.Cog):
         # For germany regions, try to get better bounds
         if region in ["germany"]:
             try:
-                base_path = Path(__file__).parent.parent / "data"
+                base_path = Path(__file__).parent / "map_data"
                 world = gpd.read_file(base_path / "ne_10m_admin_0_countries.shp")
                 de = world[world["ADMIN"] == "Germany"].geometry.unary_union
                 if de is not None:
@@ -323,7 +382,7 @@ class MapV2Cog(commands.Cog):
         """Generate a close-up map of a continent using existing map configs."""
         try:
             # Check if we can get bounds for this continent/country
-            data_path = Path(__file__).parent.parent / "data"
+            data_path = Path(__file__).parent / "map_data"
             bounds = self.map_generator.map_config.get_region_bounds(continent, data_path)
             if not bounds:
                 self.log.warning(f"Could not get bounds for {continent}")
@@ -395,7 +454,7 @@ class MapV2Cog(commands.Cog):
                 return cached_closeup
             
             # Load shapefiles to find state bounds
-            base = Path(__file__).parent.parent / "data"
+            base = Path(__file__).parent / "map_data"
             states = gpd.read_file(base / "ne_10m_admin_1_states_provinces.shp")
             
             # Find the state
@@ -625,7 +684,7 @@ class MapV2Cog(commands.Cog):
             # Send new message
             message = await channel.send(embed=embed)
             self.global_config['message_id'] = message.id
-            await self.storage.save_global_config(self.global_config)
+            await self._save_global_config()
             
         except Exception as e:
             self.log.error(f"Failed to update global overview: {e}")
@@ -668,7 +727,7 @@ class MapV2Cog(commands.Cog):
     
         # Check if coordinates are within the map region bounds
         region = self.maps[guild_id]['region']
-        data_path = Path(__file__).parent.parent / "data"
+        data_path = Path(__file__).parent / "map_data"
         bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
         if not (bounds[0][0] <= lat <= bounds[1][0] and bounds[0][1] <= lng <= bounds[1][1]):
             await interaction.followup.send(
@@ -684,20 +743,26 @@ class MapV2Cog(commands.Cog):
             old_location = self.maps[guild_id]['pins'][user_id].get('location', 'Unknown')  # Use original location
 
         # Add or update pin - store only the original location
-        self.maps[guild_id]['pins'][user_id] = {
+        # Get avatar hash if user has an avatar
+        avatar_hash = interaction.user.avatar.key if interaction.user.avatar else None
+        
+        pin_data = {
             'username': interaction.user.display_name,
             'location': location,  # Original user input
             'display_name': display_name,  # Geocoded display name for internal use
             'lat': lat,
             'lng': lng,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'avatar_hash': avatar_hash
         }
+        self.maps[guild_id]['pins'][user_id] = pin_data
 
         # Set cooldown for pin updates
         if is_update:
             self._set_user_cooldown(user_id)
 
-        await self._save_data(guild_id)
+        # Save pin to database
+        await self._save_pin(int(guild_id), int(user_id), pin_data)
     
         # Show rendering loading message
         rendering_embed = discord.Embed(
@@ -775,7 +840,7 @@ class MapV2Cog(commands.Cog):
     
         # Check if coordinates are within the map region bounds
         region = self.maps[guild_id]['region']
-        data_path = Path(__file__).parent.parent / "data"
+        data_path = Path(__file__).parent / "map_data"
         bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
         if not (bounds[0][0] <= lat <= bounds[1][0] and bounds[0][1] <= lng <= bounds[1][1]):
             await interaction.followup.send(
@@ -791,19 +856,25 @@ class MapV2Cog(commands.Cog):
             old_location = self.maps[guild_id]['pins'][user_id].get('display_name', 'Unknown')
 
         # Update pin
-        self.maps[guild_id]['pins'][user_id] = {
+        # Get avatar hash if user has an avatar
+        avatar_hash = interaction.user.avatar.key if interaction.user.avatar else None
+        
+        pin_data = {
             'username': interaction.user.display_name,
             'location': location,
             'display_name': display_name,
             'lat': lat,
             'lng': lng,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'avatar_hash': avatar_hash
         }
+        self.maps[guild_id]['pins'][user_id] = pin_data
 
         # Set cooldown for updates
         self._set_user_cooldown(user_id)
 
-        await self._save_data(guild_id)
+        # Save pin to database
+        await self._save_pin(int(guild_id), int(user_id), pin_data)
     
         # Invalidate only final map cache, preserve base maps
         await self.storage.invalidate_final_map_cache_only(int(guild_id))
@@ -1056,12 +1127,13 @@ class MapV2Cog(commands.Cog):
                 # Remove the pin
                 old_location = self.maps[guild_id]['pins'][user_id].get('display_name', 'Unknown')
                 del self.maps[guild_id]['pins'][user_id]
-                
+
                 # Also remove from cooldown tracking
                 if user_id in self.pin_cooldowns:
                     del self.pin_cooldowns[user_id]
-                
-                await self._save_data(guild_id)
+
+                # Delete pin from database
+                await self._delete_pin(int(guild_id), int(user_id))
 
                 # Invalidate Cache and update map
                 await self._invalidate_map_cache(int(guild_id))

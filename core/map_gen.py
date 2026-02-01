@@ -248,7 +248,7 @@ class MapGenerator:
     def calculate_image_dimensions(self, region: str) -> Tuple[int, int]:
         """Calculate image dimensions based on region bounds."""
         # Use the new method that checks shapefile bounds first
-        data_path = self.data_dir.parent / "data"
+        data_path = Path(__file__).parent.parent / "cogs/map_data"
         bounds = self.map_config.get_region_bounds(region, data_path)
         (lat0, lon0), (lat1, lon1) = bounds
         
@@ -339,7 +339,7 @@ class MapGenerator:
             if progress_callback:
                 await progress_callback("Loading geographic data...", 15)
             
-            base_path = self.data_dir.parent / "data"
+            base_path = Path(__file__).parent.parent / "cogs/map_data"
             shapefiles = self.renderer.load_shapefiles(base_path, required_files)
             
             bbox = box(minx, miny, maxx, maxy)
@@ -441,14 +441,14 @@ class MapGenerator:
         """Render map for predefined regions with geographic scaling."""
         try:
             # Use the new method that checks shapefile bounds first
-            data_path = self.data_dir.parent / "data"
+            data_path = Path(__file__).parent.parent / "cogs/map_data"
             bounds = self.map_config.get_region_bounds(region, data_path)
             (lat0, lon0), (lat1, lon1) = bounds
             minx, miny, maxx, maxy = lon0, lat0, lon1, lat1
             
             if region == "germany":
                 try:
-                    base_path = self.data_dir.parent / "data"
+                    base_path = Path(__file__).parent.parent / "cogs/map_data"
                     world = gpd.read_file(base_path / "ne_10m_admin_0_countries.shp")
                     de = world[world["ADMIN"] == "Germany"].geometry.unary_union
                     if de is not None:

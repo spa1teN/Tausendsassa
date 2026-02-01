@@ -38,7 +38,7 @@ class HelpCog(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
-        self.commands_file_path = "commands.md"
+        self.commands_file_path = "resources/commands.md"
         
     @app_commands.command(name="help", description="Display available bot commands")
     async def help_command(self, interaction: discord.Interaction):

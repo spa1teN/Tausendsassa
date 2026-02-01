@@ -7,6 +7,8 @@ import aiohttp
 import asyncio
 from datetime import datetime
 import traceback
+import socket
+import time
 from typing import Dict, Optional
 
 import discord
@@ -15,6 +17,7 @@ from core.config import config
 from core.cache_manager import cache_manager
 from core.http_client import http_client
 from core.validation import run_full_validation, log_validation_results
+from db import get_db, DatabaseManager
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -176,20 +179,23 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-COGS = ["cogs.feeds", "cogs.map", "cogs.monitor", "cogs.server_monitor", "cogs.moderation", "cogs.whenistrumpgone", "cogs.help", "cogs.backup", "cogs.calendar"]
+COGS = ["cogs.feeds", "cogs.map", "cogs.monitor", "cogs.server_monitor", "cogs.moderation", "cogs.whenistrumpgone", "cogs.help", "cogs.calendar"]
 
 # ─── Enhanced Bot-Klasse ────────────────────────────────────────────────────
 class Tausendsassa(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
-        
+
         # Webhook configuration
         self.webhook_url = config.log_webhook_url
         self.webhook_handler = None
         self.cog_loggers: Dict[str, logging.Logger] = {}
 
         self.owner_id = config.owner_id
-        
+
+        # Database connection (initialized in setup_hook)
+        self.db: Optional[DatabaseManager] = None
+
         # Setup webhook logging if URL is provided
         if self.webhook_url:
             self.setup_webhook_logging()
@@ -247,18 +253,27 @@ class Tausendsassa(commands.Bot):
         return self.cog_loggers[logger_name]
 
     async def setup_hook(self):
+        # Initialize database connection
+        try:
+            self.db = await get_db()
+            log.info("✅ Database connection established")
+        except Exception as e:
+            log.error(f"❌ Failed to connect to database: {e}")
+            log.warning("⚠️ Bot will continue without database - some features may not work")
+            self.db = None
+
         # Start cache management
         await cache_manager.start_cleanup_task()
         log.info("✅ Cache manager started")
-        
+
         # Start webhook worker if handler exists
         if self.webhook_handler:
             await self.webhook_handler.start_webhook_worker()
             log.info("✅ Webhook logger started")
-        
+
         # Create logs directory for cog-specific logs
         os.makedirs("logs", exist_ok=True)
-        
+
         # Load extensions
         for ext in COGS:
             try:
@@ -279,7 +294,39 @@ class Tausendsassa(commands.Bot):
         await self.change_presence(status=status, activity=activity)
         log.info(f"🤖 Logged in as {self.user} (ID: {self.user.id})")
         log.info(f"📊 Connected to {len(self.guilds)} guild(s)")
+
+        # Update guild info in database
+        if self.db and self.db.is_connected:
+            for guild in self.guilds:
+                try:
+                    # guild.icon is an Asset with a .key attribute containing the hash
+                    icon_hash = guild.icon.key if guild.icon else None
+                    await self.db.guilds.ensure_exists(guild.id, guild.name, icon_hash, guild.member_count)
+                except Exception as e:
+                    log.warning(f"Failed to update guild {guild.id}: {e}")
+            log.info("✅ Guild info synced to database")
+
         print("------")
+
+    async def on_guild_join(self, guild: discord.Guild):
+        """Called when the bot joins a new guild."""
+        log.info(f"📥 Joined guild: {guild.name} (ID: {guild.id})")
+        if self.db and self.db.is_connected:
+            try:
+                icon_hash = guild.icon.key if guild.icon else None
+                await self.db.guilds.ensure_exists(guild.id, guild.name, icon_hash, guild.member_count)
+            except Exception as e:
+                log.warning(f"Failed to save guild {guild.id}: {e}")
+
+    async def on_guild_update(self, before: discord.Guild, after: discord.Guild):
+        """Called when a guild is updated (e.g., name change)."""
+        if before.name != after.name:
+            log.info(f"📝 Guild renamed: {before.name} -> {after.name}")
+            if self.db and self.db.is_connected:
+                try:
+                    await self.db.guilds.update_name(after.id, after.name)
+                except Exception as e:
+                    log.warning(f"Failed to update guild name {after.id}: {e}")
     
     async def on_command_error(self, ctx, error):
         """Handle command errors and log them"""
@@ -299,25 +346,70 @@ class Tausendsassa(commands.Bot):
     async def close(self):
         """Cleanup when bot is shutting down"""
         log.info("🔄 Bot is shutting down...")
-        
+
+        # IMPORTANT: First unload all cogs to cancel their background tasks
+        # This must happen BEFORE closing the database, otherwise tasks
+        # will try to use a closed database connection
+        for ext in list(self.extensions.keys()):
+            try:
+                await self.unload_extension(ext)
+                log.info(f"✅ Unloaded extension {ext}")
+            except Exception as e:
+                log.warning(f"⚠️ Error unloading {ext}: {e}")
+
+        # Now close database connection (after all tasks are cancelled)
+        if self.db:
+            await self.db.close()
+            log.info("✅ Database connection closed")
+
         # Stop cache manager
         await cache_manager.stop_cleanup_task()
         log.info("✅ Cache manager stopped")
-        
+
         # Stop HTTP client
         await http_client.close()
         log.info("✅ HTTP client closed")
-        
+
         # Stop webhook handler
         if self.webhook_handler:
             await self.webhook_handler.stop_webhook_worker()
             log.info("✅ Webhook logger stopped")
-        
+
         await super().close()
+
+
+# ─── DNS Wait Function ──────────────────────────────────────────────────────
+def wait_for_dns(host: str = "discord.com", max_wait: int = 120, interval: int = 5) -> bool:
+    """Wait for DNS to be available by trying to resolve a host.
+    
+    This is useful when running as a systemd service at boot time,
+    as DNS may not be immediately available (especially with local DNS like PiHole).
+    """
+    start_time = time.time()
+    attempt = 0
+    
+    while time.time() - start_time < max_wait:
+        attempt += 1
+        try:
+            socket.gethostbyname(host)
+            if attempt > 1:
+                log.info(f"✅ DNS ready after {attempt} attempts ({int(time.time() - start_time)}s)")
+            return True
+        except socket.gaierror:
+            log.warning(f"⏳ Waiting for DNS... (attempt {attempt}, {host} not resolvable)")
+            time.sleep(interval)
+    
+    log.error(f"❌ DNS not available after {max_wait}s")
+    return False
 
 # ─── Main ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     try:
+        # Wait for DNS to be ready (important for boot-time startup)
+        if not wait_for_dns():
+            log.error("❌ Cannot start bot without DNS. Exiting.")
+            exit(1)
+        
         # Run comprehensive validation before starting
         log.info("🔍 Running configuration validation...")
         validation_results = run_full_validation()

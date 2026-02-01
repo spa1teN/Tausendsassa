@@ -277,12 +277,12 @@ def run_full_validation() -> Dict[str, Any]:
         add_result(valid, f"Authorized Users: {msg}")
     
     # Directory validation
-    for dir_name in ["logs", "config", "data"]:
+    for dir_name in ["logs", "cogs/map_data"]:
         valid, msg = ConfigValidator.validate_directory_permissions(dir_name)
         add_result(valid, f"Directory {dir_name}: {msg}")
     
     # Geospatial data validation
-    data_dir = Path("data")
+    data_dir = Path("cogs/map_data")
     valid, msg = SystemValidator.validate_geospatial_data(data_dir)
     add_result(valid, f"Geospatial Data: {msg}")
     

@@ -391,7 +391,7 @@ class MapConfig:
         """Get country bounds from shapefile data with padding."""
         try:
             if data_path is None:
-                data_path = Path(__file__).parent.parent / "data"
+                data_path = Path(__file__).parent.parent / "cogs/map_data"
             
             # Skip if no mapping available
             if country_key not in self.COUNTRY_NAME_MAPPING:

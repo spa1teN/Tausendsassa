@@ -218,7 +218,7 @@ class CacheManager:
     def __init__(self):
         self.memory_cache = LRUCache(config.max_memory_cache_items)
         self.file_cache = ManagedFileCache(
-            Path("data/cache"), 
+            Path("cogs/map_data/cache"), 
             config.max_cache_size_mb
         )
         

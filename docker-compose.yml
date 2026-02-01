@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: tausendsassa-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-tausendsassa}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Database password required}
+      POSTGRES_DB: ${DB_NAME:-tausendsassa}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-tausendsassa} -d ${DB_NAME:-tausendsassa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - tausendsassa-network
+    ports:
+      - "5432:5432"  # Expose for local development, remove in production
+
+  # Discord Bot
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tausendsassa-bot
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Discord Configuration
+      - DISCORD_TOKEN=${DISCORD_TOKEN:?Discord token required}
+      - BOT_OWNER_ID=${BOT_OWNER_ID:-485051896655249419}
+      - GUILD_ID=${GUILD_ID}
+      # Database Configuration
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-tausendsassa}
+      - DB_USER=${DB_USER:-tausendsassa}
+      - DB_PASSWORD=${DB_PASSWORD:?Database password required}
+      # Logging
+      - LOG_WEBHOOK_URL=${LOG_WEBHOOK_URL}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - BACKUP_WEBHOOK_URL=${BACKUP_WEBHOOK_URL}
+      # RSS Configuration
+      - RSS_POLL_INTERVAL_MINUTES=${RSS_POLL_INTERVAL_MINUTES:-1.0}
+      - RSS_MAX_POST_AGE_SECONDS=${RSS_MAX_POST_AGE_SECONDS:-86400}
+      - RSS_RATE_LIMIT_SECONDS=${RSS_RATE_LIMIT_SECONDS:-30}
+      - RSS_FAILURE_THRESHOLD=${RSS_FAILURE_THRESHOLD:-3}
+      - RSS_MAX_RETRIES=${RSS_MAX_RETRIES:-3}
+      - RSS_BASE_RETRY_DELAY=${RSS_BASE_RETRY_DELAY:-2.0}
+      - AUTHORIZED_USERS=${AUTHORIZED_USERS}
+      - GLOBAL_MONITOR_CHANNEL_ID=${GLOBAL_MONITOR_CHANNEL_ID}
+      # Map Configuration
+      - MAP_PIN_COOLDOWN_MINUTES=${MAP_PIN_COOLDOWN_MINUTES:-30}
+      # Cache Configuration
+      - MAX_CACHE_SIZE_MB=${MAX_CACHE_SIZE_MB:-100}
+      - MAX_MEMORY_CACHE_ITEMS=${MAX_MEMORY_CACHE_ITEMS:-50}
+      # HTTP Configuration
+      - HTTP_TIMEOUT=${HTTP_TIMEOUT:-30}
+      - MAX_HTTP_CONNECTIONS=${MAX_HTTP_CONNECTIONS:-100}
+      - MAX_HTTP_CONNECTIONS_PER_HOST=${MAX_HTTP_CONNECTIONS_PER_HOST:-10}
+      # Monitor Configuration
+      - MONITOR_AUTHORIZED_ROLES=${MONITOR_AUTHORIZED_ROLES}
+      - SYSTEM_METRICS_INTERVAL=${SYSTEM_METRICS_INTERVAL:-60}
+      - MONITOR_UPDATE_INTERVAL=${MONITOR_UPDATE_INTERVAL:-300}
+    volumes:
+      - ./data:/app/data:ro           # Natural Earth shapefiles (read-only)
+      - ./logs:/app/logs              # Log files
+      - map_cache:/app/data/map_cache # Map cache (persistent)
+      - ./pb.png:/app/pb.png:ro       # Profile picture for webhooks
+    networks:
+      - tausendsassa-network
+
+  # Database Browser (read-only web interface)
+  db-browser:
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+    container_name: tausendsassa-db-browser
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-tausendsassa}
+      - DB_USER=${DB_USER:-tausendsassa}
+      - DB_PASSWORD=${DB_PASSWORD:?Database password required}
+    ports:
+      - "8080:8080"
+    networks:
+      - tausendsassa-network
+
+volumes:
+  postgres_data:
+    name: tausendsassa-postgres-data
+  map_cache:
+    name: tausendsassa-map-cache
+
+networks:
+  tausendsassa-network:
+    name: tausendsassa-network
+    driver: bridge

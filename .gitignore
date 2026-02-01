@@ -1,10 +1,31 @@
+# Virtual environment
 .venv/
-backups/
-*/__pycache__/
-config/
-data/
-logs/
-CLAUDE.md
-.env
+
+# Backups
+.backups/
 .backup/
+
+# Python cache
+*/__pycache__/
+*.pyc
+
+# Runtime directories
+logs/
+cogs/map_data/
+cogs/map_data/
+!cogs/map_data/ne*
+
+# Environment and secrets
+.env
+
+# Editor files
 *~
+*.swp
+
+# Claude notes
+CLAUDE.md
+
+# OS files
+.DS_Store
+# Avatar cache (Discord CDN proxy)
+cogs/map_data/avatar_cache/

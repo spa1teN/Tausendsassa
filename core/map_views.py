@@ -964,7 +964,8 @@ class UserPinOptionsView(discord.ui.View):
 
         old_location = self.cog.maps[guild_id]['pins'][user_id].get('location', 'Unknown')  # Use original location
         del self.cog.maps[guild_id]['pins'][user_id]
-        await self.cog._save_data(guild_id)
+        # Delete pin from database
+        await self.cog._delete_pin(int(guild_id), int(user_id))
         
         # OPTIMIZATION: Only Final Map Cache invalidieren, Base Map beibehalten
         await self.cog.storage.invalidate_final_map_cache_only(int(guild_id))

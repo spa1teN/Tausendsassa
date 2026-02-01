@@ -116,7 +116,33 @@ class BotConfig:
     @property
     def monitor_update_interval(self) -> int:
         return int(os.getenv("MONITOR_UPDATE_INTERVAL", "300"))
-    
+
+    # Database Configuration
+    @property
+    def db_host(self) -> str:
+        return os.getenv("DB_HOST", "localhost")
+
+    @property
+    def db_port(self) -> int:
+        return int(os.getenv("DB_PORT", "5432"))
+
+    @property
+    def db_name(self) -> str:
+        return os.getenv("DB_NAME", "tausendsassa")
+
+    @property
+    def db_user(self) -> str:
+        return os.getenv("DB_USER", "tausendsassa")
+
+    @property
+    def db_password(self) -> str:
+        return os.getenv("DB_PASSWORD", "")
+
+    @property
+    def db_url(self) -> str:
+        """Get full database URL for connection."""
+        return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+
     def _validate_required_env_vars(self):
         """Validate that required environment variables are set"""
         required_vars = ["DISCORD_TOKEN"]
@@ -145,6 +171,7 @@ class BotConfig:
         log.info(f"  HTTP Timeout: {self.http_timeout} seconds")
         log.info(f"  Authorized Users: {len(self.authorized_users)} users")
         log.info(f"  Webhook Logging: {'Enabled' if self.log_webhook_url else 'Disabled'}")
+        log.info(f"  Database: {self.db_host}:{self.db_port}/{self.db_name}")
 
 # Global configuration instance
 config = BotConfig()

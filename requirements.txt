@@ -92,3 +92,9 @@ webencodings==0.5.1
 x_wr_timezone==2.0.1
 yarg==0.1.9
 yarl==1.20.1
+asyncpg==0.31.0
+
+# Web Interface
+fastapi>=0.109.0
+uvicorn>=0.27.0
+httpx>=0.27.0

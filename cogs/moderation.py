@@ -1,10 +1,8 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import json
-import os
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Dict, Any
 import aiohttp
 import asyncio
 
@@ -14,70 +12,71 @@ from core.timezone_util import get_current_time, get_current_timestamp, save_gui
 class ModerationCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config_file = "config/moderation_config.json"
-        self.config = self.load_config()
         self.member_join_times = {}  # Store join times for leave duration calculation
         self.recently_banned_kicked = set()  # Track recently banned/kicked users
+        self._config_cache: Dict[int, Dict[str, Any]] = {}  # In-memory cache for config
 
-    def load_config(self) -> dict:
-        """Load configuration from JSON file"""
-        # Ensure config directory exists
-        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
-        
-        if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError):
-                return {}
+    async def get_guild_config(self, guild_id: int) -> dict:
+        """Get configuration for specific guild from database"""
+        # Check cache first
+        if guild_id in self._config_cache:
+            return self._config_cache[guild_id]
+
+        if self.bot.db:
+            config = await self.bot.db.moderation.get_guild_config(guild_id)
+            self._config_cache[guild_id] = config
+            return config
         return {}
 
-    def save_config(self):
-        """Save configuration to JSON file"""
-        try:
-            # Ensure config directory exists
-            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
-        except IOError:
-            pass  # Fail silently if unable to save
+    async def set_guild_config(self, guild_id: int, key: str, value):
+        """Set configuration value for specific guild in database"""
+        if self.bot.db:
+            await self.bot.db.moderation.save_guild_config(guild_id, key, value)
+            # Update cache
+            if guild_id not in self._config_cache:
+                self._config_cache[guild_id] = {}
+            self._config_cache[guild_id][key] = value
 
-    def get_guild_config(self, guild_id: int) -> dict:
-        """Get configuration for specific guild"""
-        return self.config.get(str(guild_id), {})
+    async def clear_guild_config_key(self, guild_id: int, key: str):
+        """Clear a specific config key for a guild"""
+        if self.bot.db:
+            if key == 'member_log_webhook':
+                await self.bot.db.moderation.clear_webhook(guild_id)
+            elif key == 'join_role':
+                await self.bot.db.moderation.clear_join_role(guild_id)
+            # Update cache
+            if guild_id in self._config_cache and key in self._config_cache[guild_id]:
+                del self._config_cache[guild_id][key]
 
-    def set_guild_config(self, guild_id: int, key: str, value):
-        """Set configuration value for specific guild"""
-        guild_str = str(guild_id)
-        if guild_str not in self.config:
-            self.config[guild_str] = {}
-        self.config[guild_str][key] = value
-        self.save_config()
+    def invalidate_cache(self, guild_id: int):
+        """Invalidate the cache for a guild"""
+        if guild_id in self._config_cache:
+            del self._config_cache[guild_id]
 
-    def create_dashboard_embed(self, guild_id: int) -> discord.Embed:
+    async def create_dashboard_embed(self, guild_id: int) -> discord.Embed:
         """Create embed for moderation dashboard"""
-        config = self.get_guild_config(guild_id)
-        
+        config = await self.get_guild_config(guild_id)
+
         embed = discord.Embed(
-            title="🛡️ Moderation Dashboard",
+            title="Moderation Dashboard",
             color=0x5865f2
         )
-        
+
         # Member logging configuration
         webhook_url = config.get('member_log_webhook')
         if webhook_url:
             embed.add_field(
-                name="📋 Member Logging",
-                value="✅ **Enabled**\nLogging joins, leaves, bans, kicks, and timeouts",
+                name="Member Logging",
+                value="**Enabled**\nLogging joins, leaves, bans, kicks, and timeouts",
                 inline=False
             )
         else:
             embed.add_field(
-                name="📋 Member Logging",
-                value="❌ **Disabled**\nClick 'Setup Member Log' to enable",
+                name="Member Logging",
+                value="**Disabled**\nClick 'Setup Member Log' to enable",
                 inline=False
             )
-        
+
         # Join role configuration
         join_role_id = config.get('join_role')
         if join_role_id:
@@ -88,21 +87,21 @@ class ModerationCog(commands.Cog):
                 role_mention = role.mention if role else f"Role not found (ID: {join_role_id})"
             else:
                 role_mention = f"Role ID: {join_role_id}"
-            
+
             embed.add_field(
-                name="👤 Auto Join Role",
-                value=f"✅ **Enabled**\nAssigning role: {role_mention}",
+                name="Auto Join Role",
+                value=f"**Enabled**\nAssigning role: {role_mention}",
                 inline=False
             )
         else:
             embed.add_field(
-                name="👤 Auto Join Role",
-                value="❌ **Disabled**\nClick 'Setup Join Role' to enable",
+                name="Auto Join Role",
+                value="**Disabled**\nClick 'Setup Join Role' to enable",
                 inline=False
             )
-        
+
         embed.set_footer(text=f"Guild ID: {guild_id}")
-        
+
         return embed
 
     def create_join_embed(self, member: discord.Member, role_assigned=None, role_name=None) -> discord.Embed:
@@ -112,7 +111,7 @@ class ModerationCog(commands.Cog):
             color=0x00ff00  # Green for joins
         )
         embed.set_thumbnail(url=member.display_avatar.url)
-        
+
         # Calculate account age
         account_age = datetime.now(timezone.utc) - member.created_at
         days = account_age.days
@@ -122,22 +121,16 @@ class ModerationCog(commands.Cog):
             age_str = "1 day"
         else:
             age_str = f"{days} days"
-        
+
         embed.add_field(name="Account Age", value=age_str, inline=True)
-        
+
         # Add role assignment status if join role is configured
         if role_assigned is not None:
             if role_assigned:
-                # Get role ID from the member's guild to use proper mention format
-                config = self.get_guild_config(member.guild.id)
-                role_id = config.get('join_role')
-                if role_id:
-                    embed.add_field(name="Auto Role", value=f"<@&{role_id}>", inline=True)
-                else:
-                    embed.add_field(name="Auto Role", value=f"Assigned: @{role_name}", inline=True)
+                embed.add_field(name="Auto Role", value=f"Assigned: @{role_name}", inline=True)
             else:
-                embed.add_field(name="Auto Role", value="❌ Failed to assign", inline=True)
-        
+                embed.add_field(name="Auto Role", value="Failed to assign", inline=True)
+
         return embed
 
     def create_leave_embed(self, member: discord.Member, duration: Optional[str] = None) -> discord.Embed:
@@ -147,11 +140,10 @@ class ModerationCog(commands.Cog):
             color=0xff0000  # Red for leaves
         )
         embed.set_thumbnail(url=member.display_avatar.url)
-        
+
         if duration:
             embed.add_field(name="Time on Server", value=duration, inline=True)
-        
-        
+
         return embed
 
     def create_ban_embed(self, user: discord.User, moderator: Optional[discord.Member], reason: Optional[str], guild: discord.Guild) -> discord.Embed:
@@ -161,14 +153,13 @@ class ModerationCog(commands.Cog):
             color=0x8b0000  # Dark red for bans
         )
         embed.set_thumbnail(url=user.display_avatar.url)
-        
+
         if moderator:
             embed.add_field(name="Banned by", value=f"<@{moderator.id}>", inline=True)
-        
+
         if reason:
             embed.add_field(name="Reason", value=reason, inline=True)
-        
-        
+
         return embed
 
     def create_kick_embed(self, user: discord.User, moderator: Optional[discord.Member], reason: Optional[str], guild: discord.Guild) -> discord.Embed:
@@ -178,14 +169,12 @@ class ModerationCog(commands.Cog):
             color=0xff4500  # Orange red for kicks
         )
         embed.set_thumbnail(url=user.display_avatar.url)
-        
+
         if moderator:
             embed.add_field(name="Kicked by", value=f"<@{moderator.id}>", inline=True)
         if reason:
             embed.add_field(name="Reason", value=reason, inline=True)
-        
-        
-        
+
         return embed
 
     def create_timeout_embed(self, member: discord.Member, duration: str, moderator: Optional[discord.Member], reason: Optional[str]) -> discord.Embed:
@@ -195,14 +184,13 @@ class ModerationCog(commands.Cog):
             color=0xffa500  # Orange for timeouts
         )
         embed.set_thumbnail(url=member.display_avatar.url)
-        
+
         embed.add_field(name="Duration", value=duration, inline=True)
         if moderator:
             embed.add_field(name="Timed out by", value=f"<@{moderator.id}>", inline=True)
         if reason:
             embed.add_field(name="Reason", value=reason, inline=False)
-        
-        
+
         return embed
 
     def create_unban_embed(self, user: discord.User, moderator: Optional[discord.Member], guild: discord.Guild) -> discord.Embed:
@@ -212,12 +200,10 @@ class ModerationCog(commands.Cog):
             color=0x90ee90  # Light green for unbans
         )
         embed.set_thumbnail(url=user.display_avatar.url)
-        
+
         if moderator:
             embed.add_field(name="Unbanned by", value=f"<@{moderator.id}>", inline=True)
-        
-        
-        
+
         return embed
 
     def calculate_duration(self, start_time: datetime) -> str:
@@ -226,7 +212,7 @@ class ModerationCog(commands.Cog):
         days = duration.days
         hours, remainder = divmod(duration.seconds, 3600)
         minutes, _ = divmod(remainder, 60)
-        
+
         parts = []
         if days > 0:
             parts.append(f"{days} day{'s' if days != 1 else ''}")
@@ -234,17 +220,17 @@ class ModerationCog(commands.Cog):
             parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
         if minutes > 0:
             parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
-        
+
         if not parts:
             return "Less than 1 minute"
-        
+
         return ", ".join(parts)
 
     async def send_log_message(self, guild_id: int, embed: discord.Embed):
         """Send log message to configured webhook"""
-        config = self.get_guild_config(guild_id)
+        config = await self.get_guild_config(guild_id)
         webhook_url = config.get('member_log_webhook')
-        
+
         if webhook_url:
             try:
                 # Create a new aiohttp session for webhook requests
@@ -274,7 +260,7 @@ class ModerationCog(commands.Cog):
                     if time_diff.total_seconds() < 10:
                         # Add to banned/kicked set and send kick embed
                         self.recently_banned_kicked.add(user_id)
-                        
+
                         embed = self.create_kick_embed(entry.target, entry.user, entry.reason, guild)
                         await self.send_log_message(guild.id, embed)
                         return True
@@ -287,14 +273,14 @@ class ModerationCog(commands.Cog):
         """Handle member join events"""
         # Store join time for duration calculation
         self.member_join_times[member.id] = datetime.now(timezone.utc)
-        
+
         # Auto-assign role if configured
-        config = self.get_guild_config(member.guild.id)
+        config = await self.get_guild_config(member.guild.id)
         join_role_id = config.get('join_role')
-        
+
         role_assigned = None
         role_name = None
-        
+
         if join_role_id:
             role = member.guild.get_role(join_role_id)
             if role:
@@ -306,8 +292,8 @@ class ModerationCog(commands.Cog):
                     role_assigned = False  # Bot doesn't have permission
             else:
                 role_assigned = False  # Role not found
-        
-        # Send log message with role assignment status (removed role_id parameter)
+
+        # Send log message with role assignment status
         embed = self.create_join_embed(member, role_assigned=role_assigned, role_name=role_name)
         await self.send_log_message(member.guild.id, embed)
 
@@ -318,18 +304,18 @@ class ModerationCog(commands.Cog):
         if member.id in self.recently_banned_kicked:
             self.recently_banned_kicked.discard(member.id)  # Remove from set
             return
-        
+
         # Check for recent kick in audit logs
         if await self.check_for_kick(member.guild, member.id):
             return
-        
+
         # Calculate duration on server
         duration = None
         if member.id in self.member_join_times:
             join_time = self.member_join_times[member.id]
             duration = self.calculate_duration(join_time)
             del self.member_join_times[member.id]
-        
+
         # Send log message
         embed = self.create_leave_embed(member, duration)
         await self.send_log_message(member.guild.id, embed)
@@ -339,14 +325,14 @@ class ModerationCog(commands.Cog):
         """Handle member ban events"""
         # Add user to recently banned set to prevent leave message
         self.recently_banned_kicked.add(user.id)
-        
+
         # Get ban information
         try:
             ban = await guild.fetch_ban(user)
             reason = ban.reason
         except discord.NotFound:
             reason = None
-        
+
         # Try to get moderator from audit log
         moderator = None
         try:
@@ -356,7 +342,7 @@ class ModerationCog(commands.Cog):
                     break
         except discord.Forbidden:
             pass
-        
+
         embed = self.create_ban_embed(user, moderator, reason, guild)
         await self.send_log_message(guild.id, embed)
 
@@ -372,7 +358,7 @@ class ModerationCog(commands.Cog):
                     break
         except discord.Forbidden:
             pass
-        
+
         embed = self.create_unban_embed(user, moderator, guild)
         await self.send_log_message(guild.id, embed)
 
@@ -393,11 +379,11 @@ class ModerationCog(commands.Cog):
                             break
                 except discord.Forbidden:
                     pass
-                
+
                 # Calculate timeout duration
                 duration_delta = after.timed_out_until - datetime.now(timezone.utc)
                 duration = self.calculate_duration(datetime.now(timezone.utc) - duration_delta)
-                
+
                 embed = self.create_timeout_embed(after, duration, moderator, reason)
                 await self.send_log_message(after.guild.id, embed)
 
@@ -407,11 +393,11 @@ class ModerationCog(commands.Cog):
         """Display moderation dashboard with interactive buttons"""
         # Import here to avoid circular imports
         from core.mod_views import ModerationDashboardView
-        
-        embed = self.create_dashboard_embed(interaction.guild.id)
+
+        embed = await self.create_dashboard_embed(interaction.guild.id)
         view = ModerationDashboardView(self)
-        view.update_buttons(interaction.guild.id)
-        
+        await view.update_buttons(interaction.guild.id)
+
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="clear", description="Delete a specified number of messages from the current channel")
@@ -420,45 +406,45 @@ class ModerationCog(commands.Cog):
     async def clear_messages(self, interaction: discord.Interaction, amount: int):
         """Clear specified number of messages from channel"""
         if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ You need `Manage Messages` permission to use this command.", ephemeral=True)
+            await interaction.response.send_message("You need `Manage Messages` permission to use this command.", ephemeral=True)
             return
-        
+
         if not interaction.guild.me.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ I don't have permission to delete messages in this channel.", ephemeral=True)
+            await interaction.response.send_message("I don't have permission to delete messages in this channel.", ephemeral=True)
             return
-        
+
         if amount < 1 or amount > 100:
-            await interaction.response.send_message("❌ Amount must be between 1 and 100.", ephemeral=True)
+            await interaction.response.send_message("Amount must be between 1 and 100.", ephemeral=True)
             return
-        
+
         # Defer the response since message deletion might take time
         await interaction.response.defer(ephemeral=True)
-        
+
         try:
             # Get the channel where command was used
             channel = interaction.channel
-            
+
             # Delete messages (Discord API limit is 100 messages at once)
             deleted = await channel.purge(limit=amount)
             deleted_count = len(deleted)
-            
+
             # Create success embed
             embed = discord.Embed(
-                title="🧹 Messages Cleared",
+                title="Messages Cleared",
                 description=f"Successfully deleted {deleted_count} message{'s' if deleted_count != 1 else ''} from {channel.mention}",
                 color=0x00ff00
             )
             embed.set_footer(text=f"Cleared by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
-            
+
             await interaction.followup.send(embed=embed, ephemeral=True)
-            
+
         except discord.Forbidden:
-            await interaction.followup.send("❌ I don't have permission to delete messages in this channel.", ephemeral=True)
+            await interaction.followup.send("I don't have permission to delete messages in this channel.", ephemeral=True)
         except discord.HTTPException as e:
             if e.code == 50034:  # You can only bulk delete messages that are under 14 days old
-                await interaction.followup.send("❌ Cannot delete messages older than 14 days. Try with a smaller number.", ephemeral=True)
+                await interaction.followup.send("Cannot delete messages older than 14 days. Try with a smaller number.", ephemeral=True)
             else:
-                await interaction.followup.send("❌ An error occurred while deleting messages.", ephemeral=True)
+                await interaction.followup.send("An error occurred while deleting messages.", ephemeral=True)
 
 
 async def setup(bot):
