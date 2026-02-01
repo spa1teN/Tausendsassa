@@ -705,7 +705,8 @@ async def home() -> HTMLResponse:
       <div class="stat-card">
         <h3>Posted Entries</h3>
         <div class="value">{stats['posted_entries']:,}</div>
-      </div>
+        <div class="sub">last 7 days</div>
+    </div>
       <div class="stat-card">
         <h3>Calendars</h3>
         <div class="value">{stats['calendars']}</div>
