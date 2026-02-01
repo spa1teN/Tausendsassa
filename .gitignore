@@ -14,6 +14,7 @@ logs/
 cogs/map_data/
 cogs/map_data/
 !cogs/map_data/ne*
+db/connect_to_db.sh
 
 # Environment and secrets
 .env
@@ -27,5 +28,6 @@ CLAUDE.md
 
 # OS files
 .DS_Store
+
 # Avatar cache (Discord CDN proxy)
 cogs/map_data/avatar_cache/

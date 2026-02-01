@@ -52,6 +52,47 @@ BASE_PATH = Path(__file__).parent
 # Favicon as base64 (will be loaded on startup)
 FAVICON_B64: Optional[str] = None
 
+# Discord Bot Token for API calls
+DISCORD_TOKEN: Optional[str] = os.getenv("DISCORD_TOKEN")
+
+# Cache for Discord attachment URLs (message_id -> url)
+_attachment_url_cache: Dict[int, str] = {}
+
+
+async def get_discord_attachment_url(channel_id: int, message_id: int) -> Optional[str]:
+    """Fetch the first attachment URL from a Discord message via REST API."""
+    if not DISCORD_TOKEN:
+        return None
+
+    # Check cache first
+    if message_id in _attachment_url_cache:
+        return _attachment_url_cache[message_id]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}",
+                headers={
+                    "Authorization": f"Bot {DISCORD_TOKEN}",
+                    "User-Agent": "TausendsassaDBBrowser/1.0",
+                },
+                timeout=10.0,
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                attachments = data.get("attachments", [])
+                if attachments:
+                    url = attachments[0].get("url")
+                    if url:
+                        # Cache the URL
+                        _attachment_url_cache[message_id] = url
+                        return url
+    except Exception:
+        pass
+
+    return None
+
 
 async def get_pool() -> asyncpg.Pool:
     global pool
@@ -71,7 +112,7 @@ async def get_pool() -> asyncpg.Pool:
 def load_favicon():
     """Load favicon as base64."""
     global FAVICON_B64
-    favicon_path = BASE_PATH / "favicon.png"
+    favicon_path = BASE_PATH / "resources"  / "favicon.png"
     if favicon_path.exists():
         with open(favicon_path, "rb") as f:
             FAVICON_B64 = base64.b64encode(f.read()).decode()
@@ -210,16 +251,23 @@ def find_map_file(guild_id: int, region: str = None) -> Optional[tuple[str, str]
     return None
 
 
-def get_map_preview_html(guild_id: int, map_settings) -> str:
-    """Generate HTML for map preview in guild detail."""
+def get_map_preview_html(guild_id: int, map_settings, discord_attachment_url: Optional[str] = None) -> str:
+    """Generate HTML for map preview in guild detail.
+
+    Priority: Discord attachment URL > local file > Discord link
+    """
+    # First choice: Discord attachment URL (always up-to-date)
+    if discord_attachment_url:
+        return f'<img src="{html.escape(discord_attachment_url)}" class="map-preview" alt="Map Preview" style="max-width:400px;">'
+
+    # Fallback: local cached file
     region = map_settings.get("region") if map_settings else None
     map_info = find_map_file(guild_id, region)
-
     if map_info:
         url_path, _ = map_info
         return f'<img src="{url_path}" class="map-preview" alt="Map Preview" style="max-width:400px;">'
 
-    # Fallback to Discord link
+    # Final fallback: Discord link
     if map_settings and map_settings.get("channel_id") and map_settings.get("message_id"):
         discord_link = f"https://discord.com/channels/{guild_id}/{map_settings['channel_id']}/{map_settings['message_id']}"
         return f'<p><a href="{discord_link}" target="_blank">View Map Image in Discord</a></p>'
@@ -775,6 +823,13 @@ async def guild_detail(guild_id: int) -> HTMLResponse:
             "SELECT * FROM moderation_config WHERE guild_id = $1", guild_id
         )
 
+    # Try to get Discord attachment URL for map preview
+    discord_attachment_url = None
+    if map_settings and map_settings.get("channel_id") and map_settings.get("message_id"):
+        discord_attachment_url = await get_discord_attachment_url(
+            map_settings["channel_id"], map_settings["message_id"]
+        )
+
     # Feeds table
     feeds_rows = "".join(f"""
         <tr>
@@ -835,7 +890,7 @@ async def guild_detail(guild_id: int) -> HTMLResponse:
         {f'''
         <h3>Map</h3>
         <p><a href="/maps/{guild_id}" class="btn">View Map Details</a></p>
-        {get_map_preview_html(guild_id, map_settings)}
+        {get_map_preview_html(guild_id, map_settings, discord_attachment_url)}
         <details>
             <summary>Map Settings JSON</summary>
             <pre>{format_json(dict(map_settings) if map_settings else None)}</pre>
@@ -1193,19 +1248,29 @@ async def map_detail(guild_id: int) -> HTMLResponse:
         </tr>
     """ for p in pins) or '<tr><td colspan="6">Keine Pins.</td></tr>'
 
-    # Find map image using helper function
-    region = settings.get("region")
-    map_info = find_map_file(guild_id, region)
+    # Find map image - Discord first, local file as fallback
+    map_image_html = ""
 
-    if map_info:
-        url_path, _ = map_info
-        map_image_html = f'<img src="{url_path}" class="map-preview" alt="Map Preview">'
-    elif settings["channel_id"] and settings["message_id"]:
-        # Fallback to Discord message link
+    # First choice: Discord attachment URL (always up-to-date)
+    if settings["channel_id"] and settings["message_id"]:
+        discord_attachment_url = await get_discord_attachment_url(
+            settings["channel_id"], settings["message_id"]
+        )
+        if discord_attachment_url:
+            map_image_html = f'<img src="{html.escape(discord_attachment_url)}" class="map-preview" alt="Map Preview">'
+
+    # Fallback: local cached file
+    if not map_image_html:
+        region = settings.get("region")
+        map_info = find_map_file(guild_id, region)
+        if map_info:
+            url_path, _ = map_info
+            map_image_html = f'<img src="{url_path}" class="map-preview" alt="Map Preview">'
+
+    # Final fallback: Discord link
+    if not map_image_html and settings["channel_id"] and settings["message_id"]:
         discord_link = f"https://discord.com/channels/{guild_id}/{settings['channel_id']}/{settings['message_id']}"
         map_image_html = f'<p><a href="{discord_link}" target="_blank" class="btn">View Map in Discord</a></p>'
-    else:
-        map_image_html = ""
 
     guild_display = format_guild(settings['guild_id'], settings['guild_name'], settings['icon_hash'], link=False)
     body = f"""
