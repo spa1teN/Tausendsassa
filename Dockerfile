@@ -40,7 +40,7 @@ COPY cogs/ ./cogs/
 COPY db/ ./db/
 COPY scripts/ ./scripts/
 COPY resources/commands.md ./resources/
-COPY pb.png .
+#COPY pb.png .
 
 # Create necessary directories
 RUN mkdir -p /app/logs /app/data/map_cache /app/config
