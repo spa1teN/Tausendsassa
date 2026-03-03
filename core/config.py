@@ -20,6 +20,23 @@ class BotConfig:
     def guild_id(self) -> Optional[int]:
         guild_id = os.getenv("GUILD_ID")
         return int(guild_id) if guild_id else None
+
+    @property
+    def test_guild_id(self) -> Optional[int]:
+        """Guild ID of the designated test server for early feature rollout."""
+        guild_id = os.getenv("TEST_GUILD_ID")
+        return int(guild_id) if guild_id else None
+
+    @property
+    def webapp_url(self) -> Optional[str]:
+        """Base URL of the web panel, used to generate Explore button links."""
+        url = os.getenv("WEBAPP_URL", "")
+        return url.rstrip("/") if url else None
+
+    @property
+    def discord_client_id(self) -> Optional[str]:
+        """Discord application client ID, used for Activity launch URL."""
+        return os.getenv("DISCORD_CLIENT_ID") or None
     
     @property
     def owner_id(self) -> int:

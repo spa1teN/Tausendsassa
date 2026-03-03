@@ -23,8 +23,6 @@ db/connect_to_db.sh
 *~
 *.swp
 
-# Claude notes
-CLAUDE.md
 
 # OS files
 .DS_Store

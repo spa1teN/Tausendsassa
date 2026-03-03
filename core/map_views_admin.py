@@ -516,56 +516,6 @@ class PinSettingsPreviewView(discord.ui.View):
             await interaction.edit_original_response(content=None, embed=error_embed, attachments=[], view=None)
 
 
-class ProximitySettingsView(discord.ui.View):
-    """View for setting proximity search on/off."""
-    
-    def __init__(self, cog: 'MapV2Cog', guild_id: int):
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.guild_id = guild_id
-        
-        # Get current setting
-        map_data = self.cog.maps.get(str(guild_id), {})
-        current_setting = map_data.get('allow_proximity', True)
-        
-        # Set initial button styles
-        self.enable_button.style = discord.ButtonStyle.success if current_setting else discord.ButtonStyle.secondary
-        self.disable_button.style = discord.ButtonStyle.danger if not current_setting else discord.ButtonStyle.secondary
-
-    @discord.ui.button(label="Enable", style=discord.ButtonStyle.secondary, emoji="✅")
-    async def enable_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._set_proximity(interaction, True)
-
-    @discord.ui.button(label="Disable", style=discord.ButtonStyle.secondary, emoji="⛔")
-    async def disable_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._set_proximity(interaction, False)
-
-    async def _set_proximity(self, interaction: discord.Interaction, enabled: bool):
-        await interaction.response.defer()
-        
-        guild_id = str(self.guild_id)
-        if guild_id not in self.cog.maps:
-            await interaction.followup.send("⛔ No map exists for this server.", ephemeral=True)
-            return
-        
-        # Update setting
-        self.cog.maps[guild_id]['allow_proximity'] = enabled
-        await self.cog._save_data(guild_id)
-        
-        # Update button styles
-        self.enable_button.style = discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary
-        self.disable_button.style = discord.ButtonStyle.danger if not enabled else discord.ButtonStyle.secondary
-        
-        # Update the view
-        embed = discord.Embed(
-            title="🔍 Proximity Search Settings",
-            description=f"Proximity search is now **{'enabled' if enabled else 'disabled'}** for this server.",
-            color=0x00ff44 if enabled else 0xff4444
-        )
-        
-        await interaction.edit_original_response(content=None, embed=embed, attachments=[], view=self)
-
-
 class MapRemovalConfirmView(discord.ui.View):
     def __init__(self, cog: 'MapV2Cog', guild_id: int):
         super().__init__(timeout=60)
@@ -667,17 +617,6 @@ class AdminToolsView(discord.ui.View):
     async def customize_pins(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = PinSettingsModal(self.cog, self.guild_id, interaction)
         await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="Proximity Settings", style=discord.ButtonStyle.secondary, emoji="🔍", row=1)
-    async def proximity_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="🔍 Proximity Search Settings",
-            description="Enable or disable proximity search for this server.",
-            color=0x7289da
-        )
-        
-        view = ProximitySettingsView(self.cog, self.guild_id)
-        await interaction.response.edit_message(embed=embed, view=view)
 
     @discord.ui.button(label="Delete Map", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
     async def delete_map(self, interaction: discord.Interaction, button: discord.ui.Button):

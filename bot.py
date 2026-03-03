@@ -167,7 +167,7 @@ logging.basicConfig(
     datefmt=DATE_FORMAT,
     handlers=[
         logging.StreamHandler(),
-        TimedRotatingFileHandler("logs/tausendsassa.log", when="midnight", interval=1, backupCount=1, encoding="utf-8")
+        TimedRotatingFileHandler("logs/tausendsassa.log", when="midnight", interval=1, backupCount=30, encoding="utf-8")
     ]
 )
 
@@ -231,12 +231,12 @@ class Tausendsassa(commands.Bot):
                 console_handler.setFormatter(formatter)
                 logger.addHandler(console_handler)
                 
-                # File handler with 24-hour rotation
+                # File handler with daily rotation (30 days retention)
                 file_handler = TimedRotatingFileHandler(
-                    f"logs/{cog_name}.log", 
-                    when="midnight", 
-                    interval=1, 
-                    backupCount=1, 
+                    f"logs/{cog_name}.log",
+                    when="midnight",
+                    interval=1,
+                    backupCount=30,
                     encoding="utf-8"
                 )
                 file_handler.setLevel(logging.INFO)
@@ -282,8 +282,24 @@ class Tausendsassa(commands.Bot):
             except Exception as e:
                 log.exception(f"❌ Failed to load extension {ext}: {e}")
         
-        await self.tree.sync()
-        log.info("✅ All slash commands synced")
+        try:
+            await self.tree.sync()
+            log.info("✅ All slash commands synced globally")
+        except discord.HTTPException as e:
+            if e.code != 50240:
+                raise
+            # Discord Activity Entry Point command exists and cannot be removed via bulk sync.
+            # Fall back to guild-specific sync so commands are current in the test guild.
+            log.warning(
+                "⚠️ Global sync blocked by Activity Entry Point command (code 50240). "
+                "Global commands remain as-is; syncing to test guild as fallback."
+            )
+            test_guild_id = config.test_guild_id
+            if test_guild_id:
+                test_guild = discord.Object(id=test_guild_id)
+                self.tree.copy_global_to(guild=test_guild)
+                await self.tree.sync(guild=test_guild)
+                log.info(f"✅ Slash commands synced to test guild {test_guild_id}")
 
     async def on_ready(self):
         status = discord.Status.online

@@ -5,12 +5,13 @@ A powerful, modular Discord bot with RSS feed integration, interactive maps, cal
 ## Features
 
 - 🗞️ **RSS Feed Integration**: Monitor and post RSS/Atom feeds with customizable formatting
-- 🗺️ **Interactive Maps**: World, regional, and local maps with user location pins
+- 🗺️ **Interactive Maps**: Globe-view MapLibre map with user location pins, public URL per guild
 - 📅 **Calendar Integration**: iCal calendar management with Discord event automation
-- 🛡️ **Moderation Tools**: Server management capabilities
-- 📊 **System Monitoring**: Health checks and server overview
-- 🌐 **Web Interface**: Database browser for administration (port 8080)
-- 🐳 **Docker Support**: Container deployment available
+- 🛡️ **Moderation Tools**: Server management with join-role and member log webhook
+- 📊 **System Monitoring**: Health checks and multi-server overview
+- 🌐 **Admin Web Panel**: Discord OAuth2-protected panel to manage all guild settings, with live map preview and DB browser tab
+- 🗄️ **DB Browser**: Internal read-only database browser (accessible via admin panel owner tab)
+- 🐳 **Docker Support**: Full docker-compose deployment
 
 ## Quick Start
 
@@ -18,7 +19,7 @@ A powerful, modular Discord bot with RSS feed integration, interactive maps, cal
 
 - Python 3.9+
 - PostgreSQL 13+
-- Discord Bot Token
+- Discord Bot Token + OAuth2 App
 
 ### Installation
 
@@ -33,6 +34,7 @@ source .venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
+pip install -r requirements.webapp.txt
 ```
 
 ### Database Setup
@@ -49,12 +51,23 @@ Run the schema from `db/schema.sql`.
 Create `.env` file:
 
 ```bash
-DISCORD_TOKEN=your_token
+# Bot
+DISCORD_TOKEN=your_bot_token
+BOT_OWNER_ID=your_discord_user_id
+
+# Database
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=tausendsassa
 DB_USER=tausendsassa
 DB_PASSWORD=your_password
+
+# Admin webapp
+DISCORD_CLIENT_ID=your_oauth_app_client_id
+DISCORD_CLIENT_SECRET=your_oauth_app_client_secret
+WEBAPP_SECRET_KEY=random_secret_32chars
+WEBAPP_BASE_URL=https://your-domain.com
+WEBAPP_URL=https://your-domain.com        # used by bot for the Explore button URL
 ```
 
 ### Running
@@ -63,82 +76,113 @@ DB_PASSWORD=your_password
 # Bot
 python bot.py
 
-# Database Browser (separate terminal)
+# Database Browser (port 8080, internal)
 uvicorn db_browser:app --host 0.0.0.0 --port 8080
+
+# Admin Web Panel (port 8081, public)
+uvicorn webapp.main:app --host 0.0.0.0 --port 8081
 ```
 
 ## Production Deployment
 
-### Systemd Services
-
-```bash
-# Enable and start services
-sudo systemctl enable --now tausendsassa
-sudo systemctl enable --now tausendsassa-browser
-```
-
-### Docker
+### Docker (recommended)
 
 ```bash
 docker-compose up -d
 ```
 
-**Volume Structure:**
-- `cogs/map_data/` - Natural Earth shapefiles, map cache, avatar cache (shared between bot and db-browser)
-- `logs/` - Application logs
+**Containers:**
+- `bot` — Discord bot
+- `db` — PostgreSQL
+- `db-browser` — Internal DB browser (port 8080, not exposed publicly)
+- `webapp` — Admin panel (port 8081, behind nginx)
 
-The bot and db-browser automatically detect Docker vs Systemd runtime and adjust their monitoring displays accordingly.
+**Volume Structure:**
+- `cogs/map_data/` — Natural Earth shapefiles, map cache, avatar cache (shared between bot and db-browser)
+- `logs/` — Application logs
+
+After code changes, rebuild specific containers:
+```bash
+docker-compose up -d --build webapp   # webapp only
+docker-compose up -d --build bot      # bot only
+# Then reload nginx if behind reverse proxy:
+docker exec <nginx-container> nginx -s reload
+```
+
+### Systemd
+
+```bash
+sudo systemctl enable --now tausendsassa
+sudo systemctl enable --now tausendsassa-browser
+```
 
 ## Project Structure
 
 ```
-├── bot.py              # Main entry point
-├── db_browser.py       # Web interface
-├── cogs/               # Feature modules
-│   ├── feeds.py        # RSS monitoring
-│   ├── map.py          # Geographic maps
-│   ├── calendar.py     # iCal integration
-│   ├── monitor.py      # System monitoring
-│   └── map_data/       # Map data directory
+├── bot.py                  # Main entry point
+├── db_browser.py           # Internal DB browser (port 8080)
+├── webapp/                 # Admin panel (port 8081)
+│   ├── main.py             # FastAPI app, OAuth2, CRUD routes, DB proxy
+│   └── templates/          # Jinja2 templates (base, dashboard, map, login...)
+├── cogs/                   # Discord feature modules
+│   ├── feeds.py            # RSS monitoring
+│   ├── map.py              # Geographic maps
+│   ├── calendar.py         # iCal integration
+│   ├── monitor.py          # System monitoring
+│   └── map_data/           # Map data directory
 │       ├── ne_10m_*.shp    # Natural Earth shapefiles
 │       ├── map_cache/      # Base map cache
 │       └── avatar_cache/   # Discord CDN cache
-├── core/               # Shared utilities
-├── db/                 # Database layer
-└── resources/          # Static files
+├── core/                   # Shared utilities
+├── db/                     # Database layer (repositories)
+└── resources/              # Static files (help docs, ToS, privacy)
 ```
 
-## Database Browser
+## Admin Web Panel
 
-Access at `http://your-server:8080`
+Located at `WEBAPP_BASE_URL` (requires Discord OAuth2 login).
 
-Features:
-- System metrics (CPU, RAM, Disk, Uptime)
-- Runtime mode indicator (Docker/Systemd)
-- Guild, feed, calendar, map overview
-- Log viewer
-- Cog status monitoring
-- Discord CDN proxy for avatars/icons
+- **Login**: Discord OAuth2 — only server admins with the bot present can log in
+- **Dashboard**: Per-guild view with live MapLibre map preview
+- **Feeds**: Full CRUD (create, edit, delete, enable/disable all feeds)
+- **Calendar**: Full CRUD for iCal calendars
+- **Map**: Region selector with live globe preview
+- **Moderation**: Member log webhook + auto-join role
+- **DB Browser tab** (owner only): Embedded DB browser via proxy at `/db/`
+
+## Map System
+
+The Discord bot map message shows three buttons:
+
+```
+[📍 My Pin]  [🌍 Explore]  [...]
+```
+
+- **My Pin**: Set / update / remove your location pin
+- **Explore**: Opens the public MapLibre globe map at `/map/{guild_id}`
+- **...**: Info and Admin Tools (for server admins)
+
+The public map at `/map/{guild_id}` requires no login and shows all pins on a globe.
 
 ## Commands
 
 ### Admin Commands
-- `/feeds_add` - Add RSS feed
-- `/feeds_list` - Manage feeds
-- `/map_create` - Create server map
-- `/cal_add` - Add iCal calendar
-- `/timezone` - Set server timezone
+- `/feeds_add` — Add RSS feed
+- `/feeds_list` — Manage feeds
+- `/map_create` — Create server map (channel + region)
+- `/cal_add` — Add iCal calendar
+- `/timezone` — Set server timezone
 
 ### User Commands
-- `/map_pin` - Set location on map
-- `/help` - Show help
+- `/map_pin` — Set location on map
+- `/help` — Show help
 
 ### Owner Commands
-- `/owner_monitor` - System status
-- `/owner_server_monitor` - Multi-server overview
-- `/owner_poll_now` - Force RSS poll
+- `/owner_monitor` — System status
+- `/owner_server_monitor` — Multi-server overview
+- `/owner_poll_now` — Force RSS poll
 
-## Required Data
+## Required Map Data
 
 Download Natural Earth shapefiles to `cogs/map_data/`:
 - ne_10m_admin_0_countries.shp
@@ -151,18 +195,24 @@ Download Natural Earth shapefiles to `cogs/map_data/`:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| DISCORD_TOKEN | Yes | - | Bot token |
+| DISCORD_TOKEN | Yes | — | Bot token |
+| DISCORD_CLIENT_ID | Yes (webapp) | — | OAuth2 app client ID |
+| DISCORD_CLIENT_SECRET | Yes (webapp) | — | OAuth2 app client secret |
+| WEBAPP_BASE_URL | Yes (webapp) | http://localhost:8081 | Public URL of the admin panel |
+| WEBAPP_SECRET_KEY | Yes (webapp) | random | Session secret key |
+| WEBAPP_URL | No | — | Used by bot for Explore button link |
+| BOT_OWNER_ID | No | — | Discord user ID of bot owner |
 | DB_HOST | No | localhost | Database host |
 | DB_PORT | No | 5432 | Database port |
 | DB_NAME | No | tausendsassa | Database name |
 | DB_USER | No | tausendsassa | Database user |
-| DB_PASSWORD | No | - | Database password |
-| LOG_WEBHOOK_URL | No | - | Discord webhook for logs |
-| BOT_OWNER_ID | No | - | Bot owner ID |
+| DB_PASSWORD | No | — | Database password |
+| DB_BROWSER_URL | No | http://localhost:8080 | Internal DB browser URL (used by webapp proxy) |
+| LOG_WEBHOOK_URL | No | — | Discord webhook for logs |
 | RSS_POLL_INTERVAL_MINUTES | No | 1.0 | Feed poll interval |
 | MAP_PIN_COOLDOWN_MINUTES | No | 30 | Pin update cooldown |
-| AUTHORIZED_USERS | No | - | Admin user IDs |
+| AUTHORIZED_USERS | No | — | Admin user IDs |
 
 ## License
 
-MIT License - see LICENSE file
+MIT License — see LICENSE file

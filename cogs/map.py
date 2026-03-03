@@ -5,18 +5,15 @@ import geopandas as gpd
 from pathlib import Path
 from typing import Optional, Dict, Tuple, List
 from datetime import datetime, timedelta
-from PIL import Image, ImageDraw
+from PIL import Image
 from io import BytesIO
 import discord
 from discord import app_commands
 from discord.ext import commands
-import math
-from shapely.geometry import box
 
 # Import our modular components
 from core.map_gen import MapGenerator
 from core.map_storage import MapStorage
-from core.map_proximity import ProximityCalculator
 from core.map_views import MapPinButtonView, LocationModal, UserPinOptionsView
 from core.map_views_admin import AdminToolsView
 from core.map_config import MapConfig
@@ -47,7 +44,6 @@ class MapV2Cog(commands.Cog):
         # Initialize modular components (storage still used for image caching)
         self.storage = MapStorage(self.data_dir, self.cache_dir, self.log)
         self.map_generator = MapGenerator(self.data_dir, self.cache_dir, self.log)
-        self.proximity_calc = ProximityCalculator(self.map_generator, self.log)
 
         # In-memory cache - loaded from database in cog_load()
         self.global_config: Dict = {}
@@ -105,26 +101,22 @@ class MapV2Cog(commands.Cog):
                 message_id = map_data.get('message_id')
                 if channel_id and message_id:
                     try:
-                        channel = self.bot.get_channel(channel_id)
-                        if channel:
-                            message = await channel.fetch_message(message_id)
-                    
-                            # Check if map has custom settings
-                            has_custom_settings = bool(map_data.get('settings'))
-                            if has_custom_settings:
-                                # Force complete regeneration for custom maps
-                                self.log.info(f"Force-regenerating map with custom settings for guild {guild_id}")
-                            
-                                # Invalidate ALL cache for this guild
-                                await self._invalidate_map_cache(int(guild_id))
-                            
-                                # Force regeneration (will use custom settings)
-                                await self._update_map(int(guild_id), channel_id)
-                                self.log.info(f"Completed regeneration for guild {guild_id} with custom settings")
-                            else:
-                                # Just update the view for default maps
-                                await message.edit(view=view)
-                                self.log.info(f"Updated view for guild {guild_id} with region {region}")
+                        # get_channel uses cache (empty during setup_hook), fall back to API call
+                        channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
+                        message = await channel.fetch_message(message_id)
+
+                        # Check if map has custom settings
+                        has_custom_settings = bool(map_data.get('settings'))
+                        if has_custom_settings:
+                            # Force complete regeneration for custom maps
+                            self.log.info(f"Force-regenerating map with custom settings for guild {guild_id}")
+                            await self._invalidate_map_cache(int(guild_id))
+                            await self._update_map(int(guild_id), channel_id)
+                            self.log.info(f"Completed regeneration for guild {guild_id} with custom settings")
+                        else:
+                            # Just update the view for default maps
+                            await message.edit(view=view)
+                            self.log.info(f"Updated view for guild {guild_id} with region {region}")
                     except Exception as e:
                         self.log.warning(f"Could not update view for guild {guild_id}: {e}")
 
@@ -373,217 +365,6 @@ class MapV2Cog(commands.Cog):
             return (int(x), int(y))
         
         return to_px
-
-    async def _generate_proximity_map(self, user_id: int, guild_id: int, distance_km: int, progress_callback=None) -> Optional[Tuple[BytesIO, List[Dict]]]:
-        """Generate proximity map showing nearby users."""
-        return await self.proximity_calc.generate_proximity_map(user_id, guild_id, distance_km, self.maps, progress_callback)
-
-    async def _generate_continent_closeup(self, guild_id: int, continent: str, progress_callback=None) -> Optional[BytesIO]:
-        """Generate a close-up map of a continent using existing map configs."""
-        try:
-            # Check if we can get bounds for this continent/country
-            data_path = Path(__file__).parent / "map_data"
-            bounds = self.map_generator.map_config.get_region_bounds(continent, data_path)
-            if not bounds:
-                self.log.warning(f"Could not get bounds for {continent}")
-                return None
-        
-            # Check for cached closeup map first
-            cached_closeup = await self.storage.get_cached_closeup(guild_id, self.maps, "continent", continent)
-            if cached_closeup:
-                return cached_closeup
-        
-            # Calculate dimensions
-            width, height = self.map_generator.calculate_image_dimensions(continent)
-            
-            # Try to get cached base map first
-            base_map = await self.storage.get_cached_closeup_base_map(guild_id, self.maps, "continent", continent, width, height)
-            projection_func = None
-            
-            if not base_map:
-                # Generate new base map
-                self.log.info(f"No base map in cache for {continent} closeup, rendering new one (will take some time)")
-                
-                # Define progress callback for rendering updates
-                async def internal_progress_callback(message, percentage, image_buffer=None):
-                    self.log.info(f"Continent closeup rendering progress: {message} ({percentage}%)")
-                    if progress_callback:
-                        await progress_callback(message, percentage, image_buffer)
-                
-                base_map, projection_func = await self.map_generator.render_geopandas_map(continent, width, height, str(guild_id), self.maps, internal_progress_callback)
-                
-                if base_map:
-                    # Cache the new base map
-                    await self.storage.cache_closeup_base_map(guild_id, self.maps, "continent", continent, width, height, base_map)
-                else:
-                    return None
-            else:
-                # For cached maps, recreate the projection function
-                projection_func = self._create_projection_function(continent, width, height)
-            
-            # Draw pins for this guild
-            map_data = self.maps.get(str(guild_id), {})
-            pins = map_data.get('pins', {})
-            
-            pin_color, custom_pin_size = self.map_generator.get_pin_settings(str(guild_id), self.maps)
-            base_pin_size = int(height * custom_pin_size / 2400)
-            pin_groups = self.map_generator.group_overlapping_pins(pins, projection_func, base_pin_size)
-        
-            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size, str(guild_id), self.maps)
-
-            # Convert to BytesIO
-            img_buffer = BytesIO()
-            base_map.save(img_buffer, format='PNG', optimize=True)
-            
-            # Cache the closeup map
-            await self.storage.cache_closeup(guild_id, self.maps, "continent", continent, img_buffer)
-            
-            img_buffer.seek(0)
-            return img_buffer
-        
-        except Exception as e:
-            self.log.error(f"Failed to generate continent closeup for {continent}: {e}")
-            return None
-
-    async def _generate_state_closeup(self, guild_id: int, state_name: str, progress_callback=None) -> Optional[BytesIO]:
-        """Generate a close-up map of a German state using unified renderer."""
-        try:
-            # Check for cached closeup map first
-            cached_closeup = await self.storage.get_cached_closeup(guild_id, self.maps, "state", state_name)
-            if cached_closeup:
-                return cached_closeup
-            
-            # Load shapefiles to find state bounds
-            base = Path(__file__).parent / "map_data"
-            states = gpd.read_file(base / "ne_10m_admin_1_states_provinces.shp")
-            
-            # Find the state
-            german_states = states[states["admin"] == "Germany"]
-            state_row = german_states[german_states["name"] == state_name]
-            
-            if state_row.empty:
-                state_row = german_states[german_states["name"].str.contains(state_name, case=False, na=False)]
-            
-            if state_row.empty:
-                name_alternatives = {
-                    "Bayern": "Bavaria",
-                    "Nordrhein-Westfalen": "North Rhine-Westphalia",
-                    "Baden-Württemberg": "Baden-Wurttemberg",
-                    "Thüringen": "Thuringia"
-                }
-                alt_name = name_alternatives.get(state_name, state_name)
-                state_row = german_states[german_states["name"].str.contains(alt_name, case=False, na=False)]
-            
-            if state_row.empty:
-                self.log.warning(f"State {state_name} not found")
-                return None
-            
-            # Get bounds and add padding
-            state_geom = state_row.geometry.iloc[0]
-            bounds = state_geom.bounds
-            minx, miny, maxx, maxy = bounds
-            
-            width_range = maxx - minx
-            height_range = maxy - miny
-            padding_x = width_range * 0.05
-            padding_y = height_range * 0.05
-            
-            minx -= padding_x
-            maxx += padding_x
-            miny -= padding_y
-            maxy += padding_y
-            
-            # Calculate dimensions using Web Mercator
-            def lat_to_mercator_y(lat):
-                return math.log(math.tan((90 + lat) * math.pi / 360))
-            
-            y0 = lat_to_mercator_y(miny)
-            y1 = lat_to_mercator_y(maxy)
-            mercator_y_range = y1 - y0
-            
-            lon_range_radians = (maxx - minx) * math.pi / 180
-            aspect_ratio = mercator_y_range / lon_range_radians
-            
-            width = 1400
-            height = int(width * aspect_ratio)
-            height = max(600, min(height, 2000))
-            
-            # Try to get cached base map first
-            base_map = await self.storage.get_cached_closeup_base_map(guild_id, self.maps, "state", state_name, width, height)
-            projection_func = None
-            
-            if not base_map:
-                # Generate new base map
-                self.log.info(f"No base map in cache for {state_name} state closeup, rendering new one (will take some time)")
-                
-                # Notify user about base map rendering if callback provided
-                if progress_callback:
-                    await progress_callback(f"No base map in cache, rendering new one (will take some time)", 5)
-                
-                # Define progress callback for rendering updates
-                async def render_progress_callback(message, percentage, image_buffer=None):
-                    self.log.info(f"State closeup rendering progress: {message} ({percentage}%)")
-                    # Also update the user via the existing progress callback if provided
-                    if progress_callback:
-                        await progress_callback(f"Rendering base map: {message}", percentage, image_buffer)
-                
-                base_map, projection_func = await self.map_generator.render_base_map(
-                    minx, miny, maxx, maxy, width, height, 
-                    map_type="state_closeup", 
-                    guild_id=str(guild_id), 
-                    maps=self.maps,
-                    zoom_level="state_closeup",
-                    progress_callback=render_progress_callback
-                )
-                
-                if base_map:
-                    # Cache the new base map
-                    await self.storage.cache_closeup_base_map(guild_id, self.maps, "state", state_name, width, height, base_map)
-                else:
-                    return None
-            else:
-                # For cached maps, recreate the projection function
-                projection_func = self.map_generator.create_projection_function(minx, miny, maxx, maxy, width, height)
-            
-            # Highlight the selected state with a subtle border
-            draw = ImageDraw.Draw(base_map)
-            try:
-                if hasattr(state_geom, 'exterior'):
-                    coords_list = [state_geom.exterior.coords]
-                else:
-                    coords_list = [ring.exterior.coords for ring in state_geom.geoms]
-                
-                for coords in coords_list:
-                    pts = [projection_func(y, x) for x, y in coords]
-                    if len(pts) >= 2:
-                        # Thicker red border for selected state
-                        draw.line(pts, fill=(200, 0, 0), width=max(2, 3))
-            except Exception as e:
-                self.log.warning(f"Could not highlight state {state_name}: {e}")
-
-            # Draw pins for this guild with custom settings
-            map_data = self.maps.get(str(guild_id), {})
-            pins = map_data.get('pins', {})
-            
-            pin_color, custom_pin_size = self.map_generator.get_pin_settings(str(guild_id), self.maps)
-            base_pin_size = int(height * custom_pin_size / 2400)
-            pin_groups = self.map_generator.group_overlapping_pins(pins, projection_func, base_pin_size)
-            
-            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size, str(guild_id), self.maps)
-
-            # Convert to BytesIO
-            img_buffer = BytesIO()
-            base_map.save(img_buffer, format='PNG', optimize=True)
-            
-            # Cache the closeup map
-            await self.storage.cache_closeup(guild_id, self.maps, "state", state_name, img_buffer)
-            
-            img_buffer.seek(0)
-            return img_buffer
-            
-        except Exception as e:
-            self.log.error(f"Failed to generate state closeup for {state_name}: {e}")
-            return None
 
     async def _update_global_overview(self):
         """Update global overview of all maps."""
@@ -1151,7 +932,6 @@ class MapV2Cog(commands.Cog):
     @app_commands.describe(
         channel="Channel where the map will be posted",
         region="Map region (world by default)",
-        allow_proximity="Allow users to see nearby members"
     )
     @app_commands.choices(region=[
         # Continents
@@ -1188,7 +968,6 @@ class MapV2Cog(commands.Cog):
         interaction: discord.Interaction,
         channel: discord.TextChannel,
         region: str = "world",
-        allow_proximity: bool = True
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -1202,7 +981,6 @@ class MapV2Cog(commands.Cog):
             'channel_id': channel.id,
             'region': region,
             'pins': {},
-            'allow_proximity': allow_proximity,
             'created_at': datetime.now().isoformat(),
             'created_by': interaction.user.id
         }

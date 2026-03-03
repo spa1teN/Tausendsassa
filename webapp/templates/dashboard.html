@@ -1,0 +1,427 @@
+{% extends "base.html" %}
+{% block title %}{{ guild.name }}{% endblock %}
+
+{% block content %}
+{# ── Header ──────────────────────────────────────────────────────────────── #}
+<div class="flex items-center gap-4 mb-6">
+  {% if guild.icon_hash %}
+  <img src="https://cdn.discordapp.com/icons/{{ guild_id }}/{{ guild.icon_hash }}.png"
+       class="w-14 h-14 rounded-2xl" alt="" />
+  {% else %}
+  <div class="w-14 h-14 rounded-2xl bg-discord/20 border border-discord/30 flex items-center justify-center">
+    <span class="text-discord font-bold text-xl">{{ guild.name[0] | upper }}</span>
+  </div>
+  {% endif %}
+  <div>
+    <h1 class="text-2xl font-semibold text-white">{{ guild.name }}</h1>
+    <p class="text-sm text-[#80848e]">
+      {{ guild.member_count }} members
+      · ID: {{ guild_id }}
+    </p>
+  </div>
+</div>
+
+{# ── Tab bar ──────────────────────────────────────────────────────────────── #}
+<div class="flex gap-1 mb-6 border-b border-[#3f4147]" id="tab-bar">
+  <button onclick="showTab('overview')" id="tab-overview"
+          class="tab-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-[#3f4147] border-b-0 bg-[#2b2d31] text-white -mb-px">
+    Overview
+  </button>
+  {% if db_browser_url %}
+  <button onclick="showTab('db')" id="tab-db"
+          class="tab-btn px-4 py-2 text-sm font-medium rounded-t-lg text-[#80848e] hover:text-white transition-colors">
+    DB Browser
+  </button>
+  {% endif %}
+</div>
+
+{# ── Overview Panel ───────────────────────────────────────────────────────── #}
+<div id="panel-overview">
+
+{# ── Sections Grid ────────────────────────────────────────────────────────── #}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+  {# ── RSS Feeds ── #}
+  <div class="card p-5">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-semibold text-white flex items-center gap-2">
+        <span class="text-lg">📡</span> RSS Feeds
+        <span class="text-xs px-2 py-0.5 rounded-full bg-[#383a40] text-[#80848e]">{{ feeds | length }}</span>
+      </h2>
+    </div>
+
+    {% if feeds %}
+    <div class="space-y-2 mb-4">
+      {% for feed in feeds %}
+      <details class="rounded-lg bg-[#383a40] group">
+        <summary class="flex items-center justify-between px-3 py-2 cursor-pointer list-none">
+          <div class="min-w-0 flex-1">
+            <p class="text-sm text-white truncate">{{ feed.name }}</p>
+            <p class="text-xs text-[#80848e] truncate">{{ feed.feed_url }}</p>
+          </div>
+          <div class="flex items-center gap-2 ml-3 flex-shrink-0">
+            {% if feed.failure_count and feed.failure_count > 0 %}
+            <span class="badge-warn text-xs px-1.5 py-0.5 rounded">{{ feed.failure_count }} errors</span>
+            {% endif %}
+            {% if feed.enabled %}
+            <span class="badge-on text-xs px-1.5 py-0.5 rounded">Active</span>
+            {% else %}
+            <span class="badge-off text-xs px-1.5 py-0.5 rounded">Disabled</span>
+            {% endif %}
+            <span class="text-[#80848e] text-xs group-open:rotate-90 transition-transform">▶</span>
+          </div>
+        </summary>
+        <div class="px-3 pb-3 pt-1 border-t border-[#3f4147]">
+          <form action="/guild/{{ guild_id }}/feeds/{{ feed.id }}/update" method="post" class="space-y-2">
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-xs text-[#80848e]">Name</label>
+                <input name="name" value="{{ feed.name }}" required
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+              <div>
+                <label class="text-xs text-[#80848e]">Channel ID</label>
+                <input name="channel_id" value="{{ feed.channel_id }}" required
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+            </div>
+            <div>
+              <label class="text-xs text-[#80848e]">Feed URL</label>
+              <input name="feed_url" value="{{ feed.feed_url }}" required type="url"
+                     class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-xs text-[#80848e]">Webhook URL</label>
+                <input name="webhook_url" value="{{ feed.webhook_url or '' }}"
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+              <div>
+                <label class="text-xs text-[#80848e]">Bot username</label>
+                <input name="username" value="{{ feed.username or '' }}"
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-xs text-[#80848e]">Avatar URL</label>
+                <input name="avatar_url" value="{{ feed.avatar_url or '' }}"
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+              <div>
+                <label class="text-xs text-[#80848e]">Color (hex)</label>
+                <input name="color" value="{{ feed.color or '' }}" placeholder="#5865F2"
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-xs text-[#80848e]">Max items</label>
+                <input name="max_items" type="number" min="1" max="20" value="{{ feed.max_items or 5 }}"
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+              <div class="flex items-end pb-1">
+                <label class="flex items-center gap-2 text-sm text-[#dbdee1] cursor-pointer">
+                  <input name="crosspost" type="checkbox" {% if feed.crosspost %}checked{% endif %} class="rounded" />
+                  Crosspost
+                </label>
+              </div>
+            </div>
+            <div>
+              <label class="text-xs text-[#80848e]">Embed template (JSON, optional)</label>
+              <textarea name="embed_template" rows="2"
+                        class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord font-mono">{{ feed.embed_template or '' }}</textarea>
+            </div>
+            <div class="flex gap-2">
+              <button type="submit"
+                      class="text-xs px-3 py-1.5 rounded-lg bg-discord/20 text-discord border border-discord/30 hover:bg-discord/30 transition-colors">
+                Save
+              </button>
+            </div>
+          </form>
+          <div class="flex gap-2 mt-2">
+            <form action="/guild/{{ guild_id }}/feeds/{{ feed.id }}/toggle" method="post">
+              <button type="submit"
+                      class="text-xs px-3 py-1.5 rounded-lg {% if feed.enabled %}bg-[#f0b23222] text-[#f0b232] border border-[#f0b23244]{% else %}bg-[#23a55a22] text-[#23a55a] border border-[#23a55a44]{% endif %} hover:opacity-80 transition-opacity">
+                {% if feed.enabled %}Disable{% else %}Enable{% endif %}
+              </button>
+            </form>
+            <form action="/guild/{{ guild_id }}/feeds/{{ feed.id }}/delete" method="post"
+                  onsubmit="return confirm('Delete feed {{ feed.name | e }}?')">
+              <button type="submit"
+                      class="text-xs px-3 py-1.5 rounded-lg bg-[#f2343022] text-[#f23430] border border-[#f2343044] hover:bg-[#f2343033] transition-colors">
+                Delete
+              </button>
+            </form>
+          </div>
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm text-[#80848e] text-center py-4 mb-4">No feeds configured.</p>
+    {% endif %}
+
+    {# Add feed form #}
+    <details class="rounded-lg border border-dashed border-[#3f4147]">
+      <summary class="px-3 py-2 text-sm text-[#80848e] hover:text-white cursor-pointer list-none flex items-center gap-2">
+        <span>+</span> Add feed
+      </summary>
+      <div class="px-3 pb-3 pt-1 border-t border-[#3f4147]">
+        <form action="/guild/{{ guild_id }}/feeds" method="post" class="space-y-2">
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="text-xs text-[#80848e]">Name *</label>
+              <input name="name" required placeholder="My Feed"
+                     class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+            </div>
+            <div>
+              <label class="text-xs text-[#80848e]">Channel ID *</label>
+              <input name="channel_id" required placeholder="123456789"
+                     class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-[#80848e]">Feed URL *</label>
+            <input name="feed_url" required type="url" placeholder="https://..."
+                   class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="text-xs text-[#80848e]">Webhook URL</label>
+              <input name="webhook_url" placeholder="https://discord.com/api/webhooks/..."
+                     class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+            </div>
+            <div>
+              <label class="text-xs text-[#80848e]">Max items</label>
+              <input name="max_items" type="number" min="1" max="20" value="5"
+                     class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+            </div>
+          </div>
+          <button type="submit"
+                  class="text-xs px-3 py-1.5 rounded-lg bg-discord/20 text-discord border border-discord/30 hover:bg-discord/30 transition-colors">
+            Create feed
+          </button>
+        </form>
+      </div>
+    </details>
+  </div>
+
+  {# ── Map ── #}
+  <div class="card p-5">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-semibold text-white flex items-center gap-2">
+        <span class="text-lg">🗺️</span> Map
+        {% if pin_count %}
+        <span class="text-xs px-2 py-0.5 rounded-full bg-[#383a40] text-[#80848e]">{{ pin_count }} pins</span>
+        {% endif %}
+      </h2>
+    </div>
+
+    {% if map_settings %}
+    {# Map preview #}
+    <div class="mb-3 rounded-lg overflow-hidden border border-[#3f4147]" style="height:220px;">
+      <iframe src="/map/{{ guild_id }}"
+              class="w-full h-full"
+              style="border:0;"
+              loading="lazy"></iframe>
+    </div>
+
+    {# Region form #}
+    <form action="/guild/{{ guild_id }}/map/settings" method="post" class="flex items-center gap-2">
+      <label class="text-xs text-[#80848e] flex-shrink-0">Region</label>
+      <select name="region"
+              class="flex-1 px-2 py-1 rounded bg-[#383a40] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord">
+        {% set regions = [
+          ("world","🌍 World"),("europe","🇪🇺 Europe"),("germany","🇩🇪 Germany"),
+          ("france","🇫🇷 France"),("spain","🇪🇸 Spain"),("italy","🇮🇹 Italy"),
+          ("poland","🇵🇱 Poland"),("netherlands","🇳🇱 Netherlands"),("belgium","🇧🇪 Belgium"),
+          ("switzerland","🇨🇭 Switzerland"),("sweden","🇸🇪 Sweden"),("russia","🇷🇺 Russia"),
+          ("ukraine","🇺🇦 Ukraine"),("unitedkingdom","🇬🇧 UK"),
+          ("asia","🌏 Asia"),("japan","🇯🇵 Japan"),("southkorea","🇰🇷 South Korea"),
+          ("northamerica","🌎 North America"),("usmainland","🇺🇸 US Mainland"),
+          ("canada","🇨🇦 Canada"),("mexico","🇲🇽 Mexico"),
+          ("southamerica","🌎 South America"),("brazil","🇧🇷 Brazil"),
+          ("africa","🌍 Africa"),("australia","🇦🇺 Australia")
+        ] %}
+        {% for val, label in regions %}
+        <option value="{{ val }}" {% if map_settings.region == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit"
+              class="text-xs px-3 py-1.5 rounded-lg bg-discord/20 text-discord border border-discord/30 hover:bg-discord/30 transition-colors flex-shrink-0">
+        Save
+      </button>
+    </form>
+    {% else %}
+    <p class="text-sm text-[#80848e] text-center py-4">Map not configured.</p>
+    {% endif %}
+  </div>
+
+  {# ── Calendar ── #}
+  <div class="card p-5">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-semibold text-white flex items-center gap-2">
+        <span class="text-lg">📅</span> Calendar
+        <span class="text-xs px-2 py-0.5 rounded-full bg-[#383a40] text-[#80848e]">{{ calendars | length }}</span>
+      </h2>
+    </div>
+
+    {% if calendars %}
+    <div class="space-y-2 mb-4">
+      {% for cal in calendars %}
+      <details class="rounded-lg bg-[#383a40] group">
+        <summary class="px-3 py-2 cursor-pointer list-none flex items-center justify-between">
+          <p class="text-xs text-[#80848e] truncate flex-1">{{ cal.ical_url }}</p>
+          <span class="text-[#80848e] text-xs ml-2 group-open:rotate-90 transition-transform">▶</span>
+        </summary>
+        <div class="px-3 pb-3 pt-1 border-t border-[#3f4147]">
+          <form action="/guild/{{ guild_id }}/calendars/{{ cal.id }}/update" method="post" class="space-y-2">
+            <div>
+              <label class="text-xs text-[#80848e]">iCal URL *</label>
+              <input name="ical_url" value="{{ cal.ical_url }}" required
+                     class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-xs text-[#80848e]">Text channel ID</label>
+                <input name="text_channel_id" value="{{ cal.text_channel_id or '' }}"
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+              <div>
+                <label class="text-xs text-[#80848e]">Voice channel ID</label>
+                <input name="voice_channel_id" value="{{ cal.voice_channel_id or '' }}"
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+            </div>
+            <div>
+              <label class="text-xs text-[#80848e]">Reminder role ID</label>
+              <input name="reminder_role_id" value="{{ cal.reminder_role_id or '' }}"
+                     class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-xs text-[#80848e]">Blacklist (comma-sep)</label>
+                <input name="blacklist" value="{{ cal.blacklist or '' }}"
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+              <div>
+                <label class="text-xs text-[#80848e]">Whitelist (comma-sep)</label>
+                <input name="whitelist" value="{{ cal.whitelist or '' }}"
+                       class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button type="submit"
+                      class="text-xs px-3 py-1.5 rounded-lg bg-discord/20 text-discord border border-discord/30 hover:bg-discord/30 transition-colors">
+                Save
+              </button>
+            </div>
+          </form>
+          <form action="/guild/{{ guild_id }}/calendars/{{ cal.id }}/delete" method="post" class="mt-2"
+                onsubmit="return confirm('Delete this calendar?')">
+            <button type="submit"
+                    class="text-xs px-3 py-1.5 rounded-lg bg-[#f2343022] text-[#f23430] border border-[#f2343044] hover:bg-[#f2343033] transition-colors">
+              Delete
+            </button>
+          </form>
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm text-[#80848e] text-center py-4 mb-4">No calendar configured.</p>
+    {% endif %}
+
+    {# Add calendar form #}
+    <details class="rounded-lg border border-dashed border-[#3f4147]">
+      <summary class="px-3 py-2 text-sm text-[#80848e] hover:text-white cursor-pointer list-none flex items-center gap-2">
+        <span>+</span> Add calendar
+      </summary>
+      <div class="px-3 pb-3 pt-1 border-t border-[#3f4147]">
+        <form action="/guild/{{ guild_id }}/calendars" method="post" class="space-y-2">
+          <div>
+            <label class="text-xs text-[#80848e]">iCal URL *</label>
+            <input name="ical_url" required placeholder="https://calendar.google.com/..."
+                   class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="text-xs text-[#80848e]">Text channel ID</label>
+              <input name="text_channel_id" placeholder="123456789"
+                     class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+            </div>
+            <div>
+              <label class="text-xs text-[#80848e]">Voice channel ID</label>
+              <input name="voice_channel_id" placeholder="123456789"
+                     class="w-full mt-0.5 px-2 py-1 rounded bg-[#1e1f22] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+            </div>
+          </div>
+          <button type="submit"
+                  class="text-xs px-3 py-1.5 rounded-lg bg-discord/20 text-discord border border-discord/30 hover:bg-discord/30 transition-colors">
+            Create calendar
+          </button>
+        </form>
+      </div>
+    </details>
+  </div>
+
+  {# ── Moderation ── #}
+  <div class="card p-5">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-semibold text-white flex items-center gap-2">
+        <span class="text-lg">🛡️</span> Moderation
+      </h2>
+    </div>
+    <form action="/guild/{{ guild_id }}/moderation" method="post" class="space-y-3">
+      <div>
+        <label class="text-xs text-[#80848e]">Member log webhook URL</label>
+        <input name="member_log_webhook"
+               value="{{ mod_config.member_log_webhook if mod_config and mod_config.member_log_webhook else '' }}"
+               placeholder="https://discord.com/api/webhooks/..."
+               class="w-full mt-0.5 px-2 py-1 rounded bg-[#383a40] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+      </div>
+      <div>
+        <label class="text-xs text-[#80848e]">Auto-assign role ID on join</label>
+        <input name="join_role_id"
+               value="{{ mod_config.join_role_id if mod_config and mod_config.join_role_id else '' }}"
+               placeholder="Role ID"
+               class="w-full mt-0.5 px-2 py-1 rounded bg-[#383a40] border border-[#3f4147] text-sm text-white focus:outline-none focus:border-discord" />
+      </div>
+      <button type="submit"
+              class="text-xs px-3 py-1.5 rounded-lg bg-discord/20 text-discord border border-discord/30 hover:bg-discord/30 transition-colors">
+        Save
+      </button>
+    </form>
+  </div>
+
+</div>{# end grid #}
+</div>{# end panel-overview #}
+
+{# ── DB Browser Panel (owner-only) ───────────────────────────────────────── #}
+{% if db_browser_url %}
+<div id="panel-db" style="display:none">
+  <iframe src="/db/guilds/{{ guild_id }}"
+          class="w-full rounded-lg border border-[#3f4147]"
+          style="height: 80vh; border: 0;"
+          loading="lazy"></iframe>
+</div>
+{% endif %}
+
+<script>
+function showTab(name) {
+  document.querySelectorAll('[id^="panel-"]').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.remove('bg-[#2b2d31]', 'text-white', 'border', 'border-[#3f4147]', 'border-b-0', '-mb-px');
+    b.classList.add('text-[#80848e]');
+  });
+  const panel = document.getElementById('panel-' + name);
+  if (panel) panel.style.display = '';
+  const btn = document.getElementById('tab-' + name);
+  if (btn) {
+    btn.classList.remove('text-[#80848e]');
+    btn.classList.add('bg-[#2b2d31]', 'text-white', 'border', 'border-[#3f4147]', 'border-b-0', '-mb-px');
+  }
+}
+</script>
+{% endblock %}

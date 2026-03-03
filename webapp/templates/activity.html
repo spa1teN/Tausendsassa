@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Member Map</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1e1f22;
+      color: #dbdee1;
+      font-family: system-ui, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Loading screen ── */
+    #loading {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      color: #80848e;
+    }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid #3f4147;
+      border-top-color: #5865F2;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #error-msg { color: #ed4245; font-size: 14px; display: none; }
+
+    /* ── Header ── */
+    header {
+      background: #2b2d31;
+      border-bottom: 1px solid #3f4147;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      z-index: 10;
+      flex-shrink: 0;
+      display: none; /* shown after load */
+    }
+    .guild-icon { width: 32px; height: 32px; border-radius: 8px; object-fit: cover; }
+    .guild-icon-placeholder {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: #5865F222; border: 1px solid #5865F244;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; color: #5865F2; font-size: 13px;
+    }
+    header h1 { font-size: 15px; font-weight: 600; color: #fff; }
+    header .sub { font-size: 12px; color: #80848e; }
+    header .spacer { flex: 1; }
+    .pill {
+      font-size: 11px; padding: 3px 9px; border-radius: 12px;
+      background: #383a40; color: #80848e; border: 1px solid #3f4147;
+    }
+
+    /* ── Map ── */
+    #map-wrap { flex: 1; position: relative; overflow: hidden; display: none; }
+    #map-svg { width: 100%; height: 100%; display: block; }
+
+    .country { fill: #2b2d31; stroke: #3f4147; stroke-width: 0.4px; }
+    .graticule { fill: none; stroke: #2f3136; stroke-width: 0.3px; }
+    .sphere { fill: #1a1c1f; }
+    .pin-group { cursor: pointer; }
+
+    /* ── Tooltip ── */
+    #tooltip {
+      position: absolute; pointer-events: none;
+      background: #2b2d31; border: 1px solid #3f4147;
+      border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      padding: 10px 13px; display: none; z-index: 100; min-width: 160px;
+    }
+    #tooltip .tt-inner { display: flex; align-items: center; gap: 10px; }
+    #tooltip .tt-avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+    #tooltip .tt-ph {
+      width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+      background: #383a40; display: flex; align-items: center;
+      justify-content: center; font-weight: 700; font-size: 17px;
+    }
+    #tooltip .tt-name { font-weight: 600; color: #fff; font-size: 13px; }
+    #tooltip .tt-loc  { font-size: 11px; color: #80848e; margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <span>Connecting to Discord…</span>
+  <span id="error-msg"></span>
+</div>
+
+<!-- Debug overlay — always visible, floats over map -->
+<pre id="dbg" style="position:fixed;bottom:8px;left:8px;right:8px;z-index:999;font-size:11px;color:#b5bac1;background:rgba(0,0,0,0.6);border-radius:6px;padding:6px;white-space:pre-wrap;max-height:40vh;overflow-y:auto;pointer-events:none;"></pre>
+
+<header id="header">
+  <div id="guild-icon-wrap"></div>
+  <div>
+    <h1 id="guild-name">Member Map</h1>
+    <span class="sub">Interactive Map</span>
+  </div>
+  <div class="spacer"></div>
+  <span class="pill" id="pin-pill">Loading…</span>
+</header>
+
+<div id="map-wrap">
+  <svg id="map-svg"></svg>
+  <div id="tooltip"><div class="tt-inner" id="tt-inner"></div></div>
+</div>
+
+<script type="module">
+import { DiscordSDK } from "https://esm.sh/@discord/embedded-app-sdk@1.2.0";
+import * as d3 from "https://esm.sh/d3@7";
+import * as topojson from "https://esm.sh/topojson-client@3";
+
+const CLIENT_ID = "{{ discord_client_id }}";
+const dbg = s => { const el = document.getElementById("dbg"); if(el) el.textContent += s + "\n"; };
+
+// Region focus bounds [minLng, minLat, maxLng, maxLat]
+const REGION_BOUNDS = {
+  world: null,
+  europe: [-25,34,45,72], germany: [5,47,16,56], france: [-5,41,10,52],
+  spain: [-10,35,5,44], italy: [6,36,19,48], poland: [14,49,25,55],
+  netherlands: [3,50,8,54], belgium: [2,49,7,52], austria: [9,46,18,49],
+  czech: [12,48,19,52], hungary: [16,45,23,49], portugal: [-10,36,-6,42],
+  greece: [19,34,28,42], sweden: [10,55,25,70], norway: [4,57,32,72],
+  denmark: [8,54,16,58], finland: [19,59,32,71], romania: [21,43,30,48],
+  bulgaria: [22,41,29,44], croatia: [13,42,20,47], switzerland: [5,45,11,48],
+  ukraine: [22,44,40,53], unitedkingdom: [-10,49,3,61],
+  japan: [129,30,146,46], southkorea: [125,33,130,39],
+  asia: [25,-10,150,60], northamerica: [-170,15,-50,75],
+  southamerica: [-82,-57,-34,15], africa: [-20,-36,52,38],
+  australia: [112,-45,155,-10], usmainland: [-125,24,-65,50],
+  brazil: [-74,-34,-34,6], canada: [-141,42,-52,84], mexico: [-118,14,-86,33],
+};
+
+async function init() {
+  try {
+    dbg("url: " + window.location.href);
+
+    // 1. Try guild_id from URL query params
+    const params = new URLSearchParams(window.location.search);
+    let guildId = params.get("guild_id");
+    dbg("url guild_id: " + guildId);
+
+    // 2. Discord SDK
+    if (!guildId) {
+      dbg("loading SDK…");
+      const sdk = new DiscordSDK(CLIENT_ID);
+      dbg("sdk created, calling ready()…");
+      await sdk.ready();
+      guildId = sdk.guildId;
+      dbg("sdk.guildId: " + guildId);
+    }
+
+    if (!guildId) {
+      showError("No server context. Launch this from inside a server.");
+      return;
+    }
+
+    dbg("guild_id OK: " + guildId);
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("header").style.display = "flex";
+    document.getElementById("map-wrap").style.display = "block";
+
+    requestAnimationFrame(() => loadMap(String(guildId)));
+
+  } catch (err) {
+    showError("Error: " + err.message);
+    dbg("EXCEPTION: " + err.stack);
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById("error-msg");
+  el.textContent = msg;
+  el.style.display = "block";
+  document.querySelector("#loading span").style.display = "none";
+  document.querySelector(".spinner").style.display = "none";
+}
+
+// ── Map rendering ─────────────────────────────────────────────────────────────
+function loadMap(guildId) {
+  try {
+  const wrap    = document.getElementById("map-wrap");
+
+  const W = () => wrap.offsetWidth;
+  const H = () => wrap.offsetHeight;
+
+  dbg(`map size: ${W()}x${H()}`);
+
+  const svg     = d3.select("#map-svg");
+  const tooltip = document.getElementById("tooltip");
+  const ttInner = document.getElementById("tt-inner");
+
+  const projection = d3.geoNaturalEarth1();
+  const path       = d3.geoPath(projection);
+  const zoom = d3.zoom().scaleExtent([0.5, 40])
+    .on("zoom", ev => g.attr("transform", ev.transform));
+  svg.call(zoom);
+
+  const g            = svg.append("g");
+  const graticule    = d3.geoGraticule()();
+  g.append("path").datum({type:"Sphere"}).attr("class","sphere").attr("d",path);
+  g.append("path").datum(graticule).attr("class","graticule").attr("d",path);
+  const countryG = g.append("g").attr("class","countries");
+  const pinG     = g.append("g").attr("class","pins");
+
+  let currentRegion = "world";
+
+  function fitMap() {
+    projection.fitSize([W(), H()], {type:"Sphere"});
+    path.projection(projection);
+    svg.selectAll("path").attr("d", path);
+    pinG.selectAll(".pin-group").each(function(d) {
+      const [x,y] = projection([d.lng, d.lat]) || [0,0];
+      d3.select(this).attr("transform", `translate(${x},${y})`);
+    });
+    const bounds = REGION_BOUNDS[currentRegion];
+    if (bounds) zoomToBounds(bounds);
+  }
+
+  function zoomToBounds([minLng,minLat,maxLng,maxLat]) {
+    const [x0,y1] = projection([minLng,minLat]);
+    const [x1,y0] = projection([maxLng,maxLat]);
+    if (x0==null||x1==null) return;
+    const bW=x1-x0, bH=y1-y0;
+    const scale = Math.min(0.9*W()/bW, 0.9*H()/bH);
+    const tx = W()/2 - scale*(x0+bW/2);
+    const ty = H()/2 - scale*(y0+bH/2);
+    svg.transition().duration(0)
+      .call(zoom.transform, d3.zoomIdentity.translate(tx,ty).scale(scale));
+  }
+
+  fetch("/static/countries-110m.json")
+    .then(r => r.json())
+    .then(world => {
+      dbg("world atlas loaded");
+      countryG.selectAll("path")
+        .data(topojson.feature(world, world.objects.countries).features)
+        .join("path").attr("class","country").attr("d",path);
+      fitMap();
+    })
+    .catch(err => dbg("world atlas FAIL: " + err));
+
+  window.addEventListener("resize", fitMap);
+
+  const pinsUrl = `/api/map/${guildId}/pins`;
+  dbg("fetching pins: " + pinsUrl);
+  fetch(pinsUrl)
+    .then(r => r.json())
+    .then(data => {
+      const features = data.features || [];
+      document.getElementById("pin-pill").textContent =
+        `${features.length} pin${features.length!==1?"s":""}`;
+
+      // Update header with guild info
+      const guildName = data.guild_name || "Server Map";
+      document.getElementById("guild-name").textContent = guildName;
+      const iconWrap = document.getElementById("guild-icon-wrap");
+      if (data.guild_icon) {
+        iconWrap.innerHTML = `<img class="guild-icon" src="${data.guild_icon}" alt="" />`;
+      } else {
+        iconWrap.innerHTML = `<div class="guild-icon-placeholder">${esc(guildName[0]?.toUpperCase()||"?")}</div>`;
+      }
+
+      currentRegion = data.region || "world";
+      fitMap();
+
+      const pins = features.map(f => ({
+        lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0],
+        name: f.properties.name, username: f.properties.username,
+        color: f.properties.color||"#FF4444",
+        avatar_hash: f.properties.avatar_hash, user_id: f.properties.user_id,
+      }));
+
+      const R = 14;
+      const pg = pinG.selectAll(".pin-group").data(pins).join("g")
+        .attr("class","pin-group")
+        .attr("transform", d => {
+          const [x,y] = projection([d.lng,d.lat])||[0,0];
+          return `translate(${x},${y})`;
+        });
+
+      pg.append("circle").attr("class","pin-ring").attr("r",R+4)
+        .attr("fill",d=>d.color).attr("opacity",0);
+
+      const defs = svg.select("defs").empty() ? svg.append("defs") : svg.select("defs");
+      pins.forEach((d,i) => {
+        if (d.avatar_hash) {
+          const cid = `aclip-${i}`;
+          defs.append("clipPath").attr("id",cid)
+            .append("circle").attr("r",R).attr("cx",0).attr("cy",0);
+          pg.filter((_,j)=>j===i).append("image")
+            .attr("href",`https://cdn.discordapp.com/avatars/${d.user_id}/${d.avatar_hash}.png?size=64`)
+            .attr("x",-R).attr("y",-R).attr("width",R*2).attr("height",R*2)
+            .attr("clip-path",`url(#${cid})`);
+        } else {
+          pg.filter((_,j)=>j===i).append("circle").attr("r",R).attr("fill",d.color);
+          pg.filter((_,j)=>j===i).append("text")
+            .attr("text-anchor","middle").attr("dominant-baseline","central")
+            .attr("fill","#fff").attr("font-size",R).attr("font-weight","700")
+            .attr("pointer-events","none")
+            .text(d=>(d.username||"?")[0].toUpperCase());
+        }
+        pg.filter((_,j)=>j===i).append("circle")
+          .attr("r",R).attr("fill","none")
+          .attr("stroke",d.color).attr("stroke-width",2.5);
+      });
+
+      pg.on("mouseenter", function(ev,d) {
+          const avatarHtml = d.avatar_hash
+            ? `<img class="tt-avatar" src="https://cdn.discordapp.com/avatars/${d.user_id}/${d.avatar_hash}.png?size=64" alt="" />`
+            : `<div class="tt-ph" style="color:${d.color}">${(d.username||"?")[0].toUpperCase()}</div>`;
+          ttInner.innerHTML = `${avatarHtml}<div><div class="tt-name">${esc(d.username)}</div><div class="tt-loc">${esc(d.name)}</div></div>`;
+          tooltip.style.display = "block";
+          d3.select(this).select(".pin-ring").attr("opacity",0.25);
+          positionTooltip(ev);
+        })
+        .on("mousemove", positionTooltip)
+        .on("mouseleave", function() {
+          tooltip.style.display = "none";
+          d3.select(this).select(".pin-ring").attr("opacity",0);
+        });
+    })
+    .catch(err => dbg("pins FAIL: " + err));
+
+  function positionTooltip(ev) {
+    const rect = wrap.getBoundingClientRect();
+    let x = ev.clientX-rect.left+14, y = ev.clientY-rect.top+14;
+    if (x+200>rect.width)  x = ev.clientX-rect.left-200;
+    if (y+80>rect.height)  y = ev.clientY-rect.top-70;
+    tooltip.style.left = x+"px";
+    tooltip.style.top  = y+"px";
+  }
+  } catch(err) { dbg("loadMap ERROR: " + err); }
+}
+
+function esc(s) {
+  return String(s||"").replace(/[&<>"']/g,c=>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+init();
+</script>
+</body>
+</html>

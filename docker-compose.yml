@@ -39,6 +39,8 @@ services:
       - DISCORD_TOKEN=${DISCORD_TOKEN:?Discord token required}
       - BOT_OWNER_ID=${BOT_OWNER_ID:-485051896655249419}
       - GUILD_ID=${GUILD_ID}
+      - TEST_GUILD_ID=${TEST_GUILD_ID}
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
       # Database Configuration
       - DB_HOST=postgres
       - DB_PORT=5432
@@ -60,6 +62,7 @@ services:
       - GLOBAL_MONITOR_CHANNEL_ID=${GLOBAL_MONITOR_CHANNEL_ID}
       # Map Configuration
       - MAP_PIN_COOLDOWN_MINUTES=${MAP_PIN_COOLDOWN_MINUTES:-30}
+      - WEBAPP_URL=${WEBAPP_URL}
       # Cache Configuration
       - MAX_CACHE_SIZE_MB=${MAX_CACHE_SIZE_MB:-100}
       - MAX_MEMORY_CACHE_ITEMS=${MAX_MEMORY_CACHE_ITEMS:-50}
@@ -100,6 +103,33 @@ services:
       - ./resources:/app/resources:ro        # Favicon (read-only)
     ports:
       - "8080:8080"
+    networks:
+      - tausendsassa-network
+
+  # Web Admin Panel (Discord OAuth2 + guild settings)
+  webapp:
+    build:
+      context: .
+      dockerfile: Dockerfile.webapp
+    container_name: tausendsassa-webapp
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-tausendsassa}
+      - DB_USER=${DB_USER:-tausendsassa}
+      - DB_PASSWORD=${DB_PASSWORD:?Database password required}
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:?Discord client ID required}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:?Discord client secret required}
+      - WEBAPP_SECRET_KEY=${WEBAPP_SECRET_KEY:?Secret key required}
+      - WEBAPP_BASE_URL=${WEBAPP_BASE_URL:-http://localhost:8081}
+      - BOT_OWNER_ID=${BOT_OWNER_ID:-485051896655249419}
+      - DB_BROWSER_URL=http://db-browser:8080
+    ports:
+      - "8081:8081"
     networks:
       - tausendsassa-network
 

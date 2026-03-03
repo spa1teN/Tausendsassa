@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Tausendsassa{% endblock %} — Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            discord: { DEFAULT: '#5865F2', dark: '#4752C4' },
+            surface: { DEFAULT: '#1e1f22', card: '#2b2d31', input: '#383a40' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #1e1f22; color: #dbdee1; font-family: system-ui, sans-serif; }
+    .card { background: #2b2d31; border: 1px solid #3f4147; border-radius: 8px; }
+    .badge-on  { background:#23a55a22; color:#23a55a; border:1px solid #23a55a44; }
+    .badge-off { background:#f2343022; color:#f23430; border:1px solid #f2343044; }
+    .badge-warn{ background:#f0b23222; color:#f0b232; border:1px solid #f0b23244; }
+  </style>
+</head>
+<body class="h-full min-h-screen">
+
+{% if user is defined and user %}
+<nav class="border-b border-[#3f4147] bg-[#2b2d31] px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <span class="text-white font-semibold text-lg tracking-tight">Tausendsassa</span>
+    <span class="text-[#80848e] text-sm">Admin Panel</span>
+  </div>
+  <div class="flex items-center gap-4">
+    {% if guild is defined %}
+    <a href="/guilds" class="text-sm text-[#80848e] hover:text-white transition-colors">← Server list</a>
+    {% endif %}
+    <div class="flex items-center gap-2">
+      <img src="{{ user_avatar_url(user.id, user.avatar) }}" class="w-7 h-7 rounded-full" alt="" />
+      <span class="text-sm text-[#dbdee1]">{{ user.username }}</span>
+      {% if user.is_owner %}
+      <span class="text-xs px-1.5 py-0.5 rounded bg-discord/20 text-discord border border-discord/30">Owner</span>
+      {% endif %}
+    </div>
+    <a href="/logout" class="text-sm text-[#80848e] hover:text-[#f23430] transition-colors">Logout</a>
+  </div>
+</nav>
+{% endif %}
+
+<main class="{% block main_class %}max-w-5xl mx-auto px-6 py-8{% endblock %}">
+  {% block content %}{% endblock %}
+</main>
+
+</body>
+</html>

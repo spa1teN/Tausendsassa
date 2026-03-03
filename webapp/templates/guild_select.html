@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Server Selection{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-semibold text-white">Select a server</h1>
+  <p class="text-sm text-[#80848e] mt-1">
+    Only servers where you have admin permissions and the bot is active.
+  </p>
+</div>
+
+{% if guilds %}
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+  {% for guild in guilds %}
+  <a href="/guild/{{ guild.id }}"
+     class="card p-5 flex items-center gap-4 hover:border-discord/50 hover:bg-[#313338] transition-all group">
+    {% if guild.icon %}
+    <img src="{{ guild_icon_url(guild.id, guild.icon) }}"
+         class="w-12 h-12 rounded-2xl flex-shrink-0" alt="" />
+    {% else %}
+    <div class="w-12 h-12 rounded-2xl bg-discord/20 border border-discord/30 flex items-center justify-center flex-shrink-0">
+      <span class="text-discord font-semibold text-sm">
+        {{ guild.name[0] | upper }}
+      </span>
+    </div>
+    {% endif %}
+    <div class="min-w-0">
+      <p class="text-white font-medium truncate group-hover:text-discord transition-colors">
+        {{ guild.name }}
+      </p>
+      <p class="text-xs text-[#80848e] mt-0.5">ID: {{ guild.id }}</p>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="card p-8 text-center text-[#80848e]">
+  <p>No servers found.</p>
+  <p class="text-sm mt-1">Make sure the bot is active on at least one of your servers and you have admin permissions there.</p>
+</div>
+{% endif %}
+{% endblock %}
