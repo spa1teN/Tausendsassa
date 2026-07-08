@@ -350,6 +350,12 @@ class FeedCog(commands.Cog):
             st["failures"] = 0
             st["last_success"] = datetime.utcnow()
             retry_handler.record_success(operation_id)
+            feed_id = feed_cfg.get("id")
+            if feed_id and self.bot.db:
+                try:
+                    await self.bot.db.feeds.reset_failure_count(feed_id)
+                except Exception:
+                    self.log.warning(f"Failed to persist feed health for {name}", exc_info=True)
             return embeds or []
 
         except Exception as e:
@@ -357,6 +363,13 @@ class FeedCog(commands.Cog):
             retry_handler.record_failure(operation_id, e)
 
             consecutive_failures = retry_handler.get_failure_count(operation_id)
+
+            feed_id = feed_cfg.get("id")
+            if feed_id and self.bot.db:
+                try:
+                    await self.bot.db.feeds.increment_failure_count(feed_id)
+                except Exception:
+                    self.log.warning(f"Failed to persist feed health for {name}", exc_info=True)
 
             self.log.error(
                 f"Error polling feed {name} in guild {guild_id} (attempt {consecutive_failures}): {e}",

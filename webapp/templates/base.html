@@ -4,19 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Tausendsassa{% endblock %} — Admin</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            discord: { DEFAULT: '#5865F2', dark: '#4752C4' },
-            surface: { DEFAULT: '#1e1f22', card: '#2b2d31', input: '#383a40' },
-          }
-        }
-      }
-    }
-  </script>
+  <link rel="icon" type="image/png" href="/static/favicon.png" />
+  <link rel="stylesheet" href="/static/tailwind.css" />
   <style>
     body { background-color: #1e1f22; color: #dbdee1; font-family: system-ui, sans-serif; }
     .card { background: #2b2d31; border: 1px solid #3f4147; border-radius: 8px; }
@@ -36,6 +25,9 @@
   <div class="flex items-center gap-4">
     {% if guild is defined %}
     <a href="/guilds" class="text-sm text-[#80848e] hover:text-white transition-colors">← Server list</a>
+    {% endif %}
+    {% if user is defined and user.is_owner %}
+    <a href="/db/" class="text-sm text-[#80848e] hover:text-white transition-colors">🗄️ DB Browser</a>
     {% endif %}
     <div class="flex items-center gap-2">
       <img src="{{ user_avatar_url(user.id, user.avatar) }}" class="w-7 h-7 rounded-full" alt="" />

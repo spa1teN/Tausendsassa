@@ -114,3 +114,33 @@ class ModerationRepository(BaseRepository):
                 await self.set_join_role(guild_id, value)
             else:
                 await self.clear_join_role(guild_id)
+
+    # ==========================================
+    # Moderation Action Log
+    # ==========================================
+
+    async def log_action(
+        self,
+        guild_id: int,
+        action: str,
+        target_id: int = None,
+        moderator_id: int = None,
+        reason: str = None
+    ) -> None:
+        """Record a moderation action (join/leave/kick/ban/unban/timeout) for stats."""
+        await self.execute(
+            """INSERT INTO moderation_log (guild_id, action, target_id, moderator_id, reason)
+               VALUES ($1, $2, $3, $4, $5)""",
+            guild_id, action, target_id, moderator_id, reason
+        )
+
+    async def get_action_counts(self, guild_id: int) -> Dict[str, int]:
+        """Get moderation action counts for a guild over the last 24h/7d."""
+        row = await self.fetchrow(
+            """SELECT
+                COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') AS last_24h,
+                COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') AS last_7d
+               FROM moderation_log WHERE guild_id = $1""",
+            guild_id
+        )
+        return {'last_24h': row['last_24h'], 'last_7d': row['last_7d']}

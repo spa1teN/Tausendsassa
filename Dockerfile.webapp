@@ -17,6 +17,12 @@ RUN pip install --no-cache-dir -r requirements.webapp.txt
 
 COPY webapp/ ./webapp/
 
+RUN curl -sL -o /usr/local/bin/tailwindcss \
+    https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64 \
+    && chmod +x /usr/local/bin/tailwindcss \
+    && tailwindcss -i webapp/tailwind/input.css -o webapp/static/tailwind.css --minify \
+    && rm /usr/local/bin/tailwindcss
+
 RUN useradd --create-home --shell /bin/bash appuser \
     && chown -R appuser:appuser /app
 USER appuser

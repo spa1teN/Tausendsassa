@@ -253,6 +253,13 @@
         Save
       </button>
     </form>
+    <form action="/guild/{{ guild_id }}/map/delete" method="post" class="mt-2"
+          onsubmit="return confirm('Delete the map for this server?')">
+      <button type="submit"
+              class="text-xs px-3 py-1.5 rounded-lg bg-[#f2343022] text-[#f23430] border border-[#f2343044] hover:bg-[#f2343033] transition-colors">
+        Delete map
+      </button>
+    </form>
     {% else %}
     <p class="text-sm text-[#80848e] text-center py-4">Map not configured.</p>
     {% endif %}

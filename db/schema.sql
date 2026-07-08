@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS calendars (
     last_message_id     BIGINT,
     current_week_start  TIMESTAMP WITH TIME ZONE,
     last_sync           TIMESTAMP WITH TIME ZONE,
+    consecutive_sync_failures INTEGER DEFAULT 0,
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(guild_id, calendar_id)
@@ -193,6 +194,24 @@ CREATE TABLE IF NOT EXISTS map_global_config (
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- ============================================
+-- MODERATION LOG
+-- ============================================
+
+-- Moderation action history (joins/leaves/kicks/bans/timeouts), for stats & health monitoring
+CREATE TABLE IF NOT EXISTS moderation_log (
+    id                  SERIAL PRIMARY KEY,
+    guild_id            BIGINT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
+    action              VARCHAR(32) NOT NULL,   -- join, leave, kick, ban, unban, timeout
+    target_id           BIGINT,
+    moderator_id        BIGINT,
+    reason              TEXT,
+    created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_moderation_log_guild ON moderation_log(guild_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_log_created ON moderation_log(created_at);
 
 -- ============================================
 -- MONITORING
@@ -280,3 +299,4 @@ COMMENT ON TABLE map_settings IS 'Map visual settings and configuration per guil
 COMMENT ON TABLE map_pins IS 'User location pins on guild maps';
 COMMENT ON TABLE map_global_config IS 'Global map configuration (key-value store)';
 COMMENT ON TABLE monitor_messages IS 'Tracks monitor embed messages for auto-updates';
+COMMENT ON TABLE moderation_log IS 'History of moderation actions per guild, for stats and health monitoring';

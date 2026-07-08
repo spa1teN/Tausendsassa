@@ -294,7 +294,7 @@ def find_map_file(guild_id: int, region: str = None) -> Optional[tuple[str, str]
         # Prefer final_map (has pins) over base_map
         for pattern in ["final_map_*.png", "base_map_*.png"]:
             for map_file in guild_cache_dir.glob(pattern):
-                return (f"/static/maps/{guild_id}/{map_file.name}", map_file.name)
+                return (f"static/maps/{guild_id}/{map_file.name}", map_file.name)
 
     # 2. Check shared map_cache directory (default maps)
     shared_cache_dir = BASE_PATH / "cogs" / "map_data" / "map_cache"
@@ -306,11 +306,11 @@ def find_map_file(guild_id: int, region: str = None) -> Optional[tuple[str, str]
             for pattern in ["final_map_*.png", "base_map_*.png"]:
                 for map_file in shared_cache_dir.glob(pattern):
                     if region_lower in map_file.name.lower():
-                        return (f"/static/maps/shared/{map_file.name}", map_file.name)
+                        return (f"static/maps/shared/{map_file.name}", map_file.name)
         # Fallback: return any final_map or base_map
         for pattern in ["final_map_*.png", "base_map_*.png"]:
             for map_file in shared_cache_dir.glob(pattern):
-                return (f"/static/maps/shared/{map_file.name}", map_file.name)
+                return (f"static/maps/shared/{map_file.name}", map_file.name)
 
     return None
 
@@ -372,13 +372,13 @@ def format_guild(guild_id: int, name: str = None, icon_hash: str = None, link: b
     # Use proxy for Discord CDN icons to bypass restrictions
     if icon_hash:
         ext = "gif" if icon_hash.startswith("a_") else "png"
-        icon_url = f"/proxy/discord/icons/{guild_id}/{icon_hash}.{ext}?size=32"
+        icon_url = f"proxy/discord/icons/{guild_id}/{icon_hash}.{ext}?size=32"
         icon_html = f'<img src="{icon_url}" alt="" style="width:20px;height:20px;border-radius:50%;vertical-align:middle;margin-right:6px;" onerror="this.style.display=&apos;none&apos;">'
     else:
         icon_html = '<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:#e5e7eb;vertical-align:middle;margin-right:6px;text-align:center;line-height:20px;font-size:10px;">?</span>'
 
     if link:
-        return f'{icon_html}<a href="/guilds/{guild_id}">{display_name}</a><span class="meta" style="margin-left:6px;font-size:11px;">({guild_id})</span>'
+        return f'{icon_html}<a href="guilds/{guild_id}">{display_name}</a><span class="meta" style="margin-left:6px;font-size:11px;">({guild_id})</span>'
     else:
         return f'{icon_html}{display_name}<span class="meta" style="margin-left:6px;font-size:11px;">({guild_id})</span>'
 
@@ -394,7 +394,7 @@ def format_user(user_id: int, username: str = None, display_name: str = None, av
     # Use proxy for Discord CDN avatars to bypass restrictions
     if avatar_hash:
         ext = "gif" if avatar_hash.startswith("a_") else "png"
-        avatar_url = f"/proxy/discord/avatars/{user_id}/{avatar_hash}.{ext}?size=32"
+        avatar_url = f"proxy/discord/avatars/{user_id}/{avatar_hash}.{ext}?size=32"
         avatar_html = f'<img src="{avatar_url}" alt="" style="width:20px;height:20px;border-radius:50%;vertical-align:middle;margin-right:6px;" onerror="this.style.display=&apos;none&apos;">'
     else:
         avatar_html = '<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:#e5e7eb;vertical-align:middle;margin-right:6px;text-align:center;line-height:20px;font-size:10px;">?</span>'
@@ -643,14 +643,14 @@ def render_page(title: str, body: str, nav_active: str = "") -> HTMLResponse:
         <header>
           <h1>Tausendsassa Database Browser</h1>
           <nav>
-            <a href="/" class="{nav_class('home')}">Home</a>
-            <a href="/guilds" class="{nav_class('guilds')}">Guilds</a>
-            <a href="/feeds" class="{nav_class('feeds')}">Feeds</a>
-            <a href="/calendars" class="{nav_class('calendars')}">Calendars</a>
-            <a href="/maps" class="{nav_class('maps')}">Maps</a>
-            <a href="/cache" class="{nav_class('cache')}">Cache</a>
-            <a href="/monitor" class="{nav_class('monitor')}">Monitor</a>
-            <a href="/logs" class="{nav_class('logs')}">Logs</a>
+            <a href="./" class="{nav_class('home')}">Home</a>
+            <a href="guilds" class="{nav_class('guilds')}">Guilds</a>
+            <a href="feeds" class="{nav_class('feeds')}">Feeds</a>
+            <a href="calendars" class="{nav_class('calendars')}">Calendars</a>
+            <a href="maps" class="{nav_class('maps')}">Maps</a>
+            <a href="cache" class="{nav_class('cache')}">Cache</a>
+            <a href="monitor" class="{nav_class('monitor')}">Monitor</a>
+            <a href="logs" class="{nav_class('logs')}">Logs</a>
           </nav>
         </header>
         <div class="container">
@@ -899,7 +899,7 @@ async def guild_detail(guild_id: int) -> HTMLResponse:
     # Feeds table
     feeds_rows = "".join(f"""
         <tr>
-            <td><a href="/feeds/{f['id']}">{html.escape(f['name'])}</a></td>
+            <td><a href="feeds/{f['id']}">{html.escape(f['name'])}</a></td>
             <td class="meta">{html.escape(f['feed_url'][:50])}...</td>
             <td><span class="pill {'green' if f['enabled'] else 'red'}">{'Aktiv' if f['enabled'] else 'Inaktiv'}</span></td>
             <td>{f['failure_count']}</td>
@@ -909,7 +909,7 @@ async def guild_detail(guild_id: int) -> HTMLResponse:
     # Calendars table
     calendars_rows = "".join(f"""
         <tr>
-            <td><a href="/calendars/{c['id']}">{c['text_channel_id']}</a></td>
+            <td><a href="calendars/{c['id']}">{c['text_channel_id']}</a></td>
             <td class="meta">{html.escape(c['ical_url'][:50])}...</td>
         </tr>
     """ for c in calendars) or '<tr><td colspan="2">Keine Calendars.</td></tr>'
@@ -955,7 +955,7 @@ async def guild_detail(guild_id: int) -> HTMLResponse:
 
         {f'''
         <h3>Map</h3>
-        <p><a href="/maps/{guild_id}" class="btn">View Map Details</a></p>
+        <p><a href="maps/{guild_id}" class="btn">View Map Details</a></p>
         {get_map_preview_html(guild_id, map_settings, discord_attachment_url)}
         <details>
             <summary>Map Settings JSON</summary>
@@ -1001,7 +1001,7 @@ async def list_feeds(
             avatar_html = f'<img src="{html.escape(f["avatar_url"])}" class="avatar-img" alt="" onerror="this.style.display=&apos;none&apos;">'
         items.append(f"""
             <tr>
-                <td>{avatar_html}<a href="/feeds/{f['id']}">{html.escape(f['name'])}</a></td>
+                <td>{avatar_html}<a href="feeds/{f['id']}">{html.escape(f['name'])}</a></td>
                 <td>{format_guild(f['guild_id'], f['guild_name'], f['icon_hash'])}</td>
                 <td class="meta">{html.escape(f['feed_url'][:40])}...</td>
                 <td><span class="pill {status}">{'Aktiv' if f['enabled'] else 'Inaktiv'}</span></td>
@@ -1125,7 +1125,7 @@ async def list_calendars(
     for c in rows:
         items.append(f"""
             <tr>
-                <td><a href="/calendars/{c['id']}">{c['id']}</a></td>
+                <td><a href="calendars/{c['id']}">{c['id']}</a></td>
                 <td>{format_guild(c['guild_id'], c['guild_name'], c['icon_hash'])}</td>
                 <td>{c['text_channel_id']}</td>
                 <td class="meta">{html.escape(c['ical_url'][:40])}...</td>
@@ -1254,7 +1254,7 @@ async def list_maps(
     for m in rows:
         items.append(f"""
             <tr>
-                <td><a href="/maps/{m['guild_id']}">{format_guild(m['guild_id'], m['guild_name'], m['icon_hash'], link=False)}</a></td>
+                <td><a href="maps/{m['guild_id']}">{format_guild(m['guild_id'], m['guild_name'], m['icon_hash'], link=False)}</a></td>
                 <td>{html.escape(m['region'] or 'World')}</td>
                 <td>{m['channel_id'] or '—'}</td>
                 <td><span class="pill yellow">{m['pin_count']} Pins</span></td>
@@ -1539,6 +1539,142 @@ async def cache_overview() -> HTMLResponse:
     return render_page("Cache", body, "cache")
 
 
+def _newest_map_file_mtime(guild_id: int) -> Optional[datetime]:
+    """Return the mtime of the most recently generated map file for a guild, if any."""
+    guild_cache_dir = BASE_PATH / "cogs" / "map_data" / str(guild_id)
+    if not guild_cache_dir.exists():
+        return None
+    newest = None
+    for map_file in guild_cache_dir.glob("*.png"):
+        mtime = datetime.fromtimestamp(map_file.stat().st_mtime)
+        if newest is None or mtime > newest:
+            newest = mtime
+    return newest
+
+
+def _latest_backup() -> Dict[str, Any]:
+    """Find the newest backup archive and its age."""
+    backup_dir = BASE_PATH / "backups"
+    latest_file = None
+    latest_mtime = None
+    if backup_dir.exists():
+        for f in backup_dir.glob("*.sql.gz"):
+            mtime = f.stat().st_mtime
+            if latest_mtime is None or mtime > latest_mtime:
+                latest_mtime = mtime
+                latest_file = f.name
+
+    if latest_mtime is None:
+        return {"latest_file": None, "latest_at": None, "age_hours": None}
+
+    latest_at = datetime.fromtimestamp(latest_mtime)
+    age_hours = (datetime.now() - latest_at).total_seconds() / 3600
+    return {
+        "latest_file": latest_file,
+        "latest_at": latest_at.isoformat(),
+        "age_hours": round(age_hours, 1),
+    }
+
+
+@app.get("/api/dashboard")
+async def api_dashboard() -> Dict[str, Any]:
+    """Aggregated health/status data for all bot features, meant for the external
+    ops dashboard (~/dashboard/). See Tausendsassa/DATA_INTERFACE.md for the schema."""
+    p = await get_pool()
+
+    feed_rows = await p.fetch(
+        """SELECT f.id, f.guild_id, g.name AS guild_name, f.name, f.enabled,
+                  f.failure_count, f.last_success
+           FROM feeds f JOIN guilds g ON g.id = f.guild_id
+           ORDER BY g.name, f.name"""
+    )
+    posts_per_day_rows = await p.fetch(
+        """SELECT date_trunc('day', posted_at) AS day, COUNT(*) AS count
+           FROM posted_entries
+           WHERE posted_at > NOW() - INTERVAL '7 days'
+           GROUP BY day ORDER BY day"""
+    )
+
+    calendar_rows = await p.fetch(
+        """SELECT c.id, c.guild_id, g.name AS guild_name, c.calendar_id,
+                  c.last_sync, c.consecutive_sync_failures
+           FROM calendars c JOIN guilds g ON g.id = c.guild_id
+           ORDER BY g.name, c.calendar_id"""
+    )
+
+    map_rows = await p.fetch(
+        """SELECT ms.guild_id, g.name AS guild_name, ms.region, COUNT(mp.id) AS pin_count
+           FROM map_settings ms
+           JOIN guilds g ON g.id = ms.guild_id
+           LEFT JOIN map_pins mp ON mp.guild_id = ms.guild_id
+           GROUP BY ms.guild_id, g.name, ms.region
+           ORDER BY g.name"""
+    )
+    map_guilds = []
+    total_pins = 0
+    for row in map_rows:
+        last_generated = _newest_map_file_mtime(row["guild_id"])
+        map_guilds.append({
+            "guild_id": str(row["guild_id"]),
+            "guild_name": row["guild_name"],
+            "region": row["region"],
+            "pin_count": row["pin_count"],
+            "last_generated": last_generated.isoformat() if last_generated else None,
+        })
+        total_pins += row["pin_count"]
+
+    moderation_rows = await p.fetch(
+        """SELECT g.id AS guild_id, g.name AS guild_name,
+                  (mc.member_log_webhook IS NOT NULL) AS log_webhook_configured,
+                  COUNT(ml.id) FILTER (WHERE ml.created_at > NOW() - INTERVAL '24 hours') AS actions_24h,
+                  COUNT(ml.id) FILTER (WHERE ml.created_at > NOW() - INTERVAL '7 days') AS actions_7d
+           FROM guilds g
+           LEFT JOIN moderation_config mc ON mc.guild_id = g.id
+           LEFT JOIN moderation_log ml ON ml.guild_id = g.id
+           GROUP BY g.id, g.name, mc.member_log_webhook
+           ORDER BY g.name"""
+    )
+
+    db_size = await p.fetchval("SELECT pg_database_size(current_database())")
+
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "feeds": {
+            "guilds": [
+                dict(r, guild_id=str(r["guild_id"]),
+                     last_success=r["last_success"].isoformat() if r["last_success"] else None)
+                for r in feed_rows
+            ],
+            "posts_per_day": [
+                {"date": r["day"].date().isoformat(), "count": r["count"]}
+                for r in posts_per_day_rows
+            ],
+            "totals": {
+                "active": sum(1 for r in feed_rows if r["enabled"]),
+                "disabled": sum(1 for r in feed_rows if not r["enabled"]),
+                "in_failure": sum(1 for r in feed_rows if r["failure_count"] > 0),
+            },
+        },
+        "calendars": [
+            dict(r, guild_id=str(r["guild_id"]),
+                 last_sync=r["last_sync"].isoformat() if r["last_sync"] else None)
+            for r in calendar_rows
+        ],
+        "map": {
+            "guilds": map_guilds,
+            "total_pins": total_pins,
+        },
+        "moderation": [dict(r, guild_id=str(r["guild_id"])) for r in moderation_rows],
+        "backups": _latest_backup(),
+        "database": {
+            "pool_size": p.get_size(),
+            "pool_idle": p.get_idle_size(),
+            "pool_max": p.get_max_size(),
+            "db_size_mb": round(db_size / (1024 * 1024), 1) if db_size else None,
+        },
+    }
+
+
 @app.get("/monitor", response_class=HTMLResponse)
 async def monitor_overview() -> HTMLResponse:
     p = await get_pool()
@@ -1612,7 +1748,7 @@ async def log_viewer(
     
     # File selector
     file_buttons = " ".join(
-        f'<a href="/logs?file={f}&lines={lines}" class="btn {"" if f != safe_file else "btn-secondary"}">{f}</a>'
+        f'<a href="logs?file={f}&lines={lines}" class="btn {"" if f != safe_file else "btn-secondary"}">{f}</a>'
         for f in log_files
     )
 

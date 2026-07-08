@@ -733,6 +733,8 @@ class CalendarCog(commands.Cog):
 
             if events is None:
                 self.log.warning(f"Failed to fetch calendar events for {calendar.calendar_id}")
+                if self.bot.db:
+                    await self.bot.db.calendars.increment_sync_failure(calendar.id)
                 return
 
             filtered_events = self._filter_events(events, calendar.blacklist or [], calendar.whitelist or [])

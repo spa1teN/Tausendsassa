@@ -104,11 +104,21 @@ class CalendarRepository(BaseRepository):
         )
 
     async def update_last_sync(self, calendar_pk: int) -> None:
-        """Update last sync timestamp."""
+        """Update last sync timestamp and clear the failure streak."""
         await self.execute(
-            "UPDATE calendars SET last_sync = NOW(), updated_at = NOW() WHERE id = $1",
+            """UPDATE calendars SET last_sync = NOW(), consecutive_sync_failures = 0, updated_at = NOW()
+               WHERE id = $1""",
             calendar_pk
         )
+
+    async def increment_sync_failure(self, calendar_pk: int) -> int:
+        """Increment the consecutive iCal fetch failure count and return the new value."""
+        row = await self.fetchrow(
+            """UPDATE calendars SET consecutive_sync_failures = consecutive_sync_failures + 1, updated_at = NOW()
+               WHERE id = $1 RETURNING consecutive_sync_failures""",
+            calendar_pk
+        )
+        return row['consecutive_sync_failures'] if row else 0
 
     async def update_filters(
         self,

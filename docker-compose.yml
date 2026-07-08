@@ -21,8 +21,6 @@ services:
       start_period: 10s
     networks:
       - tausendsassa-network
-    ports:
-      - "5432:5432"  # Expose for local development, remove in production
 
   # Discord Bot
   bot:
@@ -101,8 +99,7 @@ services:
       - ./logs:/app/logs:ro                  # Log viewer (read-only)
       - ./cogs/map_data:/app/cogs/map_data   # Map images + avatar cache (writable)
       - ./resources:/app/resources:ro        # Favicon (read-only)
-    ports:
-      - "8080:8080"
+      - ./backups:/app/backups:ro            # Backup freshness check (read-only)
     networks:
       - tausendsassa-network
 

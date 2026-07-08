@@ -1,6 +1,6 @@
 # Tausendsassa Discord Bot - Technical Documentation
 
-**Last Updated:** March 2026
+**Last Updated:** March 5, 2026
 **Repository:** Tausendsassa Bot  
 **Architecture:** Discord.py 2.x with PostgreSQL Database Backend
 
@@ -23,8 +23,9 @@ Tausendsassa is a multi-purpose Discord bot with RSS feed monitoring, interactiv
 ├── db_browser.py             # FastAPI internal DB browser (port 8080)
 ├── webapp/                   # Admin panel (port 8081, Discord OAuth2)
 │   ├── main.py              # FastAPI app: OAuth2, CRUD routes, DB proxy
+│   ├── static/              # Static assets (favicon.png, JS, CSS)
 │   └── templates/           # Jinja2 templates
-│       ├── base.html        # Nav + layout
+│       ├── base.html        # Nav + layout (DB Browser link in nav for owner)
 │       ├── dashboard.html   # Per-guild: feeds/cal/map/mod forms, map preview, DB tab
 │       ├── map.html         # Public MapLibre globe map
 │       ├── guild_select.html
@@ -194,23 +195,26 @@ AUTHORIZED_USERS=id1,id2,id3
 - Discord OAuth2 login — only guild admins where the bot is present can access
 - Per-guild dashboard with live MapLibre map preview iframe
 - Full CRUD for feeds, calendars, map settings, moderation config
-- DB Browser tab (owner only): proxied at `/db/{path}`, no separate login needed
+- **DB Browser link in top nav** (owner only): visible on all webapp pages, links to `/db/` proxy — no separate login needed
 - Public routes (no auth): `/map/{guild_id}`, `/api/map/{guild_id}/pins`, `/activity`
 
 ### Database Browser (db_browser.py, port 8080)
-- Internal only — accessed via webapp proxy at `/db/` (owner session required)
+- Internal only — port NOT publicly exposed; accessed via webapp proxy at `/db/` (owner session required)
 - FastAPI web interface, system metrics, cog status, feed/map/cal detail views
 - Log viewer, Discord CDN proxy with avatar caching
 
 ## Deployment
 
 ### Docker (Production)
+
+> **Important:** Use `docker compose` (plugin v2), not `docker-compose` (legacy v1 — incompatible with Docker Engine v25+).
+
 ```bash
-docker-compose up -d
+docker compose up -d
 
 # Rebuild after code changes (always use --build, templates are baked in):
-docker-compose up -d --build webapp
-docker-compose up -d --build bot
+docker compose up -d --build webapp
+docker compose up -d --build bot
 
 # After rebuilding webapp, reload nginx (it caches the upstream container IP):
 docker exec <nginx-container> nginx -s reload
@@ -261,13 +265,18 @@ sudo systemctl enable --now tausendsassa-browser
 
 - **Admin webapp** (`webapp/`): Discord OAuth2 panel with full CRUD for feeds, calendars, map settings, moderation
 - **Map preview** in dashboard: live MapLibre globe iframe per guild
-- **DB Browser tab** (owner only): proxied through webapp at `/db/`, no separate login
+- **DB Browser in top nav** (owner only): `🗄️ DB Browser` link in navbar on all webapp pages → `/db/` proxy
+- **DB Browser port closed**: port 8080 no longer publicly exposed — internal Docker network only
+- **PostgreSQL port closed**: port 5432 no longer publicly exposed — internal Docker network only
+- **Map button bug fixed** (`cogs/map.py`): `bot.add_view()` now called with `message_id=` per guild — fixes My Pin / ... buttons in multi-guild deployments
+- **Favicon** added to webapp (`webapp/static/favicon.png`), shown on all pages via `base.html`
 - **MapLibre globe** (`/map/{guild_id}`): upgraded from v4.7.1 → v5.19.0, globe projection via `style.load` event
 - **Removed Nearby/Close-up** features from Discord bot map menu (all code + files deleted)
 - **Explore button** moved to row 0 between `[📍 My Pin]` and `[...]`
 - **Avatar backfill**: `scripts/backfill_avatars.py` to fill missing `avatar_hash` from Discord API
 - **Webapp pin images**: WebGL symbol layers (ImageBitmap) instead of DOM markers — no globe lag
 - `allow_proximity` removed from `/map_create` slash command
+- **Deployment**: use `docker compose` (v2 plugin), not `docker-compose` (v1 — incompatible with Docker Engine v25+)
 
 ## Previous Changes (February 2026)
 

@@ -166,25 +166,31 @@ class MapPinButtonView(discord.ui.View):
         guild_id = str(interaction.guild.id)
         user_id = str(interaction.user.id)
 
-        if guild_id in self.cog.maps and user_id in self.cog.maps[guild_id].get('pins', {}):
-            user_pin = self.cog.maps[guild_id]['pins'][user_id]
-            current_location = user_pin.get('display_name', 'Unknown')
+        try:
+            if guild_id in self.cog.maps and user_id in self.cog.maps[guild_id].get('pins', {}):
+                user_pin = self.cog.maps[guild_id]['pins'][user_id]
+                current_location = user_pin.get('display_name', 'Unknown')
 
-            embed = discord.Embed(
-                title="📍 Your Current Location",
-                description=f"**Location:** {current_location}\n"
-                           f"**Added:** {user_pin.get('timestamp', 'Unknown')}",
-                color=0x7289da
-            )
+                embed = discord.Embed(
+                    title="📍 Your Current Location",
+                    description=f"**Location:** {current_location}\n"
+                               f"**Added:** {user_pin.get('timestamp', 'Unknown')}",
+                    color=0x7289da
+                )
 
-            view = UserPinOptionsView(self.cog, int(guild_id))
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        else:
-            await interaction.response.send_modal(LocationModal(self.cog, int(guild_id)))
+                view = UserPinOptionsView(self.cog, int(guild_id))
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            else:
+                await interaction.response.send_modal(LocationModal(self.cog, int(guild_id)))
+        except discord.NotFound:
+            pass  # Interaction expired before the bot could respond
 
     async def _menu_callback(self, interaction: discord.Interaction):
-        view = MapMenuView(self.cog, int(interaction.guild.id), interaction.user)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        try:
+            view = MapMenuView(self.cog, int(interaction.guild.id), interaction.user)
+            await interaction.response.send_message(view=view, ephemeral=True)
+        except discord.NotFound:
+            pass  # Interaction expired before the bot could respond
 
 
 class UserPinOptionsView(discord.ui.View):

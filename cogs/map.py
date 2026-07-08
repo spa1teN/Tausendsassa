@@ -93,12 +93,15 @@ class MapV2Cog(commands.Cog):
             for guild_id, map_data in self.maps.items():
                 # Get current region from map data
                 region = map_data.get('region', 'world')
-                view = MapPinButtonView(self, region, int(guild_id))
-                self.bot.add_view(view)
-
-                # Update existing map messages with correct view
                 channel_id = map_data.get('channel_id')
                 message_id = map_data.get('message_id')
+                view = MapPinButtonView(self, region, int(guild_id))
+                if message_id:
+                    self.bot.add_view(view, message_id=message_id)
+                else:
+                    self.bot.add_view(view)
+
+                # Update existing map messages with correct view
                 if channel_id and message_id:
                     try:
                         # get_channel uses cache (empty during setup_hook), fall back to API call

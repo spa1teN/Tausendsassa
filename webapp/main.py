@@ -146,7 +146,7 @@ async def login_page(request: Request):
     if request.session.get("user"):
         return RedirectResponse("/guilds")
     error = request.query_params.get("error")
-    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+    return templates.TemplateResponse(request, "login.html", {"error": error})
 
 
 @app.get("/auth/discord")
@@ -252,8 +252,7 @@ async def guild_select(request: Request):
     user = request.session.get("user")
     if not user:
         return RedirectResponse("/login")
-    return templates.TemplateResponse("guild_select.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "guild_select.html", {
         "user": user,
         "guilds": user["guilds"],
     })
@@ -296,8 +295,7 @@ async def dashboard(request: Request, guild_id: int):
             guild_id,
         )
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "dashboard.html", {
         "user": user,
         "guild": dict(guild),
         "guild_id": guild_id,
@@ -366,8 +364,7 @@ async def map_pins_api(guild_id: int):
 @app.get("/activity", response_class=HTMLResponse)
 async def activity_page(request: Request):
     """Discord Activity entry point — public, no login. SDK provides guild_id at runtime."""
-    return templates.TemplateResponse("activity.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "activity.html", {
         "discord_client_id": os.getenv("DISCORD_CLIENT_ID", ""),
     })
 
@@ -395,8 +392,7 @@ async def map_page(request: Request, guild_id: int):
     if not guild:
         raise HTTPException(status_code=404, detail="Guild not found")
 
-    return templates.TemplateResponse("map.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "map.html", {
         "guild_id": guild_id,
         "guild_name": guild["name"],
         "guild_icon": guild_icon_url(str(guild_id), guild["icon_hash"]),
@@ -584,6 +580,16 @@ async def map_settings_update(
                VALUES ($1,$2)
                ON CONFLICT (guild_id) DO UPDATE SET region=$2""",
             guild_id, region,
+        )
+    return RedirectResponse(f"/guild/{guild_id}", status_code=303)
+
+
+@app.post("/guild/{guild_id}/map/delete")
+async def map_delete(request: Request, guild_id: int):
+    await _require_guild_access(request, guild_id)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM map_settings WHERE guild_id=$1", guild_id
         )
     return RedirectResponse(f"/guild/{guild_id}", status_code=303)
 

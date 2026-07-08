@@ -226,8 +226,22 @@ class ModerationCog(commands.Cog):
 
         return ", ".join(parts)
 
-    async def send_log_message(self, guild_id: int, embed: discord.Embed):
+    async def send_log_message(
+        self,
+        guild_id: int,
+        embed: discord.Embed,
+        action: str = None,
+        target_id: int = None,
+        moderator_id: int = None,
+        reason: str = None,
+    ):
         """Send log message to configured webhook"""
+        if action and self.bot.db:
+            try:
+                await self.bot.db.moderation.log_action(guild_id, action, target_id, moderator_id, reason)
+            except Exception:
+                self.log.warning(f"Failed to persist moderation action '{action}' for guild {guild_id}", exc_info=True)
+
         config = await self.get_guild_config(guild_id)
         webhook_url = config.get('member_log_webhook')
 
@@ -262,7 +276,12 @@ class ModerationCog(commands.Cog):
                         self.recently_banned_kicked.add(user_id)
 
                         embed = self.create_kick_embed(entry.target, entry.user, entry.reason, guild)
-                        await self.send_log_message(guild.id, embed)
+                        await self.send_log_message(
+                            guild.id, embed, action="kick",
+                            target_id=entry.target.id,
+                            moderator_id=entry.user.id if entry.user else None,
+                            reason=entry.reason,
+                        )
                         return True
         except discord.Forbidden:
             pass
@@ -295,7 +314,7 @@ class ModerationCog(commands.Cog):
 
         # Send log message with role assignment status
         embed = self.create_join_embed(member, role_assigned=role_assigned, role_name=role_name)
-        await self.send_log_message(member.guild.id, embed)
+        await self.send_log_message(member.guild.id, embed, action="join", target_id=member.id)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
@@ -306,8 +325,11 @@ class ModerationCog(commands.Cog):
             return
 
         # Check for recent kick in audit logs
-        if await self.check_for_kick(member.guild, member.id):
-            return
+        try:
+            if await self.check_for_kick(member.guild, member.id):
+                return
+        except discord.NotFound:
+            return  # Bot was removed from the guild
 
         # Calculate duration on server
         duration = None
@@ -318,7 +340,10 @@ class ModerationCog(commands.Cog):
 
         # Send log message
         embed = self.create_leave_embed(member, duration)
-        await self.send_log_message(member.guild.id, embed)
+        try:
+            await self.send_log_message(member.guild.id, embed, action="leave", target_id=member.id)
+        except discord.NotFound:
+            pass  # Guild no longer accessible
 
     @commands.Cog.listener()
     async def on_member_ban(self, guild: discord.Guild, user: discord.User):
@@ -344,7 +369,12 @@ class ModerationCog(commands.Cog):
             pass
 
         embed = self.create_ban_embed(user, moderator, reason, guild)
-        await self.send_log_message(guild.id, embed)
+        await self.send_log_message(
+            guild.id, embed, action="ban",
+            target_id=user.id,
+            moderator_id=moderator.id if moderator else None,
+            reason=reason,
+        )
 
     @commands.Cog.listener()
     async def on_member_unban(self, guild: discord.Guild, user: discord.User):
@@ -360,7 +390,11 @@ class ModerationCog(commands.Cog):
             pass
 
         embed = self.create_unban_embed(user, moderator, guild)
-        await self.send_log_message(guild.id, embed)
+        await self.send_log_message(
+            guild.id, embed, action="unban",
+            target_id=user.id,
+            moderator_id=moderator.id if moderator else None,
+        )
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
@@ -385,7 +419,12 @@ class ModerationCog(commands.Cog):
                 duration = self.calculate_duration(datetime.now(timezone.utc) - duration_delta)
 
                 embed = self.create_timeout_embed(after, duration, moderator, reason)
-                await self.send_log_message(after.guild.id, embed)
+                await self.send_log_message(
+                    after.guild.id, embed, action="timeout",
+                    target_id=after.id,
+                    moderator_id=moderator.id if moderator else None,
+                    reason=reason,
+                )
 
     @app_commands.command(name="mod_dashboard", description="Manage current moderation configuration")
     @app_commands.default_permissions(administrator=True)

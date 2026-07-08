@@ -281,7 +281,21 @@ class Tausendsassa(commands.Bot):
                 log.info(f"✅ Loaded extension {ext}")
             except Exception as e:
                 log.exception(f"❌ Failed to load extension {ext}: {e}")
-        
+
+        @self.tree.error
+        async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+            if isinstance(error, discord.app_commands.errors.TransformerError):
+                msg = "Couldn't find that channel. Please select it from the dropdown menu."
+                try:
+                    if interaction.response.is_done():
+                        await interaction.followup.send(msg, ephemeral=True)
+                    else:
+                        await interaction.response.send_message(msg, ephemeral=True)
+                except discord.NotFound:
+                    pass
+            else:
+                log.error(f"App command error in '{interaction.command and interaction.command.name}'", exc_info=error)
+
         try:
             await self.tree.sync()
             log.info("✅ All slash commands synced globally")
@@ -348,13 +362,13 @@ class Tausendsassa(commands.Bot):
         """Handle command errors and log them"""
         if isinstance(error, commands.CommandNotFound):
             return  # Ignore unknown commands
-        
+
         log.error(
             f"Command error in '{ctx.command}' used by {ctx.author} (ID: {ctx.author.id}) "
             f"in guild {ctx.guild.id if ctx.guild else 'DM'}: {error}",
             exc_info=True
         )
-    
+
     async def on_error(self, event, *args, **kwargs):
         """Handle general bot errors"""
         log.error(f"Bot error in event '{event}'", exc_info=True)

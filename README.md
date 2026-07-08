@@ -10,7 +10,7 @@ A powerful, modular Discord bot with RSS feed integration, interactive maps, cal
 - 🛡️ **Moderation Tools**: Server management with join-role and member log webhook
 - 📊 **System Monitoring**: Health checks and multi-server overview
 - 🌐 **Admin Web Panel**: Discord OAuth2-protected panel to manage all guild settings, with live map preview and DB browser tab
-- 🗄️ **DB Browser**: Internal read-only database browser (accessible via admin panel owner tab)
+- 🗄️ **DB Browser**: Internal read-only database browser (owner-only, accessible via admin panel nav)
 - 🐳 **Docker Support**: Full docker-compose deployment
 
 ## Quick Start
@@ -76,8 +76,8 @@ WEBAPP_URL=https://your-domain.com        # used by bot for the Explore button U
 # Bot
 python bot.py
 
-# Database Browser (port 8080, internal)
-uvicorn db_browser:app --host 0.0.0.0 --port 8080
+# Database Browser (port 8080, internal only)
+uvicorn db_browser:app --host 127.0.0.1 --port 8080
 
 # Admin Web Panel (port 8081, public)
 uvicorn webapp.main:app --host 0.0.0.0 --port 8081
@@ -87,14 +87,16 @@ uvicorn webapp.main:app --host 0.0.0.0 --port 8081
 
 ### Docker (recommended)
 
+> **Important:** Use `docker compose` (plugin v2), not `docker-compose` (legacy v1).
+
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 **Containers:**
 - `bot` — Discord bot
-- `db` — PostgreSQL
-- `db-browser` — Internal DB browser (port 8080, not exposed publicly)
+- `postgres` — PostgreSQL (internal only, not exposed publicly)
+- `db-browser` — Internal DB browser (internal only, not exposed publicly)
 - `webapp` — Admin panel (port 8081, behind nginx)
 
 **Volume Structure:**
@@ -103,11 +105,14 @@ docker-compose up -d
 
 After code changes, rebuild specific containers:
 ```bash
-docker-compose up -d --build webapp   # webapp only
-docker-compose up -d --build bot      # bot only
+docker compose up -d --build webapp   # webapp only
+docker compose up -d --build bot      # bot only
 # Then reload nginx if behind reverse proxy:
 docker exec <nginx-container> nginx -s reload
 ```
+
+> **Security note:** The `postgres` and `db-browser` containers must NOT have public port mappings.
+> Access the DB browser at `https://your-domain.com/db/` (owner login required).
 
 ### Systemd
 
@@ -120,9 +125,10 @@ sudo systemctl enable --now tausendsassa-browser
 
 ```
 ├── bot.py                  # Main entry point
-├── db_browser.py           # Internal DB browser (port 8080)
+├── db_browser.py           # Internal DB browser (port 8080, internal only)
 ├── webapp/                 # Admin panel (port 8081)
 │   ├── main.py             # FastAPI app, OAuth2, CRUD routes, DB proxy
+│   ├── static/             # Static assets (favicon, JS, CSS)
 │   └── templates/          # Jinja2 templates (base, dashboard, map, login...)
 ├── cogs/                   # Discord feature modules
 │   ├── feeds.py            # RSS monitoring
@@ -135,7 +141,7 @@ sudo systemctl enable --now tausendsassa-browser
 │       └── avatar_cache/   # Discord CDN cache
 ├── core/                   # Shared utilities
 ├── db/                     # Database layer (repositories)
-└── resources/              # Static files (help docs, ToS, privacy)
+└── resources/              # Static files (help docs, ToS, privacy, favicon)
 ```
 
 ## Admin Web Panel
@@ -148,7 +154,7 @@ Located at `WEBAPP_BASE_URL` (requires Discord OAuth2 login).
 - **Calendar**: Full CRUD for iCal calendars
 - **Map**: Region selector with live globe preview
 - **Moderation**: Member log webhook + auto-join role
-- **DB Browser tab** (owner only): Embedded DB browser via proxy at `/db/`
+- **DB Browser** (owner only): Link in top nav bar → `/db/` proxy, no separate login needed
 
 ## Map System
 
@@ -199,15 +205,15 @@ Download Natural Earth shapefiles to `cogs/map_data/`:
 | DISCORD_CLIENT_ID | Yes (webapp) | — | OAuth2 app client ID |
 | DISCORD_CLIENT_SECRET | Yes (webapp) | — | OAuth2 app client secret |
 | WEBAPP_BASE_URL | Yes (webapp) | http://localhost:8081 | Public URL of the admin panel |
-| WEBAPP_SECRET_KEY | Yes (webapp) | random | Session secret key |
+| WEBAPP_SECRET_KEY | Yes (webapp) | — | Session secret key |
 | WEBAPP_URL | No | — | Used by bot for Explore button link |
 | BOT_OWNER_ID | No | — | Discord user ID of bot owner |
 | DB_HOST | No | localhost | Database host |
 | DB_PORT | No | 5432 | Database port |
 | DB_NAME | No | tausendsassa | Database name |
 | DB_USER | No | tausendsassa | Database user |
-| DB_PASSWORD | No | — | Database password |
-| DB_BROWSER_URL | No | http://localhost:8080 | Internal DB browser URL (used by webapp proxy) |
+| DB_PASSWORD | Yes | — | Database password |
+| DB_BROWSER_URL | No | http://db-browser:8080 | Internal DB browser URL (webapp proxy) |
 | LOG_WEBHOOK_URL | No | — | Discord webhook for logs |
 | RSS_POLL_INTERVAL_MINUTES | No | 1.0 | Feed poll interval |
 | MAP_PIN_COOLDOWN_MINUTES | No | 30 | Pin update cooldown |
