@@ -8,9 +8,7 @@ A powerful, modular Discord bot with RSS feed integration, interactive maps, cal
 - 🗺️ **Interactive Maps**: Globe-view MapLibre map with user location pins, public URL per guild
 - 📅 **Calendar Integration**: iCal calendar management with Discord event automation
 - 🛡️ **Moderation Tools**: Server management with join-role and member log webhook
-- 📊 **System Monitoring**: Health checks and multi-server overview
-- 🌐 **Admin Web Panel**: Discord OAuth2-protected panel to manage all guild settings, with live map preview and DB browser tab
-- 🗄️ **DB Browser**: Internal read-only database browser (owner-only, accessible via admin panel nav)
+- 🌐 **Admin Web Panel**: Discord OAuth2-protected panel to manage all guild settings, with live map preview
 - 🐳 **Docker Support**: Full docker-compose deployment
 
 ## Quick Start
@@ -112,7 +110,7 @@ docker exec <nginx-container> nginx -s reload
 ```
 
 > **Security note:** The `postgres` and `db-browser` containers must NOT have public port mappings.
-> Access the DB browser at `https://your-domain.com/db/` (owner login required).
+> The DB browser is internal only — not reachable through the admin webapp or any public URL.
 
 ### Systemd
 
@@ -127,14 +125,13 @@ sudo systemctl enable --now tausendsassa-browser
 ├── bot.py                  # Main entry point
 ├── db_browser.py           # Internal DB browser (port 8080, internal only)
 ├── webapp/                 # Admin panel (port 8081)
-│   ├── main.py             # FastAPI app, OAuth2, CRUD routes, DB proxy
+│   ├── main.py             # FastAPI app, OAuth2, CRUD routes
 │   ├── static/             # Static assets (favicon, JS, CSS)
 │   └── templates/          # Jinja2 templates (base, dashboard, map, login...)
 ├── cogs/                   # Discord feature modules
 │   ├── feeds.py            # RSS monitoring
 │   ├── map.py              # Geographic maps
 │   ├── calendar.py         # iCal integration
-│   ├── monitor.py          # System monitoring
 │   └── map_data/           # Map data directory
 │       ├── ne_10m_*.shp    # Natural Earth shapefiles
 │       ├── map_cache/      # Base map cache
@@ -154,7 +151,6 @@ Located at `WEBAPP_BASE_URL` (requires Discord OAuth2 login).
 - **Calendar**: Full CRUD for iCal calendars
 - **Map**: Region selector with live globe preview
 - **Moderation**: Member log webhook + auto-join role
-- **DB Browser** (owner only): Link in top nav bar → `/db/` proxy, no separate login needed
 
 ## Map System
 
@@ -184,8 +180,6 @@ The public map at `/map/{guild_id}` requires no login and shows all pins on a gl
 - `/help` — Show help
 
 ### Owner Commands
-- `/owner_monitor` — System status
-- `/owner_server_monitor` — Multi-server overview
 - `/owner_poll_now` — Force RSS poll
 
 ## Required Map Data
@@ -213,8 +207,6 @@ Download Natural Earth shapefiles to `cogs/map_data/`:
 | DB_NAME | No | tausendsassa | Database name |
 | DB_USER | No | tausendsassa | Database user |
 | DB_PASSWORD | Yes | — | Database password |
-| DB_BROWSER_URL | No | http://db-browser:8080 | Internal DB browser URL (webapp proxy) |
-| LOG_WEBHOOK_URL | No | — | Discord webhook for logs |
 | RSS_POLL_INTERVAL_MINUTES | No | 1.0 | Feed poll interval |
 | MAP_PIN_COOLDOWN_MINUTES | No | 30 | Pin update cooldown |
 | AUTHORIZED_USERS | No | — | Admin user IDs |

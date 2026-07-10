@@ -46,7 +46,6 @@ services:
       - DB_USER=${DB_USER:-tausendsassa}
       - DB_PASSWORD=${DB_PASSWORD:?Database password required}
       # Logging
-      - LOG_WEBHOOK_URL=${LOG_WEBHOOK_URL}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - BACKUP_WEBHOOK_URL=${BACKUP_WEBHOOK_URL}
       # RSS Configuration
@@ -75,6 +74,7 @@ services:
     volumes:
       - ./cogs/map_data:/app/cogs/map_data  # Natural Earth shapefiles + map cache
       - ./logs:/app/logs                     # Log files
+      - ./data:/app/data                     # Status snapshot for dashboard (see DATA_INTERFACE.md)
     networks:
       - tausendsassa-network
 
@@ -124,7 +124,6 @@ services:
       - WEBAPP_SECRET_KEY=${WEBAPP_SECRET_KEY:?Secret key required}
       - WEBAPP_BASE_URL=${WEBAPP_BASE_URL:-http://localhost:8081}
       - BOT_OWNER_ID=${BOT_OWNER_ID:-485051896655249419}
-      - DB_BROWSER_URL=http://db-browser:8080
     ports:
       - "8081:8081"
     networks:

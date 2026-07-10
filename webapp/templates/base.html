@@ -26,9 +26,6 @@
     {% if guild is defined %}
     <a href="/guilds" class="text-sm text-[#80848e] hover:text-white transition-colors">← Server list</a>
     {% endif %}
-    {% if user is defined and user.is_owner %}
-    <a href="/db/" class="text-sm text-[#80848e] hover:text-white transition-colors">🗄️ DB Browser</a>
-    {% endif %}
     <div class="flex items-center gap-2">
       <img src="{{ user_avatar_url(user.id, user.avatar) }}" class="w-7 h-7 rounded-full" alt="" />
       <span class="text-sm text-[#dbdee1]">{{ user.username }}</span>

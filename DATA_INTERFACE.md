@@ -23,11 +23,43 @@ Alle Discord-Snowflake-IDs (`guild_id`) werden als **String** ausgegeben, nicht 
 Zahl — 64-Bit-IDs verlieren sonst beim Parsen in JavaScript Präzision
 (`Number.MAX_SAFE_INTEGER` liegt bei ~9×10¹⁵, Snowflakes liegen bei ~1.5×10¹⁸).
 
+## Bot-Prozess-Status (`data/status.json`)
+
+Da der `db-browser`-Container keinen Zugriff auf den laufenden `discord.py`-Client
+hat, schreibt der Bot-Prozess selbst periodisch `data/status.json` (siehe
+`core/status_reporter.py`, mirror von RoaringBots gleichnamigem Modul). Das
+Dashboard liest diese Datei zusätzlich zum `/api/dashboard`-Endpoint und mergt
+ihren `"bot"`-Abschnitt in die Antwort (`app/tausendsassa_status.py` im
+Dashboard-Projekt). Relevanter Ausschnitt:
+
+```jsonc
+{
+  "bot": {
+    "updated_at": "2026-07-09T12:00:00Z",
+    "gateway_status": "connected",
+    "loaded_cogs": ["feeds", "map", "moderation", "calendar", "help"],
+    "latency_ms": 45,
+    "counters": {
+      "log_errors": {"15m": 0, "1h": 0, "24h": 1},     // ERROR+/CRITICAL-Log-Einträge (ersetzt das alte Discord-Webhook-Logging)
+      "log_messages": {"15m": 8, "1h": 210, "24h": 5100}  // jeder INFO+-Log-Eintrag - "Aktivität", nie leer solange der Bot läuft
+    },
+    "error_log": [                          // rollierendes Log der letzten WARNING+-Einträge, für den Dashboard-Graphen-Klick-Popup
+      {"at": "2026-07-09T12:00:00Z", "level": "ERROR", "logger": "tausendsassa.feeds", "message": "..."}
+    ]
+  }
+}
+```
+
 ## Response-Schema
 
 ```jsonc
 {
   "generated_at": "2026-07-08T22:15:32.945096",  // Server-Lokalzeit, ISO 8601
+
+  "stats": {
+    "guild_count": 32,        // COUNT(*) FROM guilds
+    "total_members": 48213    // SUM(guilds.member_count)
+  },
 
   "feeds": {
     "guilds": [
@@ -68,7 +100,13 @@ Zahl — 64-Bit-IDs verlieren sonst beim Parsen in JavaScript Präzision
         "last_generated": "2026-07-08T18:35:31.438688"  // mtime der neuesten PNG in cogs/map_data/{guild_id}/, oder null
       }
     ],
-    "total_pins": 312
+    "total_pins": 312,
+    "region_counts": [
+      { "region": "world", "guild_count": 9 }           // GROUP BY map_settings.region, absteigend
+    ],
+    "pins_by_country": [
+      { "country_code": "de", "count": 141 }             // GROUP BY map_pins.country_code, absteigend; ISO 3166-1 alpha-2, lowercase (aus Nominatim address.country_code). Pins ohne country_code (vor der Einführung dieses Felds gesetzt) sind ausgeschlossen, nicht null gezählt.
+    ]
   },
 
   "moderation": [
@@ -80,6 +118,18 @@ Zahl — 64-Bit-IDs verlieren sonst beim Parsen in JavaScript Präzision
       "actions_7d": 11
     }
   ],
+
+  "moderation_events": [
+    {
+      "guild_id": "1374489236215955506",
+      "guild_name": "Die Grünen",
+      "action": "kick",                    // join | leave | kick | ban | unban | timeout
+      "target_id": "485051896655249419",   // Discord-Snowflake als String
+      "moderator_id": "485051896655249419",
+      "reason": "Spam",                    // oder null
+      "created_at": "2026-07-08T21:12:03.512+00:00"
+    }
+  ],                                       // rohe moderation_log-Zeilen, guild-übergreifend, letzte 7 Tage, aufsteigend sortiert
 
   "backups": {
     "latest_file": "dump_20260301_094502.sql.gz",  // Dateiname oder null wenn keins vorhanden
@@ -114,6 +164,17 @@ verharren, wurden folgende Stellen angeschlossen:
 | `cogs/moderation.py` | `send_log_message()` bekommt einen `action`-Parameter und schreibt jede Moderationsaktion (join/leave/kick/ban/unban/timeout) in `moderation_log`, bevor der Discord-Webhook gesendet wird |
 | `db_browser.py` | neuer Endpoint `GET /api/dashboard`, Helper `_newest_map_file_mtime()` und `_latest_backup()` |
 | `docker-compose.yml` | `./backups:/app/backups:ro` in den `db-browser`-Service gemountet (für die Backup-Altersprüfung) |
+| `db/schema.sql` | `map_pins.country_code` (Spalte, VARCHAR(2)) |
+| `core/map_gen.py` | `geocode_location()` liest zusätzlich `address.country_code` aus der Nominatim-Antwort aus und gibt es zurück |
+| `cogs/map.py` | `country_code` wird durchgereicht bis zum Pin-Insert/-Update |
+| `db/repositories/map_repository.py` | `set_pin()` bekommt Parameter `country_code` |
+| `db/repositories/moderation_repository.py` | neu: `get_recent_actions(hours=24)` (rohe Zeilen, guild-übergreifend — ungenutzt von `db_browser.py`, das dieselbe Query direkt fährt, siehe unten) |
+| `db_browser.py` | `map.region_counts`, `map.pins_by_country`, `moderation_events` (letzte 7 Tage, guild-übergreifend) im `/api/dashboard`-Response ergänzt |
+
+**Hinweis zu `pins_by_country`:** `country_code` wird nur für Pins gesetzt, die
+*nach* diesem Rollout erstellt/aktualisiert wurden — bestehende Pins bleiben
+`NULL`, bis ihr Nutzer den Pin neu setzt. Kein Backfill (gleiches Vorgehen wie
+bei `posted_entries.entry_link`).
 
 Alle DB-Schreibvorgänge sind in `try/except` gekapselt und dürfen die
 eigentliche Bot-Funktion (Feed posten, Kalender syncen, Log-Webhook senden)

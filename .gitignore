@@ -16,6 +16,8 @@ cogs/map_data/
 cogs/map_data/
 !cogs/map_data/ne*
 db/connect_to_db.sh
+data/status.json
+data/.status-*
 
 # Environment and secrets
 .env

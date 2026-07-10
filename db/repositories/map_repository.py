@@ -145,13 +145,14 @@ class MapRepository(BaseRepository):
         display_name: str = None,
         location: str = None,
         color: str = '#FF0000',
-        avatar_hash: str = None
+        avatar_hash: str = None,
+        country_code: str = None
     ) -> MapPin:
         """Set or update a pin for a user."""
         row = await self.fetchrow(
             """INSERT INTO map_pins
-               (guild_id, user_id, latitude, longitude, username, display_name, location, color, avatar_hash)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               (guild_id, user_id, latitude, longitude, username, display_name, location, color, avatar_hash, country_code)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                ON CONFLICT (guild_id, user_id) DO UPDATE SET
                    latitude = $3,
                    longitude = $4,
@@ -160,9 +161,10 @@ class MapRepository(BaseRepository):
                    location = COALESCE($7, map_pins.location),
                    color = COALESCE($8, map_pins.color),
                    avatar_hash = COALESCE($9, map_pins.avatar_hash),
+                   country_code = COALESCE($10, map_pins.country_code),
                    updated_at = NOW()
                RETURNING *""",
-            guild_id, user_id, latitude, longitude, username, display_name, location, color, avatar_hash
+            guild_id, user_id, latitude, longitude, username, display_name, location, color, avatar_hash, country_code
         )
         return MapPin.from_record(row)
 

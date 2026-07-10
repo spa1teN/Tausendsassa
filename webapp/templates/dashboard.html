@@ -27,12 +27,6 @@
           class="tab-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-[#3f4147] border-b-0 bg-[#2b2d31] text-white -mb-px">
     Overview
   </button>
-  {% if db_browser_url %}
-  <button onclick="showTab('db')" id="tab-db"
-          class="tab-btn px-4 py-2 text-sm font-medium rounded-t-lg text-[#80848e] hover:text-white transition-colors">
-    DB Browser
-  </button>
-  {% endif %}
 </div>
 
 {# ── Overview Panel ───────────────────────────────────────────────────────── #}
@@ -404,16 +398,6 @@
 
 </div>{# end grid #}
 </div>{# end panel-overview #}
-
-{# ── DB Browser Panel (owner-only) ───────────────────────────────────────── #}
-{% if db_browser_url %}
-<div id="panel-db" style="display:none">
-  <iframe src="/db/guilds/{{ guild_id }}"
-          class="w-full rounded-lg border border-[#3f4147]"
-          style="height: 80vh; border: 0;"
-          loading="lazy"></iframe>
-</div>
-{% endif %}
 
 <script>
 function showTab(name) {

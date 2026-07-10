@@ -11,7 +11,6 @@ from db.repositories.calendar_repository import CalendarRepository
 from db.repositories.map_repository import MapRepository
 from db.repositories.moderation_repository import ModerationRepository
 from db.repositories.cache_repository import CacheRepository
-from db.repositories.monitor_repository import MonitorRepository
 
 __all__ = [
     'BaseRepository',
@@ -21,5 +20,4 @@ __all__ = [
     'MapRepository',
     'ModerationRepository',
     'CacheRepository',
-    'MonitorRepository',
 ]

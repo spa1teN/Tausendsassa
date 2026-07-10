@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from db.repositories.map_repository import MapRepository
     from db.repositories.moderation_repository import ModerationRepository
     from db.repositories.cache_repository import CacheRepository
-    from db.repositories.monitor_repository import MonitorRepository
     from db.repositories.guild_repository import GuildRepository
 
 log = logging.getLogger("tausendsassa.db")
@@ -153,14 +152,6 @@ class DatabaseManager:
             from db.repositories.cache_repository import CacheRepository
             self._repositories['cache'] = CacheRepository(self.pool)
         return self._repositories['cache']
-
-    @property
-    def monitor(self) -> 'MonitorRepository':
-        """Get the monitor repository."""
-        if 'monitor' not in self._repositories:
-            from db.repositories.monitor_repository import MonitorRepository
-            self._repositories['monitor'] = MonitorRepository(self.pool)
-        return self._repositories['monitor']
 
 
 # Global accessor function

@@ -144,3 +144,15 @@ class ModerationRepository(BaseRepository):
             guild_id
         )
         return {'last_24h': row['last_24h'], 'last_7d': row['last_7d']}
+
+    async def get_recent_actions(self, hours: int = 24) -> list:
+        """Get raw moderation log rows across all guilds from the last N hours."""
+        return await self.fetch(
+            """SELECT ml.guild_id, g.name AS guild_name, ml.action, ml.target_id,
+                      ml.moderator_id, ml.reason, ml.created_at
+               FROM moderation_log ml
+               JOIN guilds g ON g.id = ml.guild_id
+               WHERE ml.created_at > NOW() - INTERVAL '1 hour' * $1
+               ORDER BY ml.created_at""",
+            hours
+        )

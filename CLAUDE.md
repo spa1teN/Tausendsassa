@@ -12,7 +12,7 @@ Tausendsassa is a multi-purpose Discord bot with RSS feed monitoring, interactiv
 - **RSS/Atom Feed Integration**: Real-time monitoring and posting with Bluesky support
 - **Interactive Geographic Maps**: User location mapping with customizable regions
 - **Calendar Management**: iCal/ICS integration with Discord event automation
-- **Server Administration**: Moderation tools and system monitoring
+- **Server Administration**: Moderation tools
 - **Multi-Server Support**: Per-guild configuration with database isolation
 
 ## Architecture
@@ -22,11 +22,11 @@ Tausendsassa is a multi-purpose Discord bot with RSS feed monitoring, interactiv
 ├── bot.py                    # Main entry point with DNS wait logic
 ├── db_browser.py             # FastAPI internal DB browser (port 8080)
 ├── webapp/                   # Admin panel (port 8081, Discord OAuth2)
-│   ├── main.py              # FastAPI app: OAuth2, CRUD routes, DB proxy
+│   ├── main.py              # FastAPI app: OAuth2, CRUD routes
 │   ├── static/              # Static assets (favicon.png, JS, CSS)
 │   └── templates/           # Jinja2 templates
-│       ├── base.html        # Nav + layout (DB Browser link in nav for owner)
-│       ├── dashboard.html   # Per-guild: feeds/cal/map/mod forms, map preview, DB tab
+│       ├── base.html        # Nav + layout
+│       ├── dashboard.html   # Per-guild: feeds/cal/map/mod forms, map preview
 │       ├── map.html         # Public MapLibre globe map
 │       ├── guild_select.html
 │       ├── login.html
@@ -36,10 +36,7 @@ Tausendsassa is a multi-purpose Discord bot with RSS feed monitoring, interactiv
 │   ├── map.py               # Geographic mapping with user pins
 │   ├── calendar.py          # iCal integration with Discord events
 │   ├── moderation.py        # Server management
-│   ├── monitor.py           # System health monitoring
-│   ├── server_monitor.py    # Multi-server statistics
 │   ├── help.py              # Dynamic help system
-│   ├── whenistrumpgone.py   # Novelty countdown
 │   └── map_data/            # Map shapefiles and cache
 │       ├── ne_10m_*.shp     # Natural Earth shapefiles
 │       ├── map_cache/       # Base map cache
@@ -118,9 +115,6 @@ moderation_config (guild_id, log_channel_id, mute_role_id, settings)
 webhook_cache (channel_id, webhook_id, webhook_url, webhook_name)
 entry_hashes (guid, content_hash, created_at)
 feed_cache (feed_url, etag, last_modified, feed_hash, cached_at)
-
--- Monitoring
-monitor_messages (id, channel_id, message_id, monitor_type, auto_update_interval)
 ```
 
 ### Systemd Services
@@ -159,7 +153,6 @@ WEBAPP_URL=https://your-domain.com        # bot uses this for Explore button
 DB_BROWSER_URL=http://db-browser:8080     # internal URL for DB proxy
 
 # Optional
-LOG_WEBHOOK_URL=discord_webhook_for_logging
 RSS_POLL_INTERVAL_MINUTES=1.0
 RSS_RATE_LIMIT_SECONDS=30
 RSS_FAILURE_THRESHOLD=3
@@ -195,13 +188,13 @@ AUTHORIZED_USERS=id1,id2,id3
 - Discord OAuth2 login — only guild admins where the bot is present can access
 - Per-guild dashboard with live MapLibre map preview iframe
 - Full CRUD for feeds, calendars, map settings, moderation config
-- **DB Browser link in top nav** (owner only): visible on all webapp pages, links to `/db/` proxy — no separate login needed
 - Public routes (no auth): `/map/{guild_id}`, `/api/map/{guild_id}/pins`, `/activity`
 
 ### Database Browser (db_browser.py, port 8080)
-- Internal only — port NOT publicly exposed; accessed via webapp proxy at `/db/` (owner session required)
+- Internal only — port NOT publicly exposed, no longer reachable through the webapp (proxy removed)
 - FastAPI web interface, system metrics, cog status, feed/map/cal detail views
 - Log viewer, Discord CDN proxy with avatar caching
+- `GET /api/dashboard` — aggregated JSON health status for the external ops dashboard (see `DATA_INTERFACE.md`)
 
 ## Deployment
 
@@ -235,7 +228,7 @@ docker exec <nginx-container> nginx -s reload
 - `./logs:/app/logs:ro` — Log access (read-only)
 
 #### Runtime Mode Detection
-Both the bot (Monitor cog) and db_browser automatically detect whether they're running in Docker or Systemd:
+db_browser automatically detects whether it's running in Docker or Systemd:
 - **Docker**: Reads container uptime from PID 1, shows container ID
 - **Systemd**: Reads bot uptime from PID file, shows service status
 
@@ -265,8 +258,9 @@ sudo systemctl enable --now tausendsassa-browser
 
 - **Admin webapp** (`webapp/`): Discord OAuth2 panel with full CRUD for feeds, calendars, map settings, moderation
 - **Map preview** in dashboard: live MapLibre globe iframe per guild
-- **DB Browser in top nav** (owner only): `🗄️ DB Browser` link in navbar on all webapp pages → `/db/` proxy
+- **DB Browser removed from the public webapp**: no more nav link or `/db/` proxy — internal only, reachable within the Docker network for `GET /api/dashboard`
 - **DB Browser port closed**: port 8080 no longer publicly exposed — internal Docker network only
+- **Monitor cogs removed**: `cogs/monitor.py`, `cogs/server_monitor.py` and the `monitor_messages` table deleted — superseded by the external ops dashboard (see `DATA_INTERFACE.md`)
 - **PostgreSQL port closed**: port 5432 no longer publicly exposed — internal Docker network only
 - **Map button bug fixed** (`cogs/map.py`): `bot.add_view()` now called with `message_id=` per guild — fixes My Pin / ... buttons in multi-guild deployments
 - **Favicon** added to webapp (`webapp/static/favicon.png`), shown on all pages via `base.html`
@@ -288,6 +282,6 @@ sudo systemctl enable --now tausendsassa-browser
 - Avatar hash storage for map pins
 - Moved data/ to cogs/map_data/, documentation to resources/
 - Removed backup.py cog (replaced by database)
-- Docker/Systemd runtime detection in Monitor cog and db_browser
+- Docker/Systemd runtime detection in db_browser
 - Discord CDN proxy with avatar caching in db_browser
 - Fixed Docker volume mounts for shared map_data directory

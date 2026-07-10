@@ -427,6 +427,7 @@ class FeedCog(commands.Cog):
                     is_update = e.get("is_update", False)
                     message_info = e.get("message_info")
                     guid = e.get("guid")
+                    entry_link = e.get("entry_link")
 
                     if is_update and message_info:
                         message_id, old_channel_id = message_info
@@ -436,7 +437,7 @@ class FeedCog(commands.Cog):
                                 if webhook:
                                     await webhook.edit_message(message_id, embed=embed)
                                     self.log.info("Updated existing embed for %s", name)
-                                    await rss.mark_entry_posted(guild_id, guid, message_id, channel.id, self.bot.db, feed_id=feed_cfg.get("id"))
+                                    await rss.mark_entry_posted(guild_id, guid, message_id, channel.id, self.bot.db, feed_id=feed_cfg.get("id"), entry_link=entry_link)
                                     updates_made += 1
                                     continue
                             except Exception as ex:
@@ -456,7 +457,7 @@ class FeedCog(commands.Cog):
                         msg = await self._post_via_bot_single(channel, embed, feed_cfg, name)
 
                     if msg:
-                        await rss.mark_entry_posted(guild_id, guid, msg.id, channel.id, self.bot.db, feed_id=feed_cfg.get("id"))
+                        await rss.mark_entry_posted(guild_id, guid, msg.id, channel.id, self.bot.db, feed_id=feed_cfg.get("id"), entry_link=entry_link)
                         posts_made += 1
 
                         if feed_cfg.get("crosspost"):

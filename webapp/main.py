@@ -40,7 +40,6 @@ DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
 WEBAPP_SECRET_KEY     = os.getenv("WEBAPP_SECRET_KEY", secrets.token_hex(32))
 WEBAPP_BASE_URL       = os.getenv("WEBAPP_BASE_URL", "http://localhost:8081").rstrip("/")
 BOT_OWNER_ID          = int(os.getenv("BOT_OWNER_ID", "485051896655249419"))
-DB_BROWSER_URL        = os.getenv("DB_BROWSER_URL", "http://localhost:8080")
 
 DB_HOST     = os.getenv("DB_HOST", "localhost")
 DB_PORT     = int(os.getenv("DB_PORT", "5432"))
@@ -304,7 +303,6 @@ async def dashboard(request: Request, guild_id: int):
         "map_settings": dict(map_settings) if map_settings else None,
         "pin_count": pin_count or 0,
         "mod_config": dict(mod_config) if mod_config else None,
-        "db_browser_url": DB_BROWSER_URL if user["is_owner"] else None,
     })
 
 
@@ -615,43 +613,3 @@ async def moderation_update(
             int(join_role_id) if join_role_id else None,
         )
     return RedirectResponse(f"/guild/{guild_id}", status_code=303)
-
-
-# ── DB Browser proxy (owner-only) ─────────────────────────────────────────────
-
-@app.get("/db")
-async def db_root(request: Request):
-    user = request.session.get("user")
-    if not user or not user.get("is_owner"):
-        raise HTTPException(status_code=403, detail="Owner access only")
-    return RedirectResponse("/db/")
-
-
-@app.api_route("/db/{path:path}", methods=["GET"])
-async def db_proxy(request: Request, path: str = ""):
-    user = request.session.get("user")
-    if not user or not user.get("is_owner"):
-        raise HTTPException(status_code=403, detail="Owner access only")
-
-    target_url = f"{DB_BROWSER_URL}/{path}"
-    if request.url.query:
-        target_url += f"?{request.url.query}"
-
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        try:
-            resp = await client.get(target_url)
-        except Exception:
-            raise HTTPException(status_code=502, detail="DB browser unreachable")
-
-    content_type = resp.headers.get("content-type", "")
-    body = resp.content
-
-    if "text/html" in content_type:
-        # Inject <base href="/db/"> so relative paths resolve through the proxy
-        body = body.replace(b"<head>", b'<head><base href="/db/">', 1)
-
-    return Response(
-        content=body,
-        status_code=resp.status_code,
-        media_type=content_type,
-    )

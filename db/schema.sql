@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS posted_entries (
     message_id          BIGINT,
     channel_id          BIGINT,
     content_hash        VARCHAR(32),
+    entry_link          TEXT,
     posted_at           TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(guild_id, guid)
 );
@@ -179,6 +180,7 @@ CREATE TABLE IF NOT EXISTS map_pins (
     display_name        VARCHAR(255),
     avatar_hash         VARCHAR(64),            -- Discord avatar hash for CDN URL
     location            VARCHAR(255),
+    country_code        VARCHAR(2),
     latitude            DOUBLE PRECISION NOT NULL,
     longitude           DOUBLE PRECISION NOT NULL,
     color               VARCHAR(7) DEFAULT '#FF0000',
@@ -212,22 +214,6 @@ CREATE TABLE IF NOT EXISTS moderation_log (
 
 CREATE INDEX IF NOT EXISTS idx_moderation_log_guild ON moderation_log(guild_id);
 CREATE INDEX IF NOT EXISTS idx_moderation_log_created ON moderation_log(created_at);
-
--- ============================================
--- MONITORING
--- ============================================
-
--- Monitor message tracking
-CREATE TABLE IF NOT EXISTS monitor_messages (
-    id                  SERIAL PRIMARY KEY,
-    channel_id          BIGINT NOT NULL,
-    message_id          BIGINT NOT NULL,
-    monitor_type        VARCHAR(50) NOT NULL,  -- 'system' or 'server'
-    auto_update_interval INTEGER DEFAULT 300,
-    last_update         TIMESTAMP WITH TIME ZONE,
-    created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(channel_id, monitor_type)
-);
 
 -- ============================================
 -- INDEXES FOR PERFORMANCE
@@ -298,5 +284,4 @@ COMMENT ON TABLE calendar_reminders IS 'Tracks sent calendar reminders';
 COMMENT ON TABLE map_settings IS 'Map visual settings and configuration per guild';
 COMMENT ON TABLE map_pins IS 'User location pins on guild maps';
 COMMENT ON TABLE map_global_config IS 'Global map configuration (key-value store)';
-COMMENT ON TABLE monitor_messages IS 'Tracks monitor embed messages for auto-updates';
 COMMENT ON TABLE moderation_log IS 'History of moderation actions per guild, for stats and health monitoring';

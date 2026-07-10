@@ -253,7 +253,8 @@ class MapV2Cog(commands.Cog):
                 display_name=pin_data.get('display_name'),
                 location=pin_data.get('location'),
                 color=pin_data.get('color', '#FF0000'),
-                avatar_hash=pin_data.get('avatar_hash')
+                avatar_hash=pin_data.get('avatar_hash'),
+                country_code=pin_data.get('country_code')
             )
         else:
             # Fallback to file-based storage
@@ -507,7 +508,7 @@ class MapV2Cog(commands.Cog):
             )
             return
 
-        lat, lng, display_name = geocode_result
+        lat, lng, display_name, country_code = geocode_result
     
         # Check if coordinates are within the map region bounds
         region = self.maps[guild_id]['region']
@@ -537,7 +538,8 @@ class MapV2Cog(commands.Cog):
             'lat': lat,
             'lng': lng,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'avatar_hash': avatar_hash
+            'avatar_hash': avatar_hash,
+            'country_code': country_code
         }
         self.maps[guild_id]['pins'][user_id] = pin_data
 
@@ -620,7 +622,7 @@ class MapV2Cog(commands.Cog):
             )
             return
 
-        lat, lng, display_name = geocode_result
+        lat, lng, display_name, country_code = geocode_result
     
         # Check if coordinates are within the map region bounds
         region = self.maps[guild_id]['region']
@@ -650,7 +652,8 @@ class MapV2Cog(commands.Cog):
             'lat': lat,
             'lng': lng,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'avatar_hash': avatar_hash
+            'avatar_hash': avatar_hash,
+            'country_code': country_code
         }
         self.maps[guild_id]['pins'][user_id] = pin_data
 

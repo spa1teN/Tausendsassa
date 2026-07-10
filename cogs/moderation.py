@@ -283,7 +283,7 @@ class ModerationCog(commands.Cog):
                             reason=entry.reason,
                         )
                         return True
-        except discord.Forbidden:
+        except (discord.Forbidden, discord.NotFound):
             pass
         return False
 

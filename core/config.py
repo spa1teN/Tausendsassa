@@ -44,10 +44,6 @@ class BotConfig:
     
     # Logging Configuration
     @property
-    def log_webhook_url(self) -> Optional[str]:
-        return os.getenv("LOG_WEBHOOK_URL")
-    
-    @property
     def log_level(self) -> str:
         return os.getenv("LOG_LEVEL", "INFO").upper()
     
@@ -187,7 +183,6 @@ class BotConfig:
         log.info(f"  Max Cache Size: {self.max_cache_size_mb} MB")
         log.info(f"  HTTP Timeout: {self.http_timeout} seconds")
         log.info(f"  Authorized Users: {len(self.authorized_users)} users")
-        log.info(f"  Webhook Logging: {'Enabled' if self.log_webhook_url else 'Disabled'}")
         log.info(f"  Database: {self.db_host}:{self.db_port}/{self.db_name}")
 
 # Global configuration instance

@@ -573,7 +573,7 @@ class MapGenerator:
                 except:
                     draw.text((x-5, y-5), str(count), fill='white')
 
-    async def geocode_location(self, location: str) -> Optional[Tuple[float, float, str]]:
+    async def geocode_location(self, location: str) -> Optional[Tuple[float, float, str, Optional[str]]]:
         """Geocode a location string to coordinates."""
         try:
             url = "https://nominatim.openstreetmap.org/search"
@@ -586,7 +586,7 @@ class MapGenerator:
             headers = {
                 'User-Agent': 'DiscordBot-MapPins/2.0'
             }
-            
+
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params, headers=headers) as response:
                     if response.status == 200:
@@ -595,8 +595,9 @@ class MapGenerator:
                             lat = float(data[0]['lat'])
                             lng = float(data[0]['lon'])
                             display_name = data[0].get('display_name', location)
-                            return (lat, lng, display_name)
-            
+                            country_code = data[0].get('address', {}).get('country_code')
+                            return (lat, lng, display_name, country_code)
+
             return None
             
         except Exception as e:

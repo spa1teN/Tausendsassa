@@ -226,7 +226,7 @@ def get_cog_status() -> List[Dict[str, Any]]:
     log_dir = BASE_PATH / "logs"
     
     # Expected cogs based on bot.py
-    expected_cogs = ["feeds", "map", "monitor", "server_monitor", "moderation", "whenistrumpgone", "help", "calendar"]
+    expected_cogs = ["feeds", "map", "moderation", "help", "calendar"]
     
     for cog_name in expected_cogs:
         log_file = log_dir / f"{cog_name}.log"
@@ -649,7 +649,6 @@ def render_page(title: str, body: str, nav_active: str = "") -> HTMLResponse:
             <a href="calendars" class="{nav_class('calendars')}">Calendars</a>
             <a href="maps" class="{nav_class('maps')}">Maps</a>
             <a href="cache" class="{nav_class('cache')}">Cache</a>
-            <a href="monitor" class="{nav_class('monitor')}">Monitor</a>
             <a href="logs" class="{nav_class('logs')}">Logs</a>
           </nav>
         </header>
@@ -1594,6 +1593,15 @@ async def api_dashboard() -> Dict[str, Any]:
            WHERE posted_at > NOW() - INTERVAL '7 days'
            GROUP BY day ORDER BY day"""
     )
+    recent_posts_rows = await p.fetch(
+        """SELECT pe.posted_at, f.name AS feed_name, g.name AS guild_name,
+                  pe.guild_id, pe.channel_id, pe.message_id, pe.entry_link
+           FROM posted_entries pe
+           JOIN feeds f ON f.id = pe.feed_id
+           JOIN guilds g ON g.id = pe.guild_id
+           ORDER BY pe.posted_at DESC
+           LIMIT 20"""
+    )
 
     calendar_rows = await p.fetch(
         """SELECT c.id, c.guild_id, g.name AS guild_name, c.calendar_id,
@@ -1623,6 +1631,16 @@ async def api_dashboard() -> Dict[str, Any]:
         })
         total_pins += row["pin_count"]
 
+    region_count_rows = await p.fetch(
+        """SELECT region, COUNT(*) AS n FROM map_settings
+           GROUP BY region ORDER BY n DESC"""
+    )
+    pins_by_country_rows = await p.fetch(
+        """SELECT country_code, COUNT(*) AS n FROM map_pins
+           WHERE country_code IS NOT NULL
+           GROUP BY country_code ORDER BY n DESC"""
+    )
+
     moderation_rows = await p.fetch(
         """SELECT g.id AS guild_id, g.name AS guild_name,
                   (mc.member_log_webhook IS NOT NULL) AS log_webhook_configured,
@@ -1634,11 +1652,26 @@ async def api_dashboard() -> Dict[str, Any]:
            GROUP BY g.id, g.name, mc.member_log_webhook
            ORDER BY g.name"""
     )
+    moderation_event_rows = await p.fetch(
+        """SELECT ml.guild_id, g.name AS guild_name, ml.action, ml.target_id,
+                  ml.moderator_id, ml.reason, ml.created_at
+           FROM moderation_log ml
+           JOIN guilds g ON g.id = ml.guild_id
+           WHERE ml.created_at > NOW() - INTERVAL '7 days'
+           ORDER BY ml.created_at"""
+    )
 
     db_size = await p.fetchval("SELECT pg_database_size(current_database())")
+    guild_stats = await p.fetchrow(
+        "SELECT COUNT(*) AS guild_count, COALESCE(SUM(member_count), 0) AS total_members FROM guilds"
+    )
 
     return {
         "generated_at": datetime.now().isoformat(),
+        "stats": {
+            "guild_count": guild_stats["guild_count"],
+            "total_members": guild_stats["total_members"],
+        },
         "feeds": {
             "guilds": [
                 dict(r, guild_id=str(r["guild_id"]),
@@ -1648,6 +1681,19 @@ async def api_dashboard() -> Dict[str, Any]:
             "posts_per_day": [
                 {"date": r["day"].date().isoformat(), "count": r["count"]}
                 for r in posts_per_day_rows
+            ],
+            "recent_posts": [
+                {
+                    "posted_at": r["posted_at"].isoformat() if r["posted_at"] else None,
+                    "feed_name": r["feed_name"],
+                    "guild_name": r["guild_name"],
+                    "entry_link": r["entry_link"],
+                    "message_url": (
+                        f"https://discord.com/channels/{r['guild_id']}/{r['channel_id']}/{r['message_id']}"
+                        if r["channel_id"] and r["message_id"] else None
+                    ),
+                }
+                for r in recent_posts_rows
             ],
             "totals": {
                 "active": sum(1 for r in feed_rows if r["enabled"]),
@@ -1663,8 +1709,26 @@ async def api_dashboard() -> Dict[str, Any]:
         "map": {
             "guilds": map_guilds,
             "total_pins": total_pins,
+            "region_counts": [
+                {"region": r["region"], "guild_count": r["n"]} for r in region_count_rows
+            ],
+            "pins_by_country": [
+                {"country_code": r["country_code"], "count": r["n"]} for r in pins_by_country_rows
+            ],
         },
         "moderation": [dict(r, guild_id=str(r["guild_id"])) for r in moderation_rows],
+        "moderation_events": [
+            {
+                "guild_id": str(r["guild_id"]),
+                "guild_name": r["guild_name"],
+                "action": r["action"],
+                "target_id": str(r["target_id"]) if r["target_id"] is not None else None,
+                "moderator_id": str(r["moderator_id"]) if r["moderator_id"] is not None else None,
+                "reason": r["reason"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in moderation_event_rows
+        ],
         "backups": _latest_backup(),
         "database": {
             "pool_size": p.get_size(),
@@ -1673,40 +1737,6 @@ async def api_dashboard() -> Dict[str, Any]:
             "db_size_mb": round(db_size / (1024 * 1024), 1) if db_size else None,
         },
     }
-
-
-@app.get("/monitor", response_class=HTMLResponse)
-async def monitor_overview() -> HTMLResponse:
-    p = await get_pool()
-
-    async with p.acquire() as conn:
-        messages = await conn.fetch("""
-            SELECT * FROM monitor_messages
-            ORDER BY created_at DESC
-            LIMIT 50
-        """)
-
-    messages_rows = "".join(f"""
-        <tr>
-            <td>{m['channel_id']}</td>
-            <td>{m['message_id']}</td>
-            <td>{html.escape(m['monitor_type'])}</td>
-            <td>{m['auto_update_interval'] or '—'}</td>
-            <td>{format_datetime(m['created_at'])}</td>
-        </tr>
-    """ for m in messages) or '<tr><td colspan="5">Keine Monitor Messages.</td></tr>'
-
-    body = f"""
-    <h1>Monitor Messages</h1>
-
-    <div class="card">
-        <table>
-            <thead><tr><th>Channel</th><th>Message</th><th>Typ</th><th>Update Interval</th><th>Erstellt</th></tr></thead>
-            <tbody>{messages_rows}</tbody>
-        </table>
-    </div>
-    """
-    return render_page("Monitor", body, "monitor")
 
 
 @app.get("/logs", response_class=HTMLResponse)

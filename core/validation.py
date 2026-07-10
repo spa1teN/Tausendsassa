@@ -38,21 +38,6 @@ class ConfigValidator:
         return True, "Discord token format is valid."
     
     @staticmethod
-    def validate_webhook_url(url: str) -> Tuple[bool, str]:
-        """Validate Discord webhook URL"""
-        if not url:
-            return True, "Webhook URL is optional."
-        
-        webhook_pattern = r'^https://discord\.com/api/webhooks/\d+/[A-Za-z0-9_-]+$'
-        if not re.match(webhook_pattern, url):
-            return False, (
-                "Invalid webhook URL format. Should be: "
-                "https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN"
-            )
-        
-        return True, "Webhook URL format is valid."
-    
-    @staticmethod
     def validate_numeric_config(value: str, name: str, min_val: int = 0, max_val: int = None) -> Tuple[bool, str]:
         """Validate numeric configuration values"""
         try:
@@ -264,12 +249,7 @@ def run_full_validation() -> Dict[str, Any]:
     token = os.getenv("DISCORD_TOKEN", "")
     valid, msg = ConfigValidator.validate_discord_token(token)
     add_result(valid, f"Discord Token: {msg}")
-    
-    webhook_url = os.getenv("LOG_WEBHOOK_URL", "")
-    if webhook_url:
-        valid, msg = ConfigValidator.validate_webhook_url(webhook_url)
-        add_result(valid, f"Webhook URL: {msg}")
-    
+
     # User IDs validation
     user_ids = os.getenv("AUTHORIZED_USERS", "")
     if user_ids:

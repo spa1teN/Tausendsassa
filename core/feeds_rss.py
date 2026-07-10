@@ -232,6 +232,7 @@ async def poll(feed_cfg: Dict[str, Any], guild_id: int, db,
         if not guid:
             continue
         guid = _normalize_guid(guid, url)
+        entry_link = entry.get("link") or entry.get("url")
 
         current_hash = _create_content_hash(entry)
 
@@ -247,10 +248,11 @@ async def poll(feed_cfg: Dict[str, Any], guild_id: int, db,
                     embed["is_update"] = True
                     embed["message_info"] = message_info
                     embed["guid"] = guid
+                    embed["entry_link"] = entry_link
                     new_embeds.append(embed)
 
                     # Update hash in posted_entries
-                    await db.feeds.mark_entry_posted(guild_id, guid, content_hash=current_hash)
+                    await db.feeds.mark_entry_posted(guild_id, guid, content_hash=current_hash, entry_link=entry_link)
             continue
 
         # Process new entries
@@ -260,12 +262,13 @@ async def poll(feed_cfg: Dict[str, Any], guild_id: int, db,
 
         embed = _create_embed(entry, feed_cfg, guild_id)
         embed["guid"] = guid
+        embed["entry_link"] = entry_link
         embed["is_update"] = False
 
         new_embeds.append(embed)
 
         # Mark as sent (without message info yet - will be updated after posting)
-        await db.feeds.mark_entry_posted(guild_id, guid, content_hash=current_hash)
+        await db.feeds.mark_entry_posted(guild_id, guid, content_hash=current_hash, entry_link=entry_link)
 
     return new_embeds
 
@@ -283,6 +286,7 @@ async def _check_recent_updates(parsed, feed_cfg: Dict[str, Any],
         if not guid:
             continue
         guid = _normalize_guid(guid, url)
+        entry_link = entry.get("link") or entry.get("url")
 
         already_sent = await db.feeds.is_entry_posted(guild_id, guid)
         if not already_sent:
@@ -303,10 +307,11 @@ async def _check_recent_updates(parsed, feed_cfg: Dict[str, Any],
                 embed["is_update"] = True
                 embed["message_info"] = message_info
                 embed["guid"] = guid
+                embed["entry_link"] = entry_link
                 new_embeds.append(embed)
 
                 # Update hash in posted_entries
-                await db.feeds.mark_entry_posted(guild_id, guid, content_hash=current_hash)
+                await db.feeds.mark_entry_posted(guild_id, guid, content_hash=current_hash, entry_link=entry_link)
 
     return new_embeds
 
@@ -337,9 +342,10 @@ def _create_embed(entry, feed_cfg: Dict[str, Any], guild_id: int = None) -> Dict
 
 
 async def mark_entry_posted(guild_id: int, guid: str, message_id: int,
-                            channel_id: int, db, feed_id: int = None) -> None:
+                            channel_id: int, db, feed_id: int = None,
+                            entry_link: str = None) -> None:
     """Mark an entry as posted with message information"""
-    await db.feeds.mark_entry_posted(guild_id, guid, message_id, channel_id, feed_id=feed_id)
+    await db.feeds.mark_entry_posted(guild_id, guid, message_id, channel_id, feed_id=feed_id, entry_link=entry_link)
 
 
 async def cleanup_old_entries(guild_id: int, db) -> int:
