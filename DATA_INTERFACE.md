@@ -40,12 +40,14 @@ Dashboard-Projekt). Relevanter Ausschnitt:
     "loaded_cogs": ["feeds", "map", "moderation", "calendar", "help"],
     "latency_ms": 45,
     "counters": {
-      "log_errors": {"15m": 0, "1h": 0, "24h": 1},     // ERROR+/CRITICAL-Log-Einträge (ersetzt das alte Discord-Webhook-Logging)
-      "log_messages": {"15m": 8, "1h": 210, "24h": 5100}  // jeder INFO+-Log-Eintrag - "Aktivität", nie leer solange der Bot läuft
+      "slash_commands": {"15m": 3, "1h": 45, "24h": 1200},    // Slash-Command-Ausführungen
+      "interactions": {"15m": 8, "1h": 110, "24h": 2900},     // alle Interaktionen (Slash + Component)
+      "component_interactions": {"15m": 5, "1h": 65, "24h": 1700},  // Button/Select
+      "log_errors": {"15m": 0, "1h": 0, "24h": 1},
+      "log_messages": {"15m": 8, "1h": 210, "24h": 5100}
     },
-    "error_log": [                          // rollierendes Log der letzten WARNING+-Einträge, für den Dashboard-Graphen-Klick-Popup
+    "error_log": [                          // rollierendes Log der letzten WARNING+-Einträge
       {"at": "2026-07-09T12:00:00Z", "level": "ERROR", "logger": "tausendsassa.feeds", "message": "..."}
-    ]
   }
 }
 ```
@@ -131,6 +133,32 @@ Dashboard-Projekt). Relevanter Ausschnitt:
     }
   ],                                       // rohe moderation_log-Zeilen, guild-übergreifend, letzte 7 Tage, aufsteigend sortiert
 
+  "feedback": [
+    {
+      "guild_id": "1236376790516367392",
+      "guild_name": "Uni",
+      "total": 12,
+      "new": 3,                             // status = 'new'
+      "important": 1,                       // status = 'important'
+      "in_progress": 2,                     // status = 'in_progress'
+      "archived": 6                         // status = 'archived'
+    }
+  ],                                       // feedback table, per-guild counts by status, nur Guilds mit ≥1 Eintrag
+
+
+  "analytics": {
+    "page_views_today": 1391,                  // page_view events for CURRENT_DATE
+    "page_views_1h": 10,                       // page_view events for current hour
+    "by_type": [
+      {"event_type": "page_view", "total": 1391},
+      {"event_type": "map_view", "total": 42},
+      {"event_type": "slash_command", "total": 315},
+      {"event_type": "component_interaction", "total": 87}
+    ],                                         // SUM der letzten 30 Tage, per event_type
+    "alltime": [
+      {"event_type": "page_view", "total": 1391}
+    ]                                          // SUM aller Zeiten, gleiche Struktur wie by_type
+  },
   "backups": {
     "latest_file": "dump_20260301_094502.sql.gz",  // Dateiname oder null wenn keins vorhanden
     "latest_at": "2026-03-01T09:45:03.302452",
@@ -170,6 +198,15 @@ verharren, wurden folgende Stellen angeschlossen:
 | `db/repositories/map_repository.py` | `set_pin()` bekommt Parameter `country_code` |
 | `db/repositories/moderation_repository.py` | neu: `get_recent_actions(hours=24)` (rohe Zeilen, guild-übergreifend — ungenutzt von `db_browser.py`, das dieselbe Query direkt fährt, siehe unten) |
 | `db_browser.py` | `map.region_counts`, `map.pins_by_country`, `moderation_events` (letzte 7 Tage, guild-übergreifend) im `/api/dashboard`-Response ergänzt |
+| `db/schema.sql` | neue Tabelle `feedback` (Feedback/Contact-Form-Submissions) |
+| `cogs/feedback.py` | `/feedback` Slash-Command + Feedback-Modal, schreibt in `feedback`-Tabelle |
+| `core/feedback_menu.py` | CV2-Menü für Subject + Anonym vor Modal-Öffnung |
+| `db/repositories/feedback_repository.py` | `submit()` für das Schreiben von Feedback-Einträgen |
+| `db_browser.py` | `feedback`-Key im `/api/dashboard`-Response (per-guild counts by status); `GET /api/feedback` + `PATCH /api/feedback/{id}/status` als separate Endpoints |
+| `core/analytics.py` | `track_event()` UPSERT-Helfer für `analytics`-Tabelle (Pattern der Webapp-Middleware) |
+| `bot.py` | `on_interaction` + `on_app_command_completion` schreiben `component_interaction` / `slash_command` in `analytics` |
+| `webapp/main.py` | Middleware trackt jetzt zusätzlich `map_view` für Seiten unter `/map/{guild_id}` |
+| `db_browser.py` | `GET /api/analytics/daily` (tägliche Breakdowns, kumulativ), `GET /api/analytics/totals` (all-time Summen), `analytics.alltime` im `/api/dashboard` |
 
 **Hinweis zu `pins_by_country`:** `country_code` wird nur für Pins gesetzt, die
 *nach* diesem Rollout erstellt/aktualisiert wurden — bestehende Pins bleiben
@@ -183,34 +220,95 @@ nur geloggt.
 
 **Bewusst nicht instrumentiert** (Aufwand/Nutzen unklar, siehe Zusatzvorschläge
 in der Dashboard-Diskussion):
-- Discord-Gateway-Latenz (`bot.latency`) — nirgends exponiert, bräuchte einen
-  eigenen Live-Endpoint direkt im Bot-Prozess (dieser Endpoint läuft im
-  separaten `db-browser`-Container, der nur DB-Zugriff hat, kein Zugriff auf
-  den laufenden `discord.py`-Client).
+- Discord-Gateway-Latenz (`bot.latency`) — wird nur via `status.json` exposed, kein DB-Backing.
 - CPU/RAM-Verlaufsdaten aus `cogs/monitor.py` (`cpu_history`/`ram_history`) —
   liegen ebenfalls nur im Bot-Prozess im RAM, nicht in der DB.
 
+**Neu instrumentiert (Juli 2026):**
+- Slash-Commands + Component-Interactions → `analytics`-Tabelle (all-time kumulativ via `/api/analytics/daily?cumulative=true`)
+- 3D-Karten-Aufrufe → `analytics`-Tabelle als `map_view` (separat von `page_view`)
+
+## Feedback API
+
+Für schreibende Zugriffe auf das Feedback-System (Status ändern, als gelesen
+markieren, Admin-Notizen setzen) stellt `db_browser.py` zusätzliche REST-Endpoints
+bereit. Alle Antworten sind `application/json`.
+
+### Endpunkte
+
+| Methode | Pfad | Query/Body | Antwort |
+|---|---|---|---|
+| `GET` | `/api/feedback` | `?guild_id=X&status=Y` (status optional) | `[{id, guild_id, guild_name, user_id, is_anonymous, subject, message, status, read, admin_note, created_at}]` |
+| `GET` | `/api/feedback/unread-count` | `?guild_id=X` (required) | `{"count": 3}` |
+| `PATCH` | `/api/feedback/{id}/read` | — | `{"ok": true}` |
+| `PATCH` | `/api/feedback/{id}/status` | `?status=X` | `{"ok": true}` |
+| `PATCH` | `/api/feedback/{id}/note` | `?note=...` | `{"ok": true}` |
+| `GET` | `/api/bot/avatar` | — | `{"bot_avatar_url": "..."}` |
+
+**Status-Werte:** `new` | `important` | `in_progress` | `archived`
+
+**`guild_name`** wird via JOIN mit der `guilds`-Tabelle angereichert.
+**User-Info (Name, Avatar)** ist im `db_browser` nicht direkt auflösbar (kein Discord-Client).
+Sie wird vom Dashboard-Prozess über die Bot-API (`tausendsassa-bot:8090`) angereichert:
+Der Dashboard-Proxy (`app/main.py`) ruft nach dem Feedback-Fetch `GET /api/bot/users?ids=…` auf
+und merged `user_name`/`user_avatar_url` in die Antwort. Siehe Abschnitt [Bot-eigene API](#bot-eigene-api-port-8090-im-bot-prozess).
+
+**`admin_note`** ist eine freie Text-Notiz, die das Dashboard für interne
+Vermerke nutzen kann. `null` wenn keine gesetzt wurde.
+
+## Analytics API
+
+Die `analytics`-Tabelle speichert Event-Zähler (slash commands, component interactions,
+page views, map views) als stündliche Rollups mit UPSERT. Der Bot-Prozess schreibt seit
+Juli 2026 selbst in diese Tabelle (`core/analytics.py` → `bot.py:on_interaction` +
+`on_app_command_completion`). Die Webapp schreibt `page_view` und `map_view`-Events
+via Middleware (`webapp/main.py:95-120`).
+
+### Endpunkte
+
+| Methode | Pfad | Query | Antwort |
+|---|---|---|---|
+| `GET` | `/api/analytics/daily` | `?event_type=X&days=N&cumulative=true` | `{"slash_command": [{day, count}, …], …}` |
+| `GET` | `/api/analytics/totals` | — | `[{"event_type": "slash_command", "total": 12345}, …]` |
+
+**Query-Parameter für `/api/analytics/daily`:**
+- `event_type` — Komma-separierte Filter (z.B. `slash_command,component_interaction`). Leer = alle Typen.
+- `days` — 1–3650 (default 30). `3650` ≈ 10 Jahre = "all time".
+- `cumulative` — `true` summiert jeden Tag auf den laufenden Gesamtwert (für kumulative Graphen).
+
+**Event-Typen** (wachsend):
+- `page_view` — Webseiten-Besuche (Middleware, seit immer)
+- `map_view` — 3D-Karten-Aufrufe unter `/map/{guild_id}` (Middleware, seit Juli 2026)
+- `slash_command` — Slash-Command-Ausführungen (Bot, seit Juli 2026)
+- `component_interaction` — Button/Select-Menü-Interaktionen (Bot, seit Juli 2026)
+
+**Im `/api/dashboard`-Response** ist das `analytics`-Objekt um ein `alltime`-Feld
+## Bot-eigene API (Port 8090, im Bot-Prozess)
+
+Der Bot-Prozess hostet einen eigenen aiohttp-Server auf Port **8090**
+(implementiert in [`core/api_server.py`](core/api_server.py)).
+Dieser hat Zugriff auf den Discord-Client (`bot.get_user()`, `bot.user`)
+und kann daher User-Informationen und das Bot-Avatar auflösen.
+
+| Methode | Pfad | Query | Antwort |
+|---|---|---|---|
+| `GET` | `/api/bot/avatar` | — | `{"bot_avatar_url": "https://cdn.discordapp.com/avatars/…"}` |
+| `GET` | `/api/bot/user/{user_id}` | — | `{"user_name": "spa1teN", "user_avatar_url": "https://…"}` |
+| `GET` | `/api/bot/users` | `?ids=1,2,3` | `{"1": {"user_name": …, "user_avatar_url": …}, …}` |
+
+Für nicht gefundene User (User nicht im Cache / nicht in mutual Guilds)
+liefern die Endpoints `"user_name": null, "user_avatar_url": null`.
+
+**Netzwerk:** Der Bot-Container exposed Port 8090 im `tausendsassa-network`.
 ## Netzwerk-Integration für `~/dashboard/`
 
-Das separate Dashboard-Projekt läuft aktuell nur im eigenen `dashboard-network`
-und hat keinen Zugriff auf `tausendsassa-network`. Um `/api/dashboard` von dort
-abzufragen, muss der `dashboard`-Service in dessen `docker-compose.yml` zusätzlich
-diesem Netzwerk beitreten:
+Das Dashboard-Projekt läuft im eigenen `dashboard-network` und tritt zusätzlich
+dem `tausendsassa-network` bei (externes Network, `external: true`). Damit kann es:
+- `tausendsassa-db-browser:8080` — DB-gestützte Daten (Feeds, Maps, Moderation, Analytics, Feedback)
+- `tausendsassa-bot:8090` — Discord-abhängige Daten (Bot-Avatar, User-Namen/Avatare)
 
-```yaml
-services:
-  dashboard:
-    networks:
-      - dashboard-network
-      - tausendsassa-network   # neu — für Zugriff auf tausendsassa-db-browser
+Beide Hostnamen werden über Dockers interne DNS aufgelöst. Kein Auth-Layer nötig —
+Schutz erfolgt rein über Netzwerk-Isolation (keine öffentlichen Ports).
 
-networks:
-  dashboard-network:
-    name: dashboard-network
-    driver: bridge
-  tausendsassa-network:
-    external: true             # existiert bereits, wird von Tausendsassa verwaltet
-```
-
-Danach ist der Endpoint aus dem `dashboard`-Container per
-`http://tausendsassa-db-browser:8080/api/dashboard` erreichbar.
+Der `db_browser`-Container mounted zusätzlich `./data:/app/data` (read-write für
+Cookie-Upload) und `./backups:/app/backups:ro` (Backup-Altersprüfung).

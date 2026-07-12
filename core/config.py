@@ -89,11 +89,6 @@ class BotConfig:
         return [int(user_id.strip()) for user_id in users_str.split(",") if user_id.strip()]
     
     
-    # Map Configuration
-    @property
-    def pin_cooldown_minutes(self) -> int:
-        return int(os.getenv("MAP_PIN_COOLDOWN_MINUTES", "30"))
-    
     # Cache Configuration
     @property
     def max_cache_size_mb(self) -> int:
@@ -179,7 +174,6 @@ class BotConfig:
         log.info(f"  RSS Poll Interval: {self.poll_interval_minutes} minutes")
         log.info(f"  RSS Rate Limit: {self.rate_limit_seconds} seconds")
         log.info(f"  RSS Failure Threshold: {self.failure_threshold}")
-        log.info(f"  Pin Cooldown: {self.pin_cooldown_minutes} minutes")
         log.info(f"  Max Cache Size: {self.max_cache_size_mb} MB")
         log.info(f"  HTTP Timeout: {self.http_timeout} seconds")
         log.info(f"  Authorized Users: {len(self.authorized_users)} users")

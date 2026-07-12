@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from db.repositories.map_repository import MapRepository
     from db.repositories.moderation_repository import ModerationRepository
     from db.repositories.cache_repository import CacheRepository
+    from db.repositories.feedback_repository import FeedbackRepository
     from db.repositories.guild_repository import GuildRepository
 
 log = logging.getLogger("tausendsassa.db")
@@ -152,6 +153,14 @@ class DatabaseManager:
             from db.repositories.cache_repository import CacheRepository
             self._repositories['cache'] = CacheRepository(self.pool)
         return self._repositories['cache']
+
+    @property
+    def feedback(self) -> 'FeedbackRepository':
+        """Get the feedback repository."""
+        from db.repositories.feedback_repository import FeedbackRepository
+        if 'feedback' not in self._repositories:
+            self._repositories['feedback'] = FeedbackRepository(self.pool)
+        return self._repositories['feedback']
 
 
 # Global accessor function

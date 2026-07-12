@@ -90,6 +90,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Analytics middleware ──────────────────────────────────────────────────────
+import time as _time
+@app.middleware("http")
+async def analytics_middleware(request: Request, call_next):
+    start = _time.time()
+    response = await call_next(request)
+    # Only count actual page loads (HTML), not API calls or static assets
+    ct = response.headers.get("content-type", "")
+    if response.status_code < 400 and "text/html" in ct and "/static/" not in request.url.path:
+        try:
+            if pool:
+                async with pool.acquire() as conn:
+                    # General page_view
+                    await conn.execute("""
+                        INSERT INTO analytics (event_type, source, count, day, hour)
+                        VALUES ('page_view', 'web', 1, CURRENT_DATE, EXTRACT(HOUR FROM NOW()))
+                        ON CONFLICT (event_type, guild_id, source, day, hour)
+                        DO UPDATE SET count = analytics.count + 1
+                    """)
+                    # Specific event type for 3D map views
+                    if "/map/" in request.url.path:
+                        await conn.execute("""
+                            INSERT INTO analytics (event_type, source, count, day, hour)
+                            VALUES ('map_view', 'web', 1, CURRENT_DATE, EXTRACT(HOUR FROM NOW()))
+                            ON CONFLICT (event_type, guild_id, source, day, hour)
+                            DO UPDATE SET count = analytics.count + 1
+                        """)
+        except Exception:
+            pass  # never fail a request because of analytics
+    return response
+
 try:
     app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
     # Discord Activity proxy prepends /activity to all relative paths

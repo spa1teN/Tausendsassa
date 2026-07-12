@@ -156,7 +156,7 @@ class MapGenerator:
         self.log = logger
         self.map_config = MapConfig()
         self.renderer = ShapefileRenderer(logger)
-        self.base_image_width = 1500
+        self.base_image_width = 3000
         self.map_configs = self.map_config.MAP_REGIONS
 
     def _ensure_color_tuple(self, color_value, default_tuple: tuple) -> tuple:
@@ -264,12 +264,31 @@ class MapGenerator:
         
         return self.base_image_width, height
 
-    def create_projection_function(self, minx: float, miny: float, maxx: float, maxy: float, 
-                                 width: int, height: int) -> Callable:
-        """Create projection function for converting lat/lng to pixel coordinates."""
+    def create_projection_function(self, minx: float, miny: float, maxx: float, maxy: float,
+                                 width: int, height: int, use_mercator: bool = True) -> Callable:
+        """Create projection function for converting lat/lng to pixel coordinates.
+
+        Uses Web Mercator projection by default, matching calculate_image_dimensions()
+        which computes the image aspect ratio from Mercator-scaling. Falls back to
+        equirectangular when use_mercator=False or for very small regional maps.
+        """
+        if not use_mercator:
+            def to_px_eq(lat, lon):
+                x = (lon - minx) / (maxx - minx) * width
+                y = (maxy - lat) / (maxy - miny) * height
+                return (int(x), int(y))
+            return to_px_eq
+
+        def _merc_y(lat):
+            return math.log(math.tan((90 + lat) * math.pi / 360))
+
+        y_min = _merc_y(miny)
+        y_max = _merc_y(maxy)
+        y_range = y_max - y_min
+
         def to_px(lat, lon):
             x = (lon - minx) / (maxx - minx) * width
-            y = (maxy - lat) / (maxy - miny) * height
+            y = (y_max - _merc_y(lat)) / y_range * height if y_range else 0
             return (int(x), int(y))
         return to_px
 

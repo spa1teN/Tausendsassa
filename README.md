@@ -1,216 +1,163 @@
-# Tausendsassa Discord Bot
+# Tausendsassa — Discord Bot
 
-A powerful, modular Discord bot with RSS feed integration, interactive maps, calendar management, and comprehensive monitoring. Built with discord.py 2.x and PostgreSQL.
+Multi-server Discord bot (discord.py 2.7.1) with RSS/Reddit/Bluesky feed polling, iCal calendar integration, world-map pin board, and moderation logging. Posts via Discord Components V2 (CV2) LayoutView messages through webhooks.
 
 ## Features
 
-- 🗞️ **RSS Feed Integration**: Monitor and post RSS/Atom feeds with customizable formatting
-- 🗺️ **Interactive Maps**: Globe-view MapLibre map with user location pins, public URL per guild
-- 📅 **Calendar Integration**: iCal calendar management with Discord event automation
-- 🛡️ **Moderation Tools**: Server management with join-role and member log webhook
-- 🌐 **Admin Web Panel**: Discord OAuth2-protected panel to manage all guild settings, with live map preview
-- 🐳 **Docker Support**: Full docker-compose deployment
+### Map CV2 Cards
+Maps use **discord.ui.LayoutView** with Container-based CV2 rendering:
+- TextDisplay (guild name, pin count, region, timestamp)
+- MediaGallery (rendered map image as `attachment://map.png`)
+- Separator + ActionRow with Pin, 3D View (link), and Feedback buttons
+- `/map` slash command for admins to configure, users to set pins
+- Temporary apology card — deployed to all live maps, 24h auto-expiry via `cogs/map_data/.apology_expiry`
 
-## Quick Start
+### Feedback System (`cogs/feedback.py`)
+`/feedback` slash command and map CV2 Feedback button:
+- Ephemeral CV2 menu: subject Select (Feeds/Map/Moderation/Calendar/Proposals/Other), anonymous toggle, "Write Message" button
+- Message-only modal (subject + anonymity pre-set from menu)
+- On submit: CV2 menu dismissed via `delete_original_response()`, ephemeral "✅ Feedback sent!" confirmation
+- Stored in `feedback` table (PostgreSQL) with status tracking (new/important/in_progress/archived)
 
-### Prerequisites
+### RedGifs → GIF in CV2 Feeds
+RedGifs links in RSS feeds are resolved via RedGifs API v2 (temporary auth token):
+- Downloads HD MP4, converts to animated GIF via ffmpeg (palette-based, 10fps, 480px)
+- GIF attached as `attachment://redgifs.gif` and shown in MediaGallery
+- Falls back to MP4 attachment if conversion fails, poster JPG if download fails
+- Gated to guild `694270970558546051` (cookie-whitelisted private server)
+- `_raw_description` field preserved through HTML cleaning for URL extraction
 
-- Python 3.9+
-- PostgreSQL 13+
-- Discord Bot Token + OAuth2 App
+### Dashboard & Data Interface
+FastAPI admin panel at `https://dashboard.casparsadenius.de/#tausendsassa`:
+- Cookie status chip (green/yellow/red, click-to-upload modal); gated to guild `694270970558546051`
+- Pi Proxy status chip (green/yellow) — now a fallback, rarely needed
+- Moderation chart + stats box
+- Feedback inbox tab with status workflow (new → important → in_progress → archived)
+- CV2 posting toggle per feed
 
-### Installation
+**Data interface** (`/api/dashboard` + separate endpoints):
+| Source | URL | Provides |
+|---|---|---|
+| `db_browser:8080` | `/api/dashboard` | Aggregate stats: feeds, maps, calendars, moderation, feedback counts, analytics |
+| `db_browser:8080` | `/api/feedback` | CRUD: list, status, read, admin_note, unread-count |
+| `bot:8090` | `/api/bot/*` | Discord-dependent: bot avatar, user name/avatar by ID |
 
-```bash
-# Clone repository
-git clone https://github.com/your-repo/Tausendsassa.git
-cd Tausendsassa
+See [`DATA_INTERFACE.md`](DATA_INTERFACE.md) for the full schema.
 
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-pip install -r requirements.webapp.txt
-```
-
-### Database Setup
-
-```sql
-CREATE USER tausendsassa WITH PASSWORD your_password;
-CREATE DATABASE tausendsassa OWNER tausendsassa;
-```
-
-Run the schema from `db/schema.sql`.
-
-### Configuration
-
-Create `.env` file:
-
-```bash
-# Bot
-DISCORD_TOKEN=your_bot_token
-BOT_OWNER_ID=your_discord_user_id
-
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=tausendsassa
-DB_USER=tausendsassa
-DB_PASSWORD=your_password
-
-# Admin webapp
-DISCORD_CLIENT_ID=your_oauth_app_client_id
-DISCORD_CLIENT_SECRET=your_oauth_app_client_secret
-WEBAPP_SECRET_KEY=random_secret_32chars
-WEBAPP_BASE_URL=https://your-domain.com
-WEBAPP_URL=https://your-domain.com        # used by bot for the Explore button URL
-```
-
-### Running
-
-```bash
-# Bot
-python bot.py
-
-# Database Browser (port 8080, internal only)
-uvicorn db_browser:app --host 127.0.0.1 --port 8080
-
-# Admin Web Panel (port 8081, public)
-uvicorn webapp.main:app --host 0.0.0.0 --port 8081
-```
-
-## Production Deployment
-
-### Docker (recommended)
-
-> **Important:** Use `docker compose` (plugin v2), not `docker-compose` (legacy v1).
-
-```bash
-docker compose up -d
-```
-
-**Containers:**
-- `bot` — Discord bot
-- `postgres` — PostgreSQL (internal only, not exposed publicly)
-- `db-browser` — Internal DB browser (internal only, not exposed publicly)
-- `webapp` — Admin panel (port 8081, behind nginx)
-
-**Volume Structure:**
-- `cogs/map_data/` — Natural Earth shapefiles, map cache, avatar cache (shared between bot and db-browser)
-- `logs/` — Application logs
-
-After code changes, rebuild specific containers:
-```bash
-docker compose up -d --build webapp   # webapp only
-docker compose up -d --build bot      # bot only
-# Then reload nginx if behind reverse proxy:
-docker exec <nginx-container> nginx -s reload
-```
-
-> **Security note:** The `postgres` and `db-browser` containers must NOT have public port mappings.
-> The DB browser is internal only — not reachable through the admin webapp or any public URL.
-
-### Systemd
-
-```bash
-sudo systemctl enable --now tausendsassa
-sudo systemctl enable --now tausendsassa-browser
-```
-
-## Project Structure
+## Architecture
 
 ```
-├── bot.py                  # Main entry point
-├── db_browser.py           # Internal DB browser (port 8080, internal only)
-├── webapp/                 # Admin panel (port 8081)
-│   ├── main.py             # FastAPI app, OAuth2, CRUD routes
-│   ├── static/             # Static assets (favicon, JS, CSS)
-│   └── templates/          # Jinja2 templates (base, dashboard, map, login...)
-├── cogs/                   # Discord feature modules
-│   ├── feeds.py            # RSS monitoring
-│   ├── map.py              # Geographic maps
-│   ├── calendar.py         # iCal integration
-│   └── map_data/           # Map data directory
-│       ├── ne_10m_*.shp    # Natural Earth shapefiles
-│       ├── map_cache/      # Base map cache
-│       └── avatar_cache/   # Discord CDN cache
-├── core/                   # Shared utilities
-├── db/                     # Database layer (repositories)
-└── resources/              # Static files (help docs, ToS, privacy, favicon)
+cogs/           Discord cogs (slash commands, listeners)
+  feeds.py      Feed polling, posting, /feeds dashboard
+  calendar.py   iCal sync, Discord events, reminders
+  map.py        World map with user pins (CV2 LayoutView)
+  moderation.py Join/leave logs, kick/ban/timeout, purge
+  help.py       /help command
+  feedback.py   /feedback command, modal, CV2 menu
+
+core/           Business logic
+  api_server.py      Internal API (port 8090) — bot avatar, user lookups for dashboard
+  feeds_cv2.py       CV2 LayoutView builder, Reddit gallery resolution (cookie-based JSON API)
+  feeds_add.py       Feed creation UI (type selector, preview)
+  feeds_rss.py       RSS fetch, parse, embed creation (preserves _raw_description)
+  feeds_thumbnails.py  Image extraction (Bluesky API, OG images)
+  feeds_dashboard.py   /feeds CV2 management interface
+  feeds_config.py      Feed color presets, Bluesky detection
+  media_downloader.py  RedGifs API + GIF conversion, Reddit gallery resolution
+  feedback_menu.py     CV2 subject/anonymity selector
+  config.py           Central config (env vars)
+  cache_manager.py    LRU + file cache
+  http_client.py      aiohttp session pool
+
+db/             PostgreSQL via asyncpg, repository pattern
+  schema.sql          Tables: feeds, calendars, map_settings, posted_entries (media_count), feedback, moderation_log
+  repositories/       Per-table query classes including feedback_repository.py
+
+webapp/         FastAPI admin panel (Discord OAuth2)
+scripts/        Backfill/migration/health-check scripts
+```
+## Feed Posting
+
+All 89 feeds use **CV2 LayoutView** (flag `cv2: true` in `embed_template` JSONB).
+
+**Layout:**
+```
+## [Title](url)           ← emoji-stripped, clickable
+-# <t:unix:f>              ← dynamic timestamp (user's timezone)
+Description text...        ← ≤800 chars, Reddit boilerplate stripped
+[MediaGallery]             ← images (SVGs filtered, RedGifs → GIF attachment)
+─────────────────
+[Open]                     ← link button
 ```
 
-## Admin Web Panel
+**Per-type handling:**
+- **RSS/Atom**: Standard feed parsing, thumbnail from OpenGraph/media tags
+- **Reddit**: `/new.rss` for chronological posts, `i.redd.it` full-res images
+- **Reddit gallery**: Cookie-authenticated Reddit JSON API (no browser needed); Pi proxy as fallback
+- **Bluesky**: `get_image_urls()` for all post images, template for static titles
+- **BBC**: `/976/` upscaled CDN images
+- **RedGifs**: API v2 → ffmpeg GIF conversion → `attachment://` in MediaGallery (guild `694270970558546051` only)
 
-Located at `WEBAPP_BASE_URL` (requires Discord OAuth2 login).
+Posts via webhook with per-feed `username`/`avatar_url`.
 
-- **Login**: Discord OAuth2 — only server admins with the bot present can log in
-- **Dashboard**: Per-guild view with live MapLibre map preview
-- **Feeds**: Full CRUD (create, edit, delete, enable/disable all feeds)
-- **Calendar**: Full CRUD for iCal calendars
-- **Map**: Region selector with live globe preview
-- **Moderation**: Member log webhook + auto-join role
+## Feed Creation UI (`/feeds`)
 
-## Map System
+| Type | Input | Auto-filled |
+|---|---|---|
+| RSS/Atom | Full URL | — |
+| Reddit Forum | Subreddit name | `r/{name}`, `/new.rss`, color |
+| Reddit User | Username | `u/{name}`, `/new.rss`, color |
+| Bluesky | Handle | `@{name}`, avatar (AT Protocol API) |
 
-The Discord bot map message shows three buttons:
+Flow: type → modal → preview webhook → confirm. All new feeds get `cv2: true`.
 
-```
-[📍 My Pin]  [🌍 Explore]  [...]
-```
+## Reddit Gallery Resolution (cookie-based)
 
-- **My Pin**: Set / update / remove your location pin
-- **Explore**: Opens the public MapLibre globe map at `/map/{guild_id}`
-- **...**: Info and Admin Tools (for server admins)
+Gallery images from Reddit posts are resolved via the **Reddit JSON API**
+(`reddit.com/comments/{id}.json`) authenticated with the browser cookie from
+`cookies.txt`. This is a lightweight HTTP GET — no headless browser, no Pi proxy.
 
-The public map at `/map/{guild_id}` requires no login and shows all pins on a globe.
+The Pi proxy (`scripts/reddit_gallery_proxy.py`) is kept as an optional fallback
+(`GALLERY_PROXY_URL` env var). It only runs if direct API fails and is configured.
 
-## Commands
+## Configuration
 
-### Admin Commands
-- `/feeds_add` — Add RSS feed
-- `/feeds_list` — Manage feeds
-- `/map_create` — Create server map (channel + region)
-- `/cal_add` — Add iCal calendar
-- `/timezone` — Set server timezone
+See `.env.example` for all options. Key ones:
 
-### User Commands
-- `/map_pin` — Set location on map
-- `/help` — Show help
+| Variable | Purpose |
+|---|---|
+| `DISCORD_TOKEN` | Bot token |
+| `DB_PASSWORD` | PostgreSQL password |
+| `COOKIES_PATH` | Reddit cookies file for gallery/API auth (default `/app/data/cookies.txt`) |
+| `GALLERY_PROXY_URL` | Pi gallery proxy fallback (optional, rarely needed) |
+| `RSS_POLL_INTERVAL_MINUTES` | Poll frequency (default 1.0) |
 
-### Owner Commands
-- `/owner_poll_now` — Force RSS poll
+## Database
 
-## Required Map Data
+| Table | Purpose |
+|---|---|
+| `feeds` | Feed configurations per guild |
+| `map_settings` | Map region, pin data, message_id per guild |
+| `posted_entries` | Posted feed entries with `media_count` tracking |
+| `feedback` | User feedback with `status`, `read`, `admin_note` columns |
+| `moderation_log` | Join/leave, kick/ban/timeout events |
 
-Download Natural Earth shapefiles to `cogs/map_data/`:
-- ne_10m_admin_0_countries.shp
-- ne_10m_admin_1_states_provinces.shp
-- ne_10m_land.shp
-- ne_10m_lakes.shp
-- ne_10m_rivers_lake_centerlines.shp
+## Data Interface
 
-## Environment Variables
+Two internal API servers serve the external dashboard:
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| DISCORD_TOKEN | Yes | — | Bot token |
-| DISCORD_CLIENT_ID | Yes (webapp) | — | OAuth2 app client ID |
-| DISCORD_CLIENT_SECRET | Yes (webapp) | — | OAuth2 app client secret |
-| WEBAPP_BASE_URL | Yes (webapp) | http://localhost:8081 | Public URL of the admin panel |
-| WEBAPP_SECRET_KEY | Yes (webapp) | — | Session secret key |
-| WEBAPP_URL | No | — | Used by bot for Explore button link |
-| BOT_OWNER_ID | No | — | Discord user ID of bot owner |
-| DB_HOST | No | localhost | Database host |
-| DB_PORT | No | 5432 | Database port |
-| DB_NAME | No | tausendsassa | Database name |
-| DB_USER | No | tausendsassa | Database user |
-| DB_PASSWORD | Yes | — | Database password |
-| RSS_POLL_INTERVAL_MINUTES | No | 1.0 | Feed poll interval |
-| MAP_PIN_COOLDOWN_MINUTES | No | 30 | Pin update cooldown |
-| AUTHORIZED_USERS | No | — | Admin user IDs |
+| Container | Port | Provides |
+|---|---|---|
+| `db-browser` | 8080 | `/api/dashboard` (aggregate), `/api/feedback` (CRUD), `/api/cookies/status` |
+| `bot` | 8090 | `/api/bot/avatar`, `/api/bot/user/{id}`, `/api/bot/users?ids=` |
 
-## License
+Full schema documented in [`DATA_INTERFACE.md`](DATA_INTERFACE.md).
 
-MIT License — see LICENSE file
+## Known Limitations
+
+- **Reddit JSON API** blocked from datacenter IPs without cookies — `cookies.txt` with `reddit_session` required for gallery resolution
+- **Queer.de** feed: Latin-1 encoding, not UTF-8
+- **Helsinki Times**: HTTP 202 (not a real RSS response)
+- **CV2 button alignment**: Single buttons in ActionRows are always left-aligned; Discord has no alignment API
+- **CV2 Container limit**: 5 items per container
+- **Stale map channels**: Channels deleted or bot lacks permissions → auto-cleaned on restart (404 = clear refs, 403 = skip)

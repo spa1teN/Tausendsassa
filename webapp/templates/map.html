@@ -60,7 +60,7 @@
     body.light #mode-btn { background: #f0f0f0; border-color: #ccc; color: #333; }
 
     /* ── Map ── */
-    #map { flex: 1; }
+    #map { flex: 1; background: radial-gradient(circle at 50% 42%, #131c34 0%, #070b16 68%); }
 
     /* ── Popup ── */
     .maplibregl-popup-content {
@@ -200,10 +200,18 @@ map.on('style.load', () => {
   dbg('style.load — setting globe');
   map.setProjection({ type: 'globe' });
 
+  // Atmosphere halo so the sphere reads as a 3D globe in space.
+  // Best-effort: older MapLibre builds ignore/omit setSky — never let it break the map.
+  try { map.setSky({ 'atmosphere-blend': 0.85 }); }
+  catch (e) { dbg('setSky skipped: ' + e); }
+
   if (!pinsLoaded) {
     pinsLoaded = true;
     const b = REGION_BOUNDS[REGION] || REGION_BOUNDS.world;
-    map.fitBounds(b, { padding: 60, duration: 0 });
+    // Cap the zoom so the view always stays a curved globe — MapLibre flattens to
+    // mercator past ~z6, which would otherwise happen for small-country regions.
+    // Users can still zoom in manually afterwards.
+    map.fitBounds(b, { padding: 60, maxZoom: 3.2, duration: 0 });
     loadPins();
   } else if (cachedFeatures) {
     // Re-add layers after style swap (setStyle clears all sources/layers/images)

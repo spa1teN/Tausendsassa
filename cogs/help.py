@@ -9,29 +9,27 @@ GITHUB_URL = "https://github.com/spa1teN/Tausendsassa"
 DEV_SERVER_EMOJI_ID = 1415544743961694258
 DEV_SERVER_URL = "https://discord.gg/yVNkpH6vDS"
 
-class HelpButtonsView(discord.ui.View):
-    """View with GitHub and Development Server buttons"""
-    
-    def __init__(self):
-        super().__init__(timeout=None)
-        
-        # Add GitHub button
-        github_button = discord.ui.Button(
-            emoji=f"<:github:{GITHUB_EMOJI_ID}>",
-            label="GitHub",
-            style=discord.ButtonStyle.link,
-            url=GITHUB_URL
-        )
-        self.add_item(github_button)
-        
-        # Add Development Server button
-        dev_button = discord.ui.Button(
-            emoji=f"<:devserver:{DEV_SERVER_EMOJI_ID}>",
-            label="Development Server",
-            style=discord.ButtonStyle.link,
-            url=DEV_SERVER_URL
-        )
-        self.add_item(dev_button)
+def build_help_view(help_content: str) -> discord.ui.LayoutView:
+    """Components-V2 help card: title, the commands.md body, and link buttons.
+
+    TextDisplay allows 4000 chars; commands.md is well under that. If it ever
+    grows past the limit, the extra is split into a second TextDisplay.
+    """
+    view = discord.ui.LayoutView(timeout=None)
+    container = discord.ui.Container(accent_colour=discord.Colour(0x5865F2))
+    container.add_item(discord.ui.TextDisplay("# 🤖 Tausendsassa — Commands"))
+    container.add_item(discord.ui.Separator())
+    for i in range(0, len(help_content), 3900):
+        container.add_item(discord.ui.TextDisplay(help_content[i:i + 3900]))
+    container.add_item(discord.ui.Separator())
+    row = discord.ui.ActionRow()
+    row.add_item(discord.ui.Button(emoji=f"<:github:{GITHUB_EMOJI_ID}>", label="GitHub",
+                                   style=discord.ButtonStyle.link, url=GITHUB_URL))
+    row.add_item(discord.ui.Button(emoji=f"<:devserver:{DEV_SERVER_EMOJI_ID}>", label="Development Server",
+                                   style=discord.ButtonStyle.link, url=DEV_SERVER_URL))
+    container.add_item(row)
+    view.add_item(container)
+    return view
 
 class HelpCog(commands.Cog):
     """Cog for displaying help information from commands.md file"""
@@ -64,23 +62,9 @@ class HelpCog(commands.Cog):
                 )
                 return
             
-            # Create view with buttons
-            view = HelpButtonsView()
-            
-            # Discord has a 2000 character limit for message content
-            if len(help_content) > 2000:
-                # Split content if too long
-                chunks = [help_content[i:i+2000] for i in range(0, len(help_content), 2000)]
-                
-                await interaction.response.send_message(f"**Bot Commands** (Part 1/{len(chunks)}):\n\n{chunks[0]}", view=view, ephemeral=True)
-                
-                # Send remaining chunks as follow-up messages
-                for i, chunk in enumerate(chunks[1:], 2):
-                    await interaction.followup.send(f"**Bot Commands** (Part {i}/{len(chunks)}):\n\n{chunk}", ephemeral=True)
-            else:
-                await interaction.response.send_message(f"## **Bot Commands**:\n{help_content}", view=view, ephemeral=True)
-            
-            
+            await interaction.response.send_message(view=build_help_view(help_content), ephemeral=True)
+
+
         except FileNotFoundError:
             await interaction.response.send_message(
                 "❌ Help file not found. Please contact an administrator.",

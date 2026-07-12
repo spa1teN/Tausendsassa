@@ -193,21 +193,23 @@ class FeedRepository(BaseRepository):
         channel_id: int = None,
         content_hash: str = None,
         feed_id: int = None,
-        entry_link: str = None
+        entry_link: str = None,
+        media_count: int = None,
     ) -> None:
         """Mark an entry as posted."""
         await self.execute(
             """INSERT INTO posted_entries
-               (guild_id, guid, message_id, channel_id, content_hash, feed_id, entry_link)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)
+               (guild_id, guid, message_id, channel_id, content_hash, feed_id, entry_link, media_count)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                ON CONFLICT (guild_id, guid) DO UPDATE SET
                    message_id = COALESCE($3, posted_entries.message_id),
                    channel_id = COALESCE($4, posted_entries.channel_id),
                    content_hash = COALESCE($5, posted_entries.content_hash),
                    feed_id = COALESCE($6, posted_entries.feed_id),
                    entry_link = COALESCE($7, posted_entries.entry_link),
+                   media_count = COALESCE($8, posted_entries.media_count),
                    posted_at = NOW()""",
-            guild_id, guid, message_id, channel_id, content_hash, feed_id, entry_link
+            guild_id, guid, message_id, channel_id, content_hash, feed_id, entry_link, media_count
         )
 
     async def update_entry_message(

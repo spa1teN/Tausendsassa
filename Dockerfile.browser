@@ -10,8 +10,8 @@ RUN pip install --no-cache-dir \
     asyncpg==0.30.0 \
     python-dotenv==1.0.1 \
     httpx==0.27.0 \
-    psutil==5.9.8
-
+    psutil==5.9.8 \
+    python-multipart==0.0.9
 # Copy browser script
 COPY db_browser.py .
 

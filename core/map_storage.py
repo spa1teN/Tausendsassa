@@ -227,10 +227,10 @@ class UnifiedCacheManager:
     async def invalidate_cache(self, guild_id: str, cache_types: Optional[list] = None):
         """Invalidate specific cache types for a guild - PRESERVES default base maps."""
         if cache_types is None:
-            cache_types = ["base_map", "final_map", "closeup", "closeup_base_map"]
-        
+            cache_types = ["base_map", "final_map"]
+
         deleted_count = 0
-        
+
         # Only remove CUSTOM base maps from guild cache, NOT shared default cache
         if "base_map" in cache_types:
             # Remove from guild cache only (custom base maps)
@@ -240,53 +240,25 @@ class UnifiedCacheManager:
                     cache_file.unlink()
                     deleted_count += 1
                     self.log.info(f"Removed custom base map cache file: {cache_file.name}")
-            
+
             # Clear memory cache for base maps (affects both custom and default)
             await self.memory_cache.clear()
             self.log.info("Cleared base map memory cache")
 
-        # Remove closeup base maps when requested (preserve default ones)
-        if "closeup_base_map" in cache_types:
-            # Remove from guild cache only (custom closeup base maps)
-            guild_cache_dir = self.data_dir / guild_id
-            if guild_cache_dir.exists():
-                for cache_file in guild_cache_dir.glob("closeup_base_map_*.png"):
-                    cache_file.unlink()
-                    deleted_count += 1
-                    self.log.info(f"Removed custom closeup base map cache file: {cache_file.name}")
-            
-            # Clear memory cache for closeup base maps too
-            await self.memory_cache.clear()
-            self.log.info("Cleared closeup base map memory cache")
-        
         # Remove final maps from both shared and guild cache
         if "final_map" in cache_types:
             for cache_file in self.cache_dir.glob("final_map_*.png"):
                 cache_file.unlink()
                 deleted_count += 1
                 self.log.info(f"Removed shared final map cache file: {cache_file.name}")
-            
+
             guild_cache_dir = self.data_dir / guild_id
             if guild_cache_dir.exists():
                 for cache_file in guild_cache_dir.glob("final_map_*.png"):
                     cache_file.unlink()
                     deleted_count += 1
                     self.log.info(f"Removed guild final map cache file: {cache_file.name}")
-        
-        # Remove closeups from both shared and guild cache
-        if "closeup" in cache_types:
-            for cache_file in self.cache_dir.glob("closeup_*.png"):
-                cache_file.unlink()
-                deleted_count += 1
-                self.log.info(f"Removed shared closeup cache file: {cache_file.name}")
-            
-            guild_cache_dir = self.data_dir / guild_id
-            if guild_cache_dir.exists():
-                for cache_file in guild_cache_dir.glob("closeup_*.png"):
-                    cache_file.unlink()
-                    deleted_count += 1
-                    self.log.info(f"Removed guild closeup cache file: {cache_file.name}")
-        
+
         self.log.info(f"Invalidated {cache_types} cache for guild {guild_id} ({deleted_count} files removed) - PRESERVED default base maps")
         
     async def invalidate_all_cache_for_guild_deletion(self, guild_id: str):
@@ -374,73 +346,8 @@ class MapStorage:
         # Legacy property for backwards compatibility - removed as it's no longer needed
         # The new cache manager handles this internally
 
-    def load_all_data(self) -> Dict:
-        """Load all guild map data from individual files."""
-        maps = {}
-        try:
-            for guild_dir in self.data_dir.iterdir():
-                if guild_dir.is_dir() and guild_dir.name.isdigit():
-                    guild_id = guild_dir.name
-                    map_file = guild_dir / "map.json"
-                    if map_file.exists():
-                        try:
-                            with map_file.open('r', encoding='utf-8') as f:
-                                maps[guild_id] = json.load(f)
-                                # Log loaded settings for debugging
-                                if 'settings' in maps[guild_id]:
-                                    self.log.info(f"Loaded custom settings for guild {guild_id}: {maps[guild_id]['settings']}")
-                        except Exception as e:
-                            self.log.error(f"Failed to load map data for guild {guild_id}: {e}")
-        except Exception as e:
-            self.log.error(f"Failed to load map data: {e}")
-        
-        return maps
-
-    async def save_data(self, guild_id: str, maps: Dict):
-        """Save map data for specific guild."""
-        try:
-            guild_dir = self.data_dir / guild_id
-            guild_dir.mkdir(exist_ok=True)
-            
-            map_file = guild_dir / "map.json"
-            
-            if guild_id in maps:
-                # Create backup if exists
-                if map_file.exists():
-                    backup_file = guild_dir / "map.json.bak"
-                    map_file.replace(backup_file)
-                
-                with map_file.open('w', encoding='utf-8') as f:
-                    json.dump(maps[guild_id], f, indent=2, ensure_ascii=False)
-                    
-                # Log saved settings for debugging
-                if 'settings' in maps[guild_id]:
-                    self.log.info(f"Saved custom settings for guild {guild_id}: {maps[guild_id]['settings']}")
-            else:
-                # Remove file if guild data was deleted
-                if map_file.exists():
-                    map_file.unlink()
-                    
-        except Exception as e:
-            self.log.error(f"Failed to save map data for guild {guild_id}: {e}")
-
-    def load_global_config(self) -> Dict:
-        """Load global overview configuration."""
-        try:
-            if self.global_config_file.exists():
-                with self.global_config_file.open('r', encoding='utf-8') as f:
-                    return json.load(f)
-        except Exception as e:
-            self.log.error(f"Failed to load global config: {e}")
-        return {}
-
-    async def save_global_config(self, global_config: Dict):
-        """Save global overview configuration."""
-        try:
-            with self.global_config_file.open('w', encoding='utf-8') as f:
-                json.dump(global_config, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            self.log.error(f"Failed to save global config: {e}")
+    # Map data persistence lives in Postgres (db/repositories/map_repository.py);
+    # the former file-based load/save methods were pre-DB legacy and are gone.
 
     # OPTIMIZED cache interface methods
     async def get_cached_base_map(self, region: str, width: int, height: int, guild_id: str = None, maps: Dict = None) -> Optional[Image.Image]:
@@ -501,26 +408,6 @@ class MapStorage:
         map_data = maps.get(str(guild_id), {})
         region = map_data.get('region', 'world')
         await self.cache.cache_item("final_map", str(guild_id), maps, image_buffer, region=region)
-
-    async def get_cached_closeup(self, guild_id: int, maps: Dict, closeup_type: str, closeup_name: str) -> Optional[BytesIO]:
-        """Get cached closeup map if available."""
-        return await self.cache.get_cached_item("closeup", str(guild_id), maps, closeup_type=closeup_type, closeup_name=closeup_name)
-
-    async def cache_closeup(self, guild_id: int, maps: Dict, closeup_type: str, closeup_name: str, image_buffer: BytesIO):
-        """Cache closeup map image."""
-        await self.cache.cache_item("closeup", str(guild_id), maps, image_buffer, closeup_type=closeup_type, closeup_name=closeup_name)
-
-    async def get_cached_closeup_base_map(self, guild_id: int, maps: Dict, closeup_type: str, closeup_name: str, width: int, height: int) -> Optional[Image.Image]:
-        """Get cached closeup base map if available."""
-        return await self.cache.get_cached_item("closeup_base_map", str(guild_id), maps, 
-                                               closeup_type=closeup_type, closeup_name=closeup_name, 
-                                               width=width, height=height)
-
-    async def cache_closeup_base_map(self, guild_id: int, maps: Dict, closeup_type: str, closeup_name: str, width: int, height: int, image: Image.Image):
-        """Cache closeup base map image."""
-        await self.cache.cache_item("closeup_base_map", str(guild_id), maps, image,
-                                   closeup_type=closeup_type, closeup_name=closeup_name,
-                                   width=width, height=height)
 
     async def invalidate_final_map_cache_only(self, guild_id: int):
         """Invalidate only final map cache, preserve base maps for efficiency - IMPROVED targeting."""

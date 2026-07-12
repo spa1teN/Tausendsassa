@@ -21,6 +21,14 @@ from core.config import config
 TZ = ZoneInfo("Europe/Berlin")
 MAX_AGE = timedelta(seconds=86400)
 
+# Fetch-once/fan-out state: each feed URL is fetched a single time per poll cycle
+# and the parsed result is handed to every guild that uses that URL. NOT_MODIFIED
+# distinguishes an HTTP 304 (reuse the last parse) from a fetch error (None); the
+# last successful parse per URL is kept so a 304 can still fan out to guilds that
+# haven't posted the current entries yet (e.g. a freshly added feed).
+NOT_MODIFIED = object()
+_last_parsed: Dict[str, "feedparser.FeedParserDict"] = {}
+
 
 def _fmt_timestamp(dt: datetime, guild_id: int = None) -> str:
     """Format datetime as ISO timestamp for Discord embed"""
@@ -131,16 +139,23 @@ def _normalize_guid(guid: str, feed_url: str) -> str:
 
 
 async def _fetch_feed(url: str, session: aiohttp.ClientSession,
-                      cache_data: Optional[Dict] = None) -> Optional[Tuple[feedparser.FeedParserDict, bool, Dict]]:
+                      cache_data: Optional[Dict] = None, force: bool = False):
     """
-    Fetch feed with HTTP caching support.
-    Returns (parsed_feed, has_changed, new_cache_data) or None if error/unchanged
+    Fetch and parse a feed, using conditional GET (ETag/Last-Modified) for politeness.
+
+    Returns one of:
+      - NOT_MODIFIED  — server answered 304 (caller reuses the last parse)
+      - None          — error / non-200 / unparseable
+      - (parsed_feed, new_cache_data) — a fresh 200 parse
+
+    With force=True the conditional headers are skipped, forcing a full 200 (used
+    after a restart when there is no cached parse to reuse on a 304).
     """
     headers = {
         'User-Agent': 'RSS Bot/1.0 (compatible; +https://example.com/bot)'
     }
 
-    if cache_data:
+    if cache_data and not force:
         if cache_data.get('etag'):
             headers['If-None-Match'] = cache_data['etag']
         if cache_data.get('last_modified'):
@@ -150,7 +165,7 @@ async def _fetch_feed(url: str, session: aiohttp.ClientSession,
         timeout = aiohttp.ClientTimeout(total=_get_feed_timeout(url))
         async with session.get(url, headers=headers, timeout=timeout) as response:
             if response.status == 304:
-                return None
+                return NOT_MODIFIED
 
             if response.status != 200:
                 return None
@@ -165,68 +180,64 @@ async def _fetch_feed(url: str, session: aiohttp.ClientSession,
             if not hasattr(parsed, 'entries') or parsed.entries is None:
                 return None
 
-            current_hash = _create_feed_hash(parsed)
-
-            has_changed = True
-            if cache_data and cache_data.get('content_hash'):
-                has_changed = current_hash != cache_data['content_hash']
-                if not has_changed:
-                    return parsed, False, cache_data
-
             new_cache_data = {
-                'content_hash': current_hash,
+                'content_hash': _create_feed_hash(parsed),
                 'etag': response.headers.get('etag'),
                 'last_modified': response.headers.get('last-modified'),
             }
 
-            return parsed, has_changed, new_cache_data
+            return parsed, new_cache_data
 
     except Exception:
         return None
 
 
-async def poll(feed_cfg: Dict[str, Any], guild_id: int, db,
-               session: aiohttp.ClientSession) -> List[Dict[str, Any]]:
+async def fetch_parsed(url: str, session: aiohttp.ClientSession, db):
+    """Fetch a feed URL once and return its parsed form (or None on error).
+
+    Fetched a single time per poll cycle regardless of how many guilds use the
+    URL; the per-guild "already posted?" check lives in extract_new_embeds(). The
+    global feed_cache (ETag/Last-Modified/hash) only saves bandwidth here — it no
+    longer gates whether a guild posts, which is what previously made a shared
+    feed land in only one server.
     """
-    Fetch new items with intelligent caching and change detection.
-    Uses database for state management.
-
-    Args:
-        feed_cfg: Feed configuration dict
-        guild_id: Discord guild ID
-        db: Database manager with feeds and cache repositories
-        session: aiohttp session for HTTP requests
-
-    Returns:
-        List of embed dicts to post
-    """
-    url = feed_cfg.get("feed_url", "")
-
-    # Get cache from database
     cache_data = await db.cache.get_feed_cache_dict(url)
-
     result = await _fetch_feed(url, session, cache_data)
-    if result is None:
-        return []
 
-    parsed, has_changed, new_cache_data = result
+    if result is NOT_MODIFIED:
+        cached = _last_parsed.get(url)
+        if cached is not None:
+            return cached
+        # No in-memory parse to reuse (e.g. right after a restart): force a full
+        # fetch so guilds still receive the current entries.
+        result = await _fetch_feed(url, session, cache_data, force=True)
 
-    # Update cache in database
+    if result is None or result is NOT_MODIFIED:
+        return None
+
+    parsed, new_cache_data = result
     await db.cache.set_feed_cache(
         url,
         etag=new_cache_data.get('etag'),
         last_modified=new_cache_data.get('last_modified'),
-        content_hash=new_cache_data.get('content_hash')
+        content_hash=new_cache_data.get('content_hash'),
     )
+    _last_parsed[url] = parsed
+    return parsed
 
-    # If feed hasn't changed, only check for very recent entries that might need updates
-    if not has_changed:
-        return await _check_recent_updates(parsed, feed_cfg, guild_id, db)
 
+async def extract_new_embeds(parsed, feed_cfg: Dict[str, Any], guild_id: int, db) -> List[Dict[str, Any]]:
+    """Per-guild posting decision against an already-parsed feed.
+
+    Runs once per (guild, feed) using the guild's own posted_entries as the sole
+    dedup — so the same URL in several guilds posts independently. Handles both
+    new entries (within MAX_AGE, up to max_items) and edits to entries this guild
+    has already posted. Fetching happens once per URL in fetch_parsed().
+    """
     new_embeds: List[Dict[str, Any]] = []
     max_items = feed_cfg.get("max_items", 3)
-
     url = feed_cfg.get("feed_url", "")
+
     for entry in parsed.entries[:max_items]:
         guid = entry.get("id") or entry.get("link") or entry.get("url")
         if not guid:
@@ -236,10 +247,9 @@ async def poll(feed_cfg: Dict[str, Any], guild_id: int, db,
 
         current_hash = _create_content_hash(entry)
 
-        # Check if entry was already sent (uses per-guild tracking)
+        # Already posted in THIS guild? Then only re-emit if the content changed.
         stored_entry = await db.feeds.get_entry(guild_id, guid)
         if stored_entry:
-            # Check if content actually changed using per-guild hash
             stored_hash = stored_entry.content_hash
             if stored_hash and stored_hash != current_hash:
                 message_info = await db.feeds.get_message_info(guild_id, guid)
@@ -250,12 +260,11 @@ async def poll(feed_cfg: Dict[str, Any], guild_id: int, db,
                     embed["guid"] = guid
                     embed["entry_link"] = entry_link
                     new_embeds.append(embed)
-
-                    # Update hash in posted_entries
                     await db.feeds.mark_entry_posted(guild_id, guid, content_hash=current_hash, entry_link=entry_link)
             continue
 
-        # Process new entries
+        # New entry for this guild — skip anything older than MAX_AGE so a freshly
+        # added feed posts only recent items, not the whole backlog.
         published = _entry_published(entry) or datetime.now(timezone.utc)
         if datetime.now(timezone.utc) - published > MAX_AGE:
             continue
@@ -264,54 +273,10 @@ async def poll(feed_cfg: Dict[str, Any], guild_id: int, db,
         embed["guid"] = guid
         embed["entry_link"] = entry_link
         embed["is_update"] = False
-
         new_embeds.append(embed)
 
-        # Mark as sent (without message info yet - will be updated after posting)
+        # Mark as sent (message info is filled in after the post succeeds)
         await db.feeds.mark_entry_posted(guild_id, guid, content_hash=current_hash, entry_link=entry_link)
-
-    return new_embeds
-
-
-async def _check_recent_updates(parsed, feed_cfg: Dict[str, Any],
-                                 guild_id: int, db) -> List[Dict[str, Any]]:
-    """Check only recent entries for updates when feed hasn't changed globally"""
-    new_embeds: List[Dict[str, Any]] = []
-
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-
-    url = feed_cfg.get("feed_url", "")
-    for entry in parsed.entries[:5]:
-        guid = entry.get("id") or entry.get("link") or entry.get("url")
-        if not guid:
-            continue
-        guid = _normalize_guid(guid, url)
-        entry_link = entry.get("link") or entry.get("url")
-
-        already_sent = await db.feeds.is_entry_posted(guild_id, guid)
-        if not already_sent:
-            continue
-
-        published = _entry_published(entry)
-        if published and published < cutoff:
-            continue
-
-        current_hash = _create_content_hash(entry)
-        stored_entry = await db.feeds.get_entry(guild_id, guid)
-        stored_hash = stored_entry.content_hash if stored_entry else None
-
-        if stored_hash and stored_hash != current_hash:
-            message_info = await db.feeds.get_message_info(guild_id, guid)
-            if message_info:
-                embed = _create_embed(entry, feed_cfg, guild_id)
-                embed["is_update"] = True
-                embed["message_info"] = message_info
-                embed["guid"] = guid
-                embed["entry_link"] = entry_link
-                new_embeds.append(embed)
-
-                # Update hash in posted_entries
-                await db.feeds.mark_entry_posted(guild_id, guid, content_hash=current_hash, entry_link=entry_link)
 
     return new_embeds
 
@@ -323,9 +288,10 @@ def _create_embed(entry, feed_cfg: Dict[str, Any], guild_id: int = None) -> Dict
     tpl = feed_cfg.get("embed_template", {})
     embed = _render_template(tpl, entry, thumb, published, guild_id)
 
+    raw_desc = entry.get("summary", "") or entry.get("description", "")
     desc = embed.get("description", "").strip()
     if not desc:
-        desc = entry.get("summary", "")
+        desc = raw_desc
 
     desc = _strip_html(desc)
 
@@ -333,19 +299,24 @@ def _create_embed(entry, feed_cfg: Dict[str, Any], guild_id: int = None) -> Dict
         desc = desc[:500].rsplit(' ', 1)[0] + "[...]"
 
     embed["description"] = desc
+    embed["_raw_description"] = raw_desc  # kept for video/GIF URL detection
 
     img = embed.get("image", {}) or {}
     if not img.get("url") and thumb:
         embed["image"] = {"url": thumb}
 
+    # Propagate author for "Posted by u/..." display
+    author = entry.get("author", "").strip()
+    if author:
+        embed["author"] = author
     return embed
 
 
 async def mark_entry_posted(guild_id: int, guid: str, message_id: int,
                             channel_id: int, db, feed_id: int = None,
-                            entry_link: str = None) -> None:
+                            entry_link: str = None, media_count: int = None) -> None:
     """Mark an entry as posted with message information"""
-    await db.feeds.mark_entry_posted(guild_id, guid, message_id, channel_id, feed_id=feed_id, entry_link=entry_link)
+    await db.feeds.mark_entry_posted(guild_id, guid, message_id, channel_id, feed_id=feed_id, entry_link=entry_link, media_count=media_count)
 
 
 async def cleanup_old_entries(guild_id: int, db) -> int:

@@ -37,8 +37,8 @@ load_dotenv()
 import asyncpg
 import httpx
 import psutil
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse, Response
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi.responses import HTMLResponse, FileResponse, Response, JSONResponse
 
 # Database connection pool
 pool: Optional[asyncpg.Pool] = None
@@ -1595,7 +1595,8 @@ async def api_dashboard() -> Dict[str, Any]:
     )
     recent_posts_rows = await p.fetch(
         """SELECT pe.posted_at, f.name AS feed_name, g.name AS guild_name,
-                  pe.guild_id, pe.channel_id, pe.message_id, pe.entry_link
+                  pe.guild_id, pe.channel_id, pe.message_id, pe.entry_link,
+                  pe.media_count
            FROM posted_entries pe
            JOIN feeds f ON f.id = pe.feed_id
            JOIN guilds g ON g.id = pe.guild_id
@@ -1661,11 +1662,45 @@ async def api_dashboard() -> Dict[str, Any]:
            ORDER BY ml.created_at"""
     )
 
+    feedback_rows = await p.fetch(
+        """SELECT f.guild_id, g.name AS guild_name,
+                  COUNT(*) AS total,
+                  COUNT(*) FILTER (WHERE f.status = 'new') AS new_count,
+                  COUNT(*) FILTER (WHERE f.status = 'important') AS important_count,
+                  COUNT(*) FILTER (WHERE f.status = 'in_progress') AS in_progress_count,
+                  COUNT(*) FILTER (WHERE f.status = 'archived') AS archived_count
+           FROM feedback f
+           JOIN guilds g ON g.id = f.guild_id
+           GROUP BY f.guild_id, g.name
+           ORDER BY g.name"""
+    )
+
     db_size = await p.fetchval("SELECT pg_database_size(current_database())")
     guild_stats = await p.fetchrow(
         "SELECT COUNT(*) AS guild_count, COALESCE(SUM(member_count), 0) AS total_members FROM guilds"
     )
 
+    analytics_rows = await p.fetch(
+        """SELECT event_type, SUM(count)::int AS total
+           FROM analytics
+           WHERE day >= CURRENT_DATE - INTERVAL '30 days'
+           GROUP BY event_type ORDER BY total DESC"""
+    )
+    analytics_alltime = await p.fetch(
+        "SELECT event_type, SUM(count)::int AS total FROM analytics GROUP BY event_type ORDER BY total DESC"
+    )
+    analytics_1h = await p.fetchrow(
+        """SELECT COALESCE(SUM(count), 0)::int AS page_views
+           FROM analytics
+           WHERE event_type = 'page_view'
+             AND day = CURRENT_DATE
+             AND hour = EXTRACT(HOUR FROM NOW())"""
+    )
+    analytics_today = await p.fetchrow(
+        """SELECT COALESCE(SUM(count), 0)::int AS page_views
+           FROM analytics
+           WHERE event_type = 'page_view' AND day = CURRENT_DATE"""
+    )
     return {
         "generated_at": datetime.now().isoformat(),
         "stats": {
@@ -1687,7 +1722,9 @@ async def api_dashboard() -> Dict[str, Any]:
                     "posted_at": r["posted_at"].isoformat() if r["posted_at"] else None,
                     "feed_name": r["feed_name"],
                     "guild_name": r["guild_name"],
+                    "guild_id": str(r["guild_id"]),
                     "entry_link": r["entry_link"],
+                    "media_count": r["media_count"],
                     "message_url": (
                         f"https://discord.com/channels/{r['guild_id']}/{r['channel_id']}/{r['message_id']}"
                         if r["channel_id"] and r["message_id"] else None
@@ -1729,6 +1766,24 @@ async def api_dashboard() -> Dict[str, Any]:
             }
             for r in moderation_event_rows
         ],
+        "feedback": [
+            {
+                "guild_id": str(r["guild_id"]),
+                "guild_name": r["guild_name"],
+                "total": r["total"],
+                "new": r["new_count"],
+                "important": r["important_count"],
+                "in_progress": r["in_progress_count"],
+                "archived": r["archived_count"],
+            }
+            for r in feedback_rows
+        ],
+        "analytics": {
+            "page_views_today": analytics_today["page_views"] if analytics_today else 0,
+            "page_views_1h": analytics_1h["page_views"] if analytics_1h else 0,
+            "by_type": [{"event_type": r["event_type"], "total": r["total"]} for r in analytics_rows],
+            "alltime": [{"event_type": r["event_type"], "total": r["total"]} for r in analytics_alltime],
+        },
         "backups": _latest_backup(),
         "database": {
             "pool_size": p.get_size(),
@@ -1736,6 +1791,8 @@ async def api_dashboard() -> Dict[str, Any]:
             "pool_max": p.get_max_size(),
             "db_size_mb": round(db_size / (1024 * 1024), 1) if db_size else None,
         },
+        "cookie": _cookie_status(),
+        "proxy": await _proxy_status(),
     }
 
 
@@ -1798,6 +1855,260 @@ async def log_viewer(
     </div>
     """
     return render_page("Logs", body, "logs")
+
+
+# ── Proxy Status ────────────────────────────────────────────────────────
+
+_PROXY_URL = os.environ.get("GALLERY_PROXY_URL", "").rstrip("/")
+
+
+async def _proxy_status() -> dict:
+    """Check if the Pi gallery proxy is configured and reachable."""
+    if not _PROXY_URL:
+        return {"available": False, "error": "GALLERY_PROXY_URL not configured"}
+    try:
+        import httpx
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"{_PROXY_URL}/gallery", timeout=5)
+            available = r.status_code in (200, 405)
+        if available:
+            return {"available": True, "url": _PROXY_URL}
+        return {"available": False, "error": f"Proxy returned {r.status_code}", "url": _PROXY_URL}
+    except Exception as exc:
+        return {"available": False, "error": str(exc), "url": _PROXY_URL}
+# ── Cookie Upload ──────────────────────────────────────────────────────
+
+COOKIE_PATH = Path(os.environ.get("COOKIES_PATH", "/app/data/cookies.txt"))
+
+_STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/app/data/status.json"))
+
+
+def _cookie_status() -> dict:
+    """Parse cookies.txt and check if reddit_session is present and not expired."""
+    if not COOKIE_PATH.exists():
+        return {"valid": False, "error": "Cookie file not found"}
+    try:
+        import time
+        text = COOKIE_PATH.read_text(encoding="utf-8", errors="replace")
+        has_session = False
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 7 and parts[5] == "reddit_session":
+                has_session = True
+                exp_ts = int(parts[4]) if parts[4] and parts[4] != "0" else None
+                if exp_ts and exp_ts < time.time():
+                    return {"valid": False, "error": "Cookie expired",
+                            "expires": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(exp_ts))}
+                if exp_ts:
+                    return {"valid": True, "expires": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(exp_ts))}
+                return {"valid": True, "expires": "session"}
+        if has_session:
+            return {"valid": True, "expires": "unknown"}
+        return {"valid": False, "error": "No reddit_session cookie found"}
+    except Exception as exc:
+        return {"valid": False, "error": str(exc)}
+
+
+@app.get("/api/cookies/status")
+async def api_cookie_status():
+    return _cookie_status()
+
+
+@app.post("/api/cookies/upload")
+async def api_cookie_upload(file: UploadFile = File(...)):
+    """Upload a Netscape-format cookies.txt file."""
+    if not file.filename or not file.filename.endswith(".txt"):
+        raise HTTPException(400, "Only .txt files accepted")
+    try:
+        content = await file.read()
+        text = content.decode("utf-8", errors="replace")
+        # Basic validation: must contain tabs (Netscape format)
+        if "\t" not in text:
+            raise HTTPException(400, "Not a valid Netscape cookies.txt (no tabs found)")
+        COOKIE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        COOKIE_PATH.write_bytes(content)
+        status = _cookie_status()
+        return {"ok": True, **status}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+
+
+
+# ── Feedback API ─────────────────────────────────────────────────────────
+
+@app.get("/api/feedback")
+async def api_feedback_list(
+    guild_id: str = Query(...),
+    status: str | None = Query(None),
+):
+    """List feedback for a guild. Requires guild_id query param."""
+    p = await get_pool()
+    query = """SELECT f.id, f.guild_id,
+                      CASE WHEN f.is_anonymous THEN 0 ELSE f.user_id END AS user_id,
+                      f.is_anonymous, f.subject, f.message, f.status, f.created_at, f.read,
+                      f.admin_note, g.name AS guild_name
+               FROM feedback f
+               JOIN guilds g ON g.id = f.guild_id
+               WHERE f.guild_id = $1"""
+    args: list = [int(guild_id)]
+    idx = 2
+    if status:
+        query += f" AND f.status = ${idx}"
+        args.append(status)
+        idx += 1
+    query += f" ORDER BY f.created_at DESC LIMIT ${idx}"
+    args.append(50)
+    rows = await p.fetch(query, *args)
+    return [
+        {
+            "id": r["id"],
+            "guild_id": str(r["guild_id"]),
+            "guild_name": r["guild_name"],
+            "user_id": str(r["user_id"]) if r["user_id"] else None,
+            "is_anonymous": r["is_anonymous"],
+            "subject": r["subject"],
+            "message": r["message"],
+            "status": r["status"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "read": r["read"],
+            "admin_note": r["admin_note"],
+        }
+        for r in rows
+    ]
+
+
+@app.patch("/api/feedback/{feedback_id}/status")
+async def api_feedback_set_status(feedback_id: int, status: str = Query(...)):
+    """Update feedback status: new, important, in_progress, archived."""
+    valid = {"new", "important", "in_progress", "archived"}
+    if status not in valid:
+        raise HTTPException(400, f"Invalid status: {status}. Valid: {', '.join(sorted(valid))}")
+    p = await get_pool()
+    await p.execute("UPDATE feedback SET status = $1 WHERE id = $2", status, feedback_id)
+    return {"ok": True}
+
+
+@app.patch("/api/feedback/{feedback_id}/read")
+async def api_feedback_mark_read(feedback_id: int):
+    """Mark a feedback entry as read."""
+    p = await get_pool()
+    await p.execute("UPDATE feedback SET read = TRUE WHERE id = $1", feedback_id)
+    return {"ok": True}
+
+
+@app.patch("/api/feedback/{feedback_id}/note")
+async def api_feedback_set_note(feedback_id: int, note: str = Query(...)):
+    """Set/update the admin note on a feedback entry."""
+    p = await get_pool()
+    await p.execute("UPDATE feedback SET admin_note = $2 WHERE id = $1", feedback_id, note)
+    return {"ok": True}
+
+
+@app.get("/api/feedback/unread-count")
+async def api_feedback_unread_count(guild_id: str = Query(...)):
+    """Count unread feedback entries for a guild."""
+    p = await get_pool()
+    count = await p.fetchval(
+        "SELECT COUNT(*)::int FROM feedback WHERE guild_id = $1 AND read = FALSE",
+        int(guild_id)) or 0
+    return {"count": count}
+
+
+
+# ── Analytics API ───────────────────────────────────────────────────────
+
+@app.get("/api/analytics/daily")
+async def api_analytics_daily(
+    event_type: str = Query(None),
+    days: int = Query(30, ge=1, le=3650),
+    cumulative: bool = Query(False),
+):
+    """Daily analytics breakdown per event_type. Supports cumulative totals.
+
+    Query params:
+        event_type: comma-separated filter (e.g. slash_command,component_interaction)
+                    Omit for all types.
+        days:       lookback window (1-3650, default 30). Use 3650 for "all time".
+        cumulative: if True, each day's value includes all prior days.
+    """
+    p = await get_pool()
+    where = "WHERE day >= CURRENT_DATE - $1::int"
+    args: list = [days]
+    idx = 2
+    event_types = [t.strip() for t in event_type.split(",") if t.strip()] if event_type else []
+    if event_types:
+        placeholders = ", ".join(f"${i}" for i in range(idx, idx + len(event_types)))
+        where += f" AND event_type IN ({placeholders})"
+        args.extend(event_types)
+        idx += len(event_types)
+
+    query = f"""
+        SELECT event_type, day, SUM(count)::int AS total
+        FROM analytics
+        {where}
+        GROUP BY event_type, day
+        ORDER BY event_type, day
+    """
+    rows = await p.fetch(query, *args)
+
+    # Build per-event_type daily series
+    by_type: dict[str, list[dict]] = {}
+    for r in rows:
+        et = r["event_type"]
+        if et not in by_type:
+            by_type[et] = []
+        by_type[et].append({
+            "day": r["day"].isoformat(),
+            "count": r["total"],
+        })
+
+    # Compute cumulative if requested
+    result: dict[str, list[dict]] = {}
+    for et, series in by_type.items():
+        if cumulative:
+            running = 0
+            cum_series = []
+            for point in series:
+                running += point["count"]
+                cum_series.append({"day": point["day"], "count": running})
+            result[et] = cum_series
+        else:
+            result[et] = series
+
+    return result
+
+
+@app.get("/api/analytics/totals")
+async def api_analytics_totals():
+    """All-time cumulative totals per event_type."""
+    p = await get_pool()
+    rows = await p.fetch(
+        "SELECT event_type, SUM(count)::int AS total FROM analytics GROUP BY event_type ORDER BY total DESC"
+    )
+    return [{"event_type": r["event_type"], "total": r["total"]} for r in rows]
+
+@app.get("/api/bot/avatar")
+async def api_bot_avatar():
+    """Return the bot's avatar URL — tries bot API, falls back to status.json."""
+    import json
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("http://tausendsassa-bot:8090/api/bot/avatar", timeout=3)
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+    # Fallback: status.json
+    try:
+        status = json.loads(_STATUS_PATH.read_text())
+        return {"bot_avatar_url": (status.get("bot") or {}).get("avatar_url")}
+    except Exception:
+        return {"bot_avatar_url": None}
 
 
 if __name__ == "__main__":

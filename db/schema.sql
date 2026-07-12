@@ -84,8 +84,8 @@ CREATE TABLE IF NOT EXISTS posted_entries (
     channel_id          BIGINT,
     content_hash        VARCHAR(32),
     entry_link          TEXT,
+    media_count         INTEGER,
     posted_at           TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(guild_id, guid)
 );
 
 -- Global: Feed HTTP cache
@@ -285,3 +285,36 @@ COMMENT ON TABLE map_settings IS 'Map visual settings and configuration per guil
 COMMENT ON TABLE map_pins IS 'User location pins on guild maps';
 COMMENT ON TABLE map_global_config IS 'Global map configuration (key-value store)';
 COMMENT ON TABLE moderation_log IS 'History of moderation actions per guild, for stats and health monitoring';
+
+-- Feedback / contact form submissions (from /feedback command and map Feedback button)
+CREATE TABLE IF NOT EXISTS feedback (
+    id                  BIGSERIAL PRIMARY KEY,
+    guild_id            BIGINT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
+    user_id             BIGINT NOT NULL,                     -- 0 when is_anonymous = true
+    is_anonymous        BOOLEAN NOT NULL DEFAULT FALSE,
+    subject             VARCHAR(32) NOT NULL DEFAULT 'other', -- feeds, map, moderation, calendar, proposals, other
+    message             TEXT NOT NULL,
+    admin_note          TEXT,
+    status              VARCHAR(16) NOT NULL DEFAULT 'new',   -- new, important, in_progress, archived
+    read                BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_guild ON feedback(guild_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(guild_id, status);
+
+-- Analytics: page views and interactions, low-cardinality daily rollup
+CREATE TABLE IF NOT EXISTS analytics (
+    id              BIGSERIAL PRIMARY KEY,
+    event_type      VARCHAR(64) NOT NULL,       -- 'page_view', 'slash_command', 'component_interaction', 'api_call'
+    guild_id        BIGINT,                     -- NULL = global / not-guild-specific
+    source          VARCHAR(32) NOT NULL DEFAULT 'web',  -- 'web', 'bot', 'api'
+    count           INTEGER NOT NULL DEFAULT 1,
+    day             DATE NOT NULL DEFAULT CURRENT_DATE,
+    hour            SMALLINT NOT NULL DEFAULT EXTRACT(HOUR FROM NOW()),
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(event_type, guild_id, source, day, hour)
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_day ON analytics(day);
+CREATE INDEX IF NOT EXISTS idx_analytics_event ON analytics(event_type, day);
+COMMENT ON TABLE analytics IS 'Rolling analytics counters for dashboard metrics';

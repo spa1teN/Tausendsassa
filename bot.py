@@ -79,7 +79,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-COGS = ["cogs.feeds", "cogs.map", "cogs.moderation", "cogs.help", "cogs.calendar"]
+COGS = ["cogs.feeds", "cogs.map", "cogs.moderation", "cogs.help", "cogs.calendar", "cogs.feedback"]
 
 # ─── Enhanced Bot-Klasse ────────────────────────────────────────────────────
 class Tausendsassa(commands.Bot):
@@ -159,6 +159,11 @@ class Tausendsassa(commands.Bot):
         status_reporter.record("bot", loaded_cogs=[e.split(".")[-1] for e in self.extensions.keys()])
         await status_reporter.start(asyncio)
         log.info("✅ Status reporter started")
+
+        # Start internal API server for dashboard (discord-dependent lookups)
+        from core.api_server import start_api_server
+        await start_api_server(self)
+        log.info("✅ API server started")
 
         @self.tree.error
         async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
@@ -270,6 +275,36 @@ class Tausendsassa(commands.Bot):
             latency_ms=round(self.latency * 1000) if self.latency else None,
         )
     
+
+    async def on_interaction(self, interaction: discord.Interaction):
+        """Track all component interactions for dashboard analytics."""
+        try:
+            status_reporter.bump_counter("bot", "interactions")
+            if interaction.type == discord.InteractionType.component:
+                status_reporter.bump_counter("bot", "component_interactions")
+                # Persist to analytics table for all-time cumulative data
+                if self.db and self.db.pool:
+                    from core.analytics import track_event
+                    await track_event(
+                        self.db.pool, "component_interaction",
+                        guild_id=interaction.guild_id if interaction.guild else None)
+        except Exception:
+            pass
+
+    async def on_app_command_completion(self, interaction: discord.Interaction, command: discord.app_commands.Command | discord.app_commands.ContextMenu):
+        """Track slash command usage for dashboard analytics."""
+        try:
+            status_reporter.bump_counter("bot", "slash_commands")
+            status_reporter.bump_counter("bot", f"slash_{command.qualified_name.replace(' ', '_')}")
+            # Persist to analytics table for all-time cumulative data
+            if self.db and self.db.pool:
+                from core.analytics import track_event
+                await track_event(
+                    self.db.pool, "slash_command",
+                    guild_id=interaction.guild_id if interaction.guild else None)
+        except Exception:
+            pass
+
     async def close(self):
         """Cleanup when bot is shutting down"""
         log.info("🔄 Bot is shutting down...")

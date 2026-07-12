@@ -1,650 +1,768 @@
-"""Simplified Map Cog for Discord Bot with modular structure and improved caching."""
+"""Simplified Map Cog for Discord Bot — CV2 edition."""
 
 import asyncio
+import math
+import time
 import geopandas as gpd
 from pathlib import Path
 from typing import Optional, Dict, Tuple, List
 from datetime import datetime, timedelta
-from PIL import Image
+from copy import deepcopy
+from PIL import Image as PILImage
 from io import BytesIO
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-# Import our modular components
+APOLOGY_TEXT = (
+    "## Apology for Spam\n"
+    "-# Hey everyone, sorry for the frequent pings and new posts earlier today. "
+    "I had an issue and hope it's now fixed. This Map message is the correct one "
+    "that's registered in my database. If there are still any others I could not "
+    "remotely delete, feel free to do so.\n"
+    "-# Mea culpa, enjoy the Sunday\n"
+    "-# — [spa1teN](https://discord.com/users/485051896655249419)"
+)
+DEV_GUILD = 1398409754967015647
+# Apology expiry: set to time.time() + 86400 on first load, survives restarts
+_APOLOGY_EXPIRY: float = 0.0
 from core.map_gen import MapGenerator
 from core.map_storage import MapStorage
-from core.map_views import MapPinButtonView, LocationModal, UserPinOptionsView
-from core.map_views_admin import AdminToolsView
+from core.map_views import LocationModal, UserPinOptionsView, UpdateLocationModal
+from core.config import config as bot_config
 from core.map_config import MapConfig
 
-# Import German timezone utilities
 from core.timezone_util import get_german_time, format_german_time
-
-# Constants
-IMAGE_WIDTH = 1500
-# BOT_OWNER_ID and PIN_COOLDOWN_MINUTES will be loaded from config in __init__
 
 
 class MapV2Cog(commands.Cog):
-    """Cog for managing maps with user pins displayed as images."""
-
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.log = bot.get_cog_logger("map")
-
-        # Import config here to avoid circular imports
-        from core.config import config
-        self.config = config
-
-        # Setup directories
+        self.config = MapConfig()
         self.data_dir = Path(__file__).parent / "map_data"
         self.cache_dir = Path(__file__).parent / "map_data/map_cache"
-
-        # Initialize modular components (storage still used for image caching)
         self.storage = MapStorage(self.data_dir, self.cache_dir, self.log)
         self.map_generator = MapGenerator(self.data_dir, self.cache_dir, self.log)
-
-        # In-memory cache - loaded from database in cog_load()
         self.global_config: Dict = {}
-        self.maps: Dict[str, Dict] = {}
+        self.maps: Dict = {}
+        self._guild_names: dict = {}
+        self._snapshots: dict = {}
+    def _snapshot_settings(self, guild_id: str):
+        """Store a snapshot of current settings for potential revert."""
+        md = self.maps.get(guild_id, {})
+        self._snapshots[guild_id] = deepcopy(md.get('settings', {}))
 
-        # Cooldown tracking for pin updates
-        self.pin_cooldowns = {}  # user_id -> last_update_timestamp
-    
-    def _is_user_on_cooldown(self, user_id: str) -> Tuple[bool, Optional[datetime]]:
-        """Check if user is on cooldown for pin updates."""
-        if user_id not in self.pin_cooldowns:
-            return False, None
-        
-        last_update = self.pin_cooldowns[user_id]
-        cooldown_expires = last_update + timedelta(minutes=self.config.pin_cooldown_minutes)
-        
-        if datetime.now() < cooldown_expires:
-            return True, cooldown_expires
-        else:
-            # Cooldown expired, remove from tracking
-            del self.pin_cooldowns[user_id]
-            return False, None
-    
-    def _set_user_cooldown(self, user_id: str):
-        """Set cooldown for user after pin update."""
-        self.pin_cooldowns[user_id] = datetime.now()
+    def _revert_settings(self, guild_id: str):
+        """Revert to the stored snapshot settings."""
+        if guild_id in self._snapshots:
+            if guild_id in self.maps:
+                self.maps[guild_id]['settings'] = self._snapshots.pop(guild_id)
 
-    async def cog_load(self):
-        """Called when the cog is loaded. Load data from database and re-register persistent views."""
+    # ── CV2 builders ──────────────────────────────────────────────────
+
+    def _build_map_card_view(self, guild_id: int) -> discord.ui.LayoutView:
+        map_data = self.maps.get(str(guild_id), {})
+        region = map_data.get("region", "world")
+        pin_count = len(map_data.get("pins", {}))
+        server_name = self._guild_names.get(str(guild_id))
+        if not server_name:
+            guild = self.bot.get_guild(guild_id)
+            server_name = guild.name if guild else str(guild_id)
+        view = discord.ui.LayoutView(timeout=None)
+
+        # Temporary apology — auto-removed after 24h
+        if time.time() < _APOLOGY_EXPIRY:
+            apology = discord.ui.Container(accent_colour=discord.Colour(0x7289DA))
+            apology.add_item(discord.ui.TextDisplay(APOLOGY_TEXT))
+            view.add_item(apology)
+            view.add_item(discord.ui.Separator())
+
+        container = discord.ui.Container(accent_colour=discord.Colour(0x7289DA))
+        title = f"## {server_name} — Map\n-# {pin_count} Pins · {region.capitalize()} · Last changed: <t:{int(time.time())}:R>"
+        container.add_item(discord.ui.TextDisplay(title))
+        gallery = discord.ui.MediaGallery()
+        gallery.add_item(media="attachment://map.png")
+        container.add_item(gallery)
+        container.add_item(discord.ui.TextDisplay("-# Customise via `/map` (admin only)"))
+        container.add_item(discord.ui.Separator())
+
+        row = discord.ui.ActionRow()
+        pin_btn = discord.ui.Button(label="Pin", emoji="📍", style=discord.ButtonStyle.primary,
+                                    custom_id=f"map_cv2_pin:{guild_id}")
+        pin_btn.callback = self._cv2_pin_callback
+        row.add_item(pin_btn)
+        if bot_config.webapp_url:
+            row.add_item(discord.ui.Button(label="3D View", emoji="🌍", style=discord.ButtonStyle.link,
+                                           url=f"{bot_config.webapp_url}/map/{guild_id}"))
+        fb_btn = discord.ui.Button(label="Feedback", emoji="💬", style=discord.ButtonStyle.secondary,
+                                   custom_id=f"map_cv2_feedback:{guild_id}")
+        fb_btn.callback = self._cv2_feedback_callback
+        row.add_item(fb_btn)
+        container.add_item(row)
+        view.add_item(container)
+        return view
+
+    @staticmethod
+    def _parse_color_to_rgb(c: str):
+        """Parse a hex string like '#FF4444' or 'FF4444' to an RGB tuple."""
+        c = c.lstrip('#')
         try:
-            # Load data from database
-            if hasattr(self.bot, 'db') and self.bot.db:
-                self.maps = await self.bot.db.maps.load_all_maps()
-                self.global_config = await self.bot.db.maps.get_all_global_config()
-                self.log.info(f"Loaded {len(self.maps)} maps from database")
+            return (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16))
+        except (ValueError, IndexError):
+            return (255, 0, 0)
+
+    def _build_admin_view(self, guild_id: int, show_preview_btn: bool = False) -> discord.ui.LayoutView:
+        map_data = self.maps.get(str(guild_id), {})
+        settings = map_data.get('settings', {})
+        colors = settings.get('colors', {})
+        borders = settings.get('borders', {})
+        pins_cfg = settings.get('pins', {})
+
+        def _hex(rgb):
+            if not isinstance(rgb, (list, tuple)) or len(rgb) < 3:
+                return "—"
+            return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+        from PIL import ImageDraw, ImageFont
+        swatch_w, swatch_h = 420, 30
+        specs = [("Land", colors.get("land"), [128, 128, 128]),
+                 ("Water", colors.get("water"), [64, 64, 128]),
+                 ("Borders", borders.get("country"), [0, 0, 0])]
+        combined = PILImage.new("RGB", (swatch_w, swatch_h))
+        for i, (label, c, fallback) in enumerate(specs):
+            rgb = (c if isinstance(c, (list, tuple)) and len(c) >= 3 else fallback)[:3]
+            x0, x1 = i * swatch_w // 3, (i + 1) * swatch_w // 3
+            for x in range(x0, x1):
+                for y in range(swatch_h):
+                    combined.putpixel((x, y), tuple(rgb))
+            lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+            tc = (0, 0, 0) if lum > 140 else (255, 255, 255)
+            try:
+                d = ImageDraw.Draw(combined)
+                f = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+                bb = d.textbbox((0, 0), label, font=f)
+                d.text(((x0 + x1) // 2 - (bb[2] - bb[0]) // 2, (swatch_h - (bb[3] - bb[1])) // 2), label, fill=tc, font=f)
+            except Exception:
+                pass
+        buf = BytesIO(); combined.save(buf, format="PNG"); buf.seek(0)
+
+        pin_c = pins_cfg.get("color") or colors.get("pin")
+        if isinstance(pin_c, str):
+            pin_c = self._parse_color_to_rgb(pin_c)
+        pin_rgb = (pin_c if isinstance(pin_c, (list, tuple)) and len(pin_c) >= 3 else [255, 0, 0])[:3]
+        pin_img = PILImage.new("RGB", (swatch_w, swatch_h), tuple(pin_rgb))
+        try:
+            d = ImageDraw.Draw(pin_img)
+            f = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+            bb = d.textbbox((0, 0), "Pin", font=f)
+            d.text(((swatch_w - (bb[2] - bb[0])) // 2, (swatch_h - (bb[3] - bb[1])) // 2), "Pin", fill=tc, font=f)
+        except Exception:
+            pass
+        pin_buf = BytesIO(); pin_img.save(pin_buf, format="PNG"); pin_buf.seek(0)
+
+        view = discord.ui.LayoutView(timeout=300)
+        container = discord.ui.Container(accent_colour=discord.Colour(0x7289DA))
+        container.add_item(discord.ui.TextDisplay("## ⚙️ Map Settings"))
+
+        gallery = discord.ui.MediaGallery()
+        gallery.add_item(media="attachment://colors.png",
+            description=f"Land `{_hex(colors.get('land'))}` · Water `{_hex(colors.get('water'))}` · Borders `{_hex(borders.get('country'))}`")
+        container.add_item(gallery)
+        row1 = discord.ui.ActionRow()
+        edit_c_btn = discord.ui.Button(label="Edit Colors", emoji="🎨", style=discord.ButtonStyle.primary,
+                                       custom_id=f"map_cv2_colors:{guild_id}")
+        edit_c_btn.callback = self._cv2_color_modal_callback
+        row1.add_item(edit_c_btn)
+        container.add_item(row1)
+
+        container.add_item(discord.ui.Separator())
+        pin_gal = discord.ui.MediaGallery()
+        pin_gal.add_item(media="attachment://pin.png", description=f"`{_hex(pin_c)}`")
+        container.add_item(pin_gal)
+        row_pin = discord.ui.ActionRow()
+        edit_p_btn = discord.ui.Button(label="Edit Pin", emoji="📍", style=discord.ButtonStyle.secondary,
+                                       custom_id=f"map_cv2_editpinbtn:{guild_id}")
+        edit_p_btn.callback = self._cv2_pinconfig_modal_callback
+        row_pin.add_item(edit_p_btn)
+        row_pin.add_item(discord.ui.Button(label=f"Size: {pins_cfg.get('size', 14)}", emoji="📏",
+                          style=discord.ButtonStyle.secondary, custom_id=f"map_cv2_pinsize_dummy:{guild_id}", disabled=True))
+        container.add_item(row_pin)
+
+        if show_preview_btn:
+            container.add_item(discord.ui.Separator())
+            row_preview = discord.ui.ActionRow()
+            preview_btn = discord.ui.Button(label="Render Preview", emoji="🖼️", style=discord.ButtonStyle.success,
+                                            custom_id=f"map_cv2_renderpreview:{guild_id}")
+            preview_btn.callback = self._cv2_render_preview_callback
+            row_preview.add_item(preview_btn)
+            container.add_item(row_preview)
+
+        container.add_item(discord.ui.Separator())
+        row_bottom = discord.ui.ActionRow()
+        back_btn = discord.ui.Button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary,
+                                     custom_id=f"map_cv2_styleback:{guild_id}")
+        back_btn.callback = self._cv2_style_back_callback
+        row_bottom.add_item(back_btn)
+        container.add_item(row_bottom)
+
+        view.add_item(container)
+        view._swatch_attachments = [discord.File(buf, "colors.png"), discord.File(pin_buf, "pin.png")]
+        return view
+
+    # ── Callbacks ─────────────────────────────────────────────────────
+
+    async def _cv2_pin_callback(self, interaction: discord.Interaction):
+        guild_id = str(interaction.guild.id)
+        user_id = str(interaction.user.id)
+        try:
+            if guild_id in self.maps and user_id in self.maps[guild_id].get('pins', {}):
+                up = self.maps[guild_id]['pins'][user_id]
+                ts = up.get('timestamp', '')
+                try:
+                    ts_fmt = f"<t:{int(datetime.fromisoformat(ts).timestamp())}:F>"
+                except Exception:
+                    ts_fmt = ts or "Unknown"
+                view = discord.ui.LayoutView(timeout=300)
+                c = discord.ui.Container(accent_colour=discord.Colour(0x7289DA))
+                c.add_item(discord.ui.TextDisplay(
+                    f"## 📍 Your Pin\n**Location:** {up.get('display_name', 'Unknown')}\n**Added:** {ts_fmt}"))
+                row = discord.ui.ActionRow()
+                edit_btn = discord.ui.Button(label="Edit", emoji="📍", style=discord.ButtonStyle.primary,
+                                             custom_id=f"map_cv2_editpin:{guild_id}")
+                edit_btn.callback = self._cv2_edit_pin_callback
+                row.add_item(edit_btn)
+                rem_btn = discord.ui.Button(label="Remove", emoji="❌", style=discord.ButtonStyle.danger,
+                                            custom_id=f"map_cv2_removepin:{guild_id}")
+                rem_btn.callback = self._cv2_remove_pin_callback
+                row.add_item(rem_btn)
+                c.add_item(row)
+                view.add_item(c)
+                await interaction.response.send_message(view=view, ephemeral=True)
             else:
-                # Fallback to file-based loading if no database
-                self.maps = self.storage.load_all_data()
-                self.global_config = self.storage.load_global_config()
-                self.log.warning("Database not available, using file-based storage")
+                await interaction.response.send_modal(LocationModal(self, int(guild_id)))
+        except discord.NotFound:
+            pass
 
-            # Clear base map cache on restart for fresh start
-            await self.storage.cache.memory_cache.clear()
-            self.log.info("Cleared all base map cache on restart")
-        
-            # Register all persistent views for existing maps
-            for guild_id, map_data in self.maps.items():
-                # Get current region from map data
-                region = map_data.get('region', 'world')
-                channel_id = map_data.get('channel_id')
-                message_id = map_data.get('message_id')
-                view = MapPinButtonView(self, region, int(guild_id))
-                if message_id:
-                    self.bot.add_view(view, message_id=message_id)
-                else:
-                    self.bot.add_view(view)
 
-                # Update existing map messages with correct view
-                if channel_id and message_id:
-                    try:
-                        # get_channel uses cache (empty during setup_hook), fall back to API call
-                        channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
-                        message = await channel.fetch_message(message_id)
+    async def _stale_map_response(self, interaction: discord.Interaction):
+        """Show CV2 notice that the map no longer exists."""
+        v = discord.ui.LayoutView(timeout=0)
+        c = discord.ui.Container()
+        c.add_item(discord.ui.TextDisplay("⛔ This map no longer exists. It may have been deleted."))
+        v.add_item(c)
+        try:
+            await interaction.response.edit_message(view=v)
+        except Exception:
+            await interaction.response.send_message(view=v, ephemeral=True)
+    async def _cv2_style_back_callback(self, interaction: discord.Interaction):
+        """Return from the style/settings view to the /map dashboard."""
+        from core.map_dashboard import build_map_dashboard
+        view = await build_map_dashboard(self, interaction.guild.id)
+        await interaction.response.edit_message(view=view, attachments=[])
 
-                        # Check if map has custom settings
-                        has_custom_settings = bool(map_data.get('settings'))
-                        if has_custom_settings:
-                            # Force complete regeneration for custom maps
-                            self.log.info(f"Force-regenerating map with custom settings for guild {guild_id}")
-                            await self._invalidate_map_cache(int(guild_id))
-                            await self._update_map(int(guild_id), channel_id)
-                            self.log.info(f"Completed regeneration for guild {guild_id} with custom settings")
-                        else:
-                            # Just update the view for default maps
-                            await message.edit(view=view)
-                            self.log.info(f"Updated view for guild {guild_id} with region {region}")
-                    except Exception as e:
-                        self.log.warning(f"Could not update view for guild {guild_id}: {e}")
+    async def _cv2_admin_callback(self, interaction: discord.Interaction):
+        guild_id = str(interaction.guild.id)
+        if guild_id not in self.maps:
+            await self._stale_map_response(interaction)
+            return
+        self._snapshot_settings(guild_id)
+        view = self._build_admin_view(interaction.guild.id)
+        await interaction.response.edit_message(view=view,
+            attachments=getattr(view, '_swatch_attachments', []))
 
-                self.log.info(f"Re-registered persistent view for guild {guild_id}")
+    async def _cv2_color_modal_callback(self, interaction: discord.Interaction):
+        from core.map_views_admin import ColorSettingsModal
+        modal = ColorSettingsModal(self, interaction.guild.id, interaction)
+        await interaction.response.send_modal(modal)
+
+    async def _cv2_pinconfig_modal_callback(self, interaction: discord.Interaction):
+        from core.map_views_admin import PinSettingsModal
+        modal = PinSettingsModal(self, interaction.guild.id, interaction)
+        await interaction.response.send_modal(modal)
+
+    async def _cv2_edit_pin_callback(self, interaction: discord.Interaction):
+        modal = UpdateLocationModal(self, interaction.guild.id, interaction)
+        await interaction.response.send_modal(modal)
+
+    async def _cv2_remove_pin_callback(self, interaction: discord.Interaction):
+        guild_id = str(interaction.guild.id)
+        user_id = str(interaction.user.id)
+        if guild_id in self.maps and user_id in self.maps[guild_id].get('pins', {}):
+            del self.maps[guild_id]['pins'][user_id]
+            await self._delete_pin(int(guild_id), int(user_id))
+            await self._invalidate_map_cache(int(guild_id))
+            channel_id = self.maps[guild_id]['channel_id']
+            await self._update_map(int(guild_id), channel_id)
+            await self._update_global_overview()
+            v = discord.ui.LayoutView(timeout=0)
+            v.add_item(discord.ui.Container().add_item(discord.ui.TextDisplay("❌ Pin removed.")))
+            await interaction.response.edit_message(view=v)
+
+    async def _cv2_render_preview_callback(self, interaction: discord.Interaction):
+        """Generate a preview map and replace the admin card with preview."""
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild.id
+        if str(guild_id) not in self.maps:
+            v = discord.ui.LayoutView(timeout=0)
+            v.add_item(discord.ui.Container().add_item(
+                discord.ui.TextDisplay("⛔ Map no longer exists.")))
+            await interaction.followup.edit_message(
+                message_id=interaction.message.id, attachments=[], view=v)
+            return
+        map_data = self.maps.get(str(guild_id), {})
+        settings = map_data.get('settings', {})
+
+        result = await self._generate_preview_map(guild_id, settings)
+        preview_file, _ = result if result else (None, None)
+        if not preview_file:
+            await interaction.followup.send("⛔ Failed to generate preview.", ephemeral=True)
+            return
+        container = discord.ui.Container(accent_colour=discord.Colour(0x57F287))
+        container.add_item(discord.ui.TextDisplay(
+            "## 🖼️ Map Preview\n-# This is how your map will look with the new settings."))
+        gallery = discord.ui.MediaGallery()
+        gallery.add_item(media="attachment://preview.png")
+        container.add_item(gallery)
+        row = discord.ui.ActionRow()
+        apply_btn = discord.ui.Button(label="Apply", emoji="✅", style=discord.ButtonStyle.success,
+                                      custom_id=f"map_cv2_applypreview:{guild_id}")
+        apply_btn.callback = self._cv2_apply_preview_callback
+        row.add_item(apply_btn)
+        cancel_btn = discord.ui.Button(label="Cancel", emoji="❌", style=discord.ButtonStyle.danger,
+                                       custom_id=f"map_cv2_cancelpreview:{guild_id}")
+        cancel_btn.callback = self._cv2_cancel_preview_callback
+        row.add_item(cancel_btn)
+        container.add_item(row)
+        view = discord.ui.LayoutView(timeout=300)
+        view.add_item(container)
+        await interaction.followup.edit_message(
+            message_id=interaction.message.id,
+            attachments=[preview_file], view=view)
+
+    async def _cv2_apply_preview_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild.id)
+        if guild_id not in self.maps:
+            v = discord.ui.LayoutView(timeout=0)
+            v.add_item(discord.ui.Container().add_item(
+                discord.ui.TextDisplay("⛔ Map no longer exists.")))
+            await interaction.followup.edit_message(
+                message_id=interaction.message.id, attachments=[], view=v)
+            return
+        self._snapshots.pop(guild_id, None)
+        await self._save_data(guild_id)
+        await self._invalidate_map_cache(int(guild_id))
+        await self._update_map(int(guild_id), self.maps[guild_id]['channel_id'])
+        await self._update_global_overview()
+        v = discord.ui.LayoutView(timeout=1)
+        v.add_item(discord.ui.Container().add_item(
+            discord.ui.TextDisplay("✅ Settings applied. Map updated.")))
+        await interaction.followup.edit_message(
+            message_id=interaction.message.id, attachments=[], view=v)
+
+    async def _cv2_cancel_preview_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild.id)
+        if guild_id not in self.maps:
+            v = discord.ui.LayoutView(timeout=0)
+            v.add_item(discord.ui.Container().add_item(
+                discord.ui.TextDisplay("⛔ Map no longer exists.")))
+            await interaction.followup.edit_message(
+                message_id=interaction.message.id, attachments=[], view=v)
+            return
+        self._revert_settings(guild_id)
+        await self._save_data(guild_id)
+        v = discord.ui.LayoutView(timeout=1)
+        v.add_item(discord.ui.Container().add_item(
+            discord.ui.TextDisplay("❌ Preview cancelled. Settings reverted.")))
+        await interaction.followup.edit_message(
+            message_id=interaction.message.id, attachments=[], view=v)
+
+    async def _cv2_feedback_callback(self, interaction: discord.Interaction):
+        """Show ephemeral CV2 menu to pick subject + anonymity, then open modal."""
+        try:
+            await interaction.response.defer(ephemeral=True)
+            from core.feedback_menu import build_feedback_menu
+            fb_cog = self.bot.get_cog("FeedbackCog")
+            if not fb_cog:
+                self.log.error("Feedback callback: FeedbackCog not found")
+                await interaction.followup.send("Feedback system unavailable.", ephemeral=True)
+                return
+            view = build_feedback_menu(fb_cog, interaction.guild_id, interaction.user.id)
+            await interaction.followup.send(view=view, ephemeral=True)
         except Exception as e:
-            self.log.error(f"Error re-registering views: {e}")
+            self.log.error(f"Feedback callback failed: {e}", exc_info=True)
+            try:
+                await interaction.followup.send("Something went wrong. Try `/feedback` instead.", ephemeral=True)
+            except Exception:
+                pass
+    async def cog_load(self):
+        try:
+            if not (hasattr(self.bot, 'db') and self.bot.db):
+                self.log.error("Database not available")
+                return
+            self.maps = await self.bot.db.maps.load_all_maps()
+            self.global_config = await self.bot.db.maps.get_all_global_config()
+            await self.storage.cache.memory_cache.clear()
+
+            for guild_id in list(self.maps.keys()):
+                try:
+                    guild = await self.bot.fetch_guild(int(guild_id))
+                    self._guild_names[guild_id] = guild.name
+                except Exception:
+                    self._guild_names[guild_id] = str(guild_id)
+
+            # Edit existing views on messages that still have IDs
+            # NOTE: _update_map handles proper attachment+view regeneration.
+            # Schedule cleanup + regen after guilds are synced
+            global _APOLOGY_EXPIRY
+            if _APOLOGY_EXPIRY == 0.0:
+                exp_file = self.data_dir / ".apology_expiry"
+                if exp_file.exists():
+                    _APOLOGY_EXPIRY = float(exp_file.read_text().strip())
+                    if time.time() > _APOLOGY_EXPIRY:
+                        self.log.info("Apology expired — removing")
+                        exp_file.unlink(missing_ok=True)
+                        _APOLOGY_EXPIRY = 0.0
+                    else:
+                        self.log.info(f"Apology active until {_APOLOGY_EXPIRY} (from file)")
+                else:
+                    _APOLOGY_EXPIRY = time.time() + 86400
+                    exp_file.write_text(str(_APOLOGY_EXPIRY))
+                    self.log.info(f"Apology active until {_APOLOGY_EXPIRY} (24h from now)")
+            self.bot.loop.create_task(self._delayed_regen())
+        except Exception as e:
+            self.log.error(f"cog_load failed: {e}")
 
     async def _update_map(self, guild_id: int, channel_id: int, interaction=None):
-        """Update the map in the specified channel."""
         try:
             channel = self.bot.get_channel(channel_id)
             if not channel:
-                self.log.error(f"Channel {channel_id} not found")
-                return
+                try:
+                    channel = await self.bot.fetch_channel(channel_id)
+                except (discord.NotFound, discord.Forbidden):
+                    return
 
-            # Send progress message if we have an interaction (from /map_create)
-            progress_message = None
-            if interaction:
-                progress_embed = discord.Embed(
-                    title="🗺️ Generating Map",
-                    description="Creating your server map...",
-                    color=0x7289da
-                )
-                progress_message = await interaction.followup.send(embed=progress_embed, ephemeral=True)
-
-            # Use centralized progress handler
-            from core.map_progress_handler import create_server_map_progress_callback
-            progress_callback = await create_server_map_progress_callback(interaction, self.log, progress_message, hide_final_image=True) if progress_message else None
-
-            # Generate map image (uses caching internally and respects custom settings)
-            map_file = await self._generate_map_image(guild_id, progress_callback)
+            map_file = await self._generate_map_image(guild_id)
             if not map_file:
-                self.log.error("Failed to generate map image")
-                if progress_message:
-                    error_embed = discord.Embed(
-                        title="⛔ Error",
-                        description="Failed to generate map image.",
-                        color=0xff4444
-                    )
-                    await progress_message.edit(embed=error_embed)
                 return
+            map_file.filename = "map.png"
 
-            # Get map data for view - get current region
             map_data = self.maps.get(str(guild_id), {})
-            region = map_data.get('region', 'world')
-        
-            # Button with persistent view
-            view = MapPinButtonView(self, region, guild_id)
+            view = self._build_map_card_view(guild_id)
 
-            # Check if there's an existing map message to edit
             existing_message_id = map_data.get('message_id')
             if existing_message_id:
                 try:
                     message = await channel.fetch_message(existing_message_id)
-                    await message.edit(content=None, attachments=[map_file], view=view)
+                    await message.edit(attachments=[map_file], view=view)
                     return
                 except discord.NotFound:
-                    self.log.info(f"Previous map message {existing_message_id} not found, creating new one")
-                except Exception as e:
-                    self.log.warning(f"Failed to edit existing map message: {e}")
+                    pass
 
-            # Send new message - just image with buttons
             message = await channel.send(file=map_file, view=view)
-            
-            # Update message ID in data
             if str(guild_id) not in self.maps:
                 self.maps[str(guild_id)] = {}
             self.maps[str(guild_id)]['message_id'] = message.id
             await self._save_data(str(guild_id))
-
-            # Complete progress message
-            if progress_message:
-                success_embed = discord.Embed(
-                    title="✅ Map Created Successfully",
-                    description="Your server map has been posted to the channel!",
-                    color=0x00ff00
-                )
-                await progress_message.edit(embed=success_embed)
-
         except Exception as e:
-            self.log.error(f"Failed to update map: {e}")
-            if interaction and progress_message:
-                error_embed = discord.Embed(
-                    title="⛔ Error",
-                    description="Failed to create map. Please try again.",
-                    color=0xff4444
-                )
-                await progress_message.edit(embed=error_embed)
+            self.log.error(f"_update_map failed: {e}")
 
     async def cog_unload(self):
-        """Clean up when cog is unloaded."""
-        # Save all guild data synchronously before DB closes
         for guild_id in list(self.maps.keys()):
             try:
                 await self._save_data(guild_id)
             except Exception as e:
-                self.log.warning(f"Could not save map data for {guild_id} during unload: {e}")
+                self.log.warning(f"Save failed for {guild_id}: {e}")
+    async def _delayed_regen(self):
+        """Regenerate maps after guild cache is fully populated."""
+        await asyncio.sleep(12)
+        # Directly delete known orphan message IDs across all map channels
+        known_orphans = {1525778227442876487, 1525778211303329882, 1525776468918009926,
+                         1525776317172285511, 1525655394662350848}
+        deleted_total = 0
+        for guild_id_str, map_data in list(self.maps.items()):
+            cid = map_data.get('channel_id')
+            keep_id = str(map_data.get('message_id') or '')
+            if not cid:
+                continue
+            try:
+                channel = self.bot.get_channel(cid) or await self.bot.fetch_channel(cid)
+            except discord.NotFound:
+                self.log.info("Channel %s for guild %s was deleted — clearing stale map refs", cid, guild_id_str)
+                self.maps[guild_id_str].pop('channel_id', None)
+                self.maps[guild_id_str].pop('message_id', None)
+                if hasattr(self.bot, 'db') and self.bot.db:
+                    try:
+                        await self.bot.db.maps.save_map_data(int(guild_id_str), self.maps[guild_id_str])
+                    except Exception:
+                        pass
+                continue
+            except discord.Forbidden:
+                self.log.info("No access to channel %s for guild %s — skipping cleanup", cid, guild_id_str)
+                continue
+            except Exception as e:
+                self.log.warning("Cleanup failed for guild %s: %s", guild_id_str, e)
+                continue
+
+            # Channel is accessible — clean up orphan messages
+            try:
+                # Targeted delete of known orphans
+                for oid in list(known_orphans):
+                    try:
+                        msg = await channel.fetch_message(oid)
+                        await msg.delete()
+                        deleted_total += 1
+                        known_orphans.discard(oid)
+                        self.log.info(f"Deleted orphan {oid} from channel {cid}")
+                    except discord.NotFound:
+                        known_orphans.discard(oid)
+                    except Exception:
+                        pass
+                # Broad sweep: delete all bot messages except the configured one
+                async for msg in channel.history(limit=200):
+                    if msg.author.id == self.bot.user.id and str(msg.id) != keep_id:
+                        try:
+                            await msg.delete()
+                            deleted_total += 1
+                            self.log.info(f"Deleted extra map message {msg.id} in channel {cid}")
+                        except Exception as e:
+                            self.log.warning(f"Failed to delete {msg.id}: {e}")
+            except Exception as e:
+                self.log.warning(f"Orphan cleanup failed for guild {guild_id_str}: {e}")
+
+        if known_orphans:
+            self.log.info(f"Could not delete orphans: {known_orphans}")
+        if deleted_total:
+            self.log.info(f"Deleted {deleted_total} map messages total")
+        # Regenerate all maps that have a valid message_id
+        for guild_id_str, map_data in list(self.maps.items()):
+            cid = map_data.get('channel_id')
+            gid_int = int(guild_id_str)
+            if cid and map_data.get('message_id'):
+                try:
+                    await self._update_map(gid_int, cid)
+                except Exception:
+                    pass
 
     async def _save_data(self, guild_id: str):
         """Save map data for specific guild to database."""
         if hasattr(self.bot, 'db') and self.bot.db:
             guild_id_int = int(guild_id)
             if guild_id in self.maps:
-                # Save to database
                 await self.bot.db.maps.save_map_data(guild_id_int, self.maps[guild_id])
             else:
-                # Delete from database if removed from maps
                 await self.bot.db.maps.delete_settings(guild_id_int)
-        else:
-            # Fallback to file-based storage
-            await self.storage.save_data(guild_id, self.maps)
-
-    async def _save_global_config(self):
-        """Save global config to database."""
-        if hasattr(self.bot, 'db') and self.bot.db:
-            for key, value in self.global_config.items():
-                await self.bot.db.maps.set_global_config(key, value)
-        else:
-            # Fallback to file-based storage
-            await self.storage.save_global_config(self.global_config)
-
-    async def _save_pin(self, guild_id: int, user_id: int, pin_data: Dict):
-        """Save a single pin to database (more efficient than saving all data)."""
-        if hasattr(self.bot, 'db') and self.bot.db:
-            await self.bot.db.maps.set_pin(
-                guild_id=guild_id,
-                user_id=user_id,
-                latitude=pin_data['lat'],
-                longitude=pin_data['lng'],
-                username=pin_data.get('username'),
-                display_name=pin_data.get('display_name'),
-                location=pin_data.get('location'),
-                color=pin_data.get('color', '#FF0000'),
-                avatar_hash=pin_data.get('avatar_hash'),
-                country_code=pin_data.get('country_code')
-            )
-        else:
-            # Fallback to file-based storage
-            await self.storage.save_data(str(guild_id), self.maps)
 
     async def _delete_pin(self, guild_id: int, user_id: int):
-        """Delete a single pin from database."""
         if hasattr(self.bot, 'db') and self.bot.db:
             await self.bot.db.maps.delete_pin(guild_id, user_id)
-        else:
-            # Fallback to file-based storage
-            await self.storage.save_data(str(guild_id), self.maps)
 
     async def _invalidate_map_cache(self, guild_id: int):
-        """Invalidate cached maps for a guild."""
         await self.storage.invalidate_map_cache(guild_id)
 
-    async def _generate_map_image(self, guild_id: int, progress_callback=None) -> Optional[discord.File]:
-        """Generate a map image with pins for the guild."""
-        try:
-            # Check for cached final map first
-            cached_map = await self.storage.get_cached_map(guild_id, self.maps)
-            if cached_map:
-                return cached_map
+    async def _delete_map_message(self, map_data: dict):
+        channel_id = map_data.get('channel_id')
+        message_id = map_data.get('message_id')
+        if channel_id and message_id:
+            try:
+                channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
+                message = await channel.fetch_message(message_id)
+                await message.delete()
+            except Exception:
+                pass
 
+    async def _generate_map_image(self, guild_id: int, progress_callback=None) -> Optional[discord.File]:
+        try:
             map_data = self.maps.get(str(guild_id), {})
             region = map_data.get('region', 'world')
             pins = map_data.get('pins', {})
-            
-            # Calculate dimensions based on region
             width, height = self.map_generator.calculate_image_dimensions(region)
-            if region != "germany" and region != "usmainland":
-                height = int(height * 0.8)
-            
-            # Try to get cached base map first
+
             base_map = await self.storage.get_cached_base_map(region, width, height, str(guild_id), self.maps)
             projection_func = None
-            
             if not base_map:
-                # Generate new base map using improved renderer
-                self.log.info(f"No base map in cache for {region}, rendering new one (will take some time)")
-                
-                # Define progress callback for rendering updates
-                async def internal_progress_callback(message, percentage, image_buffer=None):
-                    self.log.info(f"Map rendering progress: {message} ({percentage}%)")
-                    if progress_callback:
-                        await progress_callback(message, percentage, image_buffer)
-                
-                base_map, projection_func = await self.map_generator.render_geopandas_map(region, width, height, str(guild_id), self.maps, internal_progress_callback)
-                
+                base_map, projection_func = await self.map_generator.render_geopandas_map(
+                    region, width, height, str(guild_id), self.maps)
                 if base_map:
-                    # Cache the new base map
                     await self.storage.cache_base_map(region, width, height, base_map, str(guild_id), self.maps)
-                else:
-                    # Fallback to simple background
-                    land_color, water_color = self.map_generator.get_map_colors(str(guild_id), self.maps)
-                    base_map = Image.new('RGB', (width, height), color=water_color)
             else:
-                # For cached maps, recreate the projection function
                 projection_func = self._create_projection_function(region, width, height)
-            
-            # Calculate pin size based on image height and custom settings
+
+            if not base_map or not projection_func:
+                land_color, water_color = self.map_generator.get_map_colors(str(guild_id), self.maps)
+                base_map = PILImage.new('RGB', (width, height), color=water_color)
+                projection_func = self._create_projection_function(region, width, height)
+
             pin_color, custom_pin_size = self.map_generator.get_pin_settings(str(guild_id), self.maps)
-            base_pin_size = int(height * custom_pin_size / 2400)  # Scale based on custom size
-            
-            # Group overlapping pins
+            base_pin_size = int(height * custom_pin_size / 2400)
             pin_groups = self.map_generator.group_overlapping_pins(pins, projection_func, base_pin_size)
-            
-            # Draw pins on the map with custom settings
-            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size, str(guild_id), self.maps)
-            
-            # Convert PIL image to Discord file
+            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size,
+                                                str(guild_id), self.maps)
             img_buffer = BytesIO()
             base_map.save(img_buffer, format='PNG', optimize=True)
-            
-            # Cache the final image
-            await self.storage.cache_map(guild_id, self.maps, img_buffer)
-            
             img_buffer.seek(0)
-            filename = f"map_{region}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-            return discord.File(img_buffer, filename=filename)
-            
+            return discord.File(img_buffer, filename=f"map_{region}.png")
         except Exception as e:
-            self.log.error(f"Failed to generate map image: {e}")
+            self.log.error(f"generate_map_image failed: {e}")
             return None
 
+    async def _generate_preview_map(self, guild_id: int, preview_settings: Dict, progress_callback=None):
+        """Generate map with override settings without modifying self.maps."""
+        try:
+            map_data = self.maps.get(str(guild_id), {})
+            region = map_data.get('region', 'world')
+            pins = map_data.get('pins', {})
+            width, height = self.map_generator.calculate_image_dimensions(region)
+
+            # Merge preview settings over original for color generation
+            temp_maps = {str(guild_id): {**map_data, 'settings': preview_settings}}
+            # Force cache miss so colors apply
+            base_map, projection_func = await self.map_generator.render_geopandas_map(
+                region, width, height, str(guild_id), temp_maps)
+
+            if not base_map or not projection_func:
+                land_color, water_color = self.map_generator.get_map_colors(str(guild_id), temp_maps)
+                base_map = PILImage.new('RGB', (width, height), color=water_color)
+                projection_func = self._create_projection_function(region, width, height)
+
+            pin_color, custom_pin_size = self.map_generator.get_pin_settings(str(guild_id), temp_maps)
+            base_pin_size = int(height * custom_pin_size / 2400)
+            pin_groups = self.map_generator.group_overlapping_pins(pins, projection_func, base_pin_size)
+            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size,
+                                                str(guild_id), temp_maps)
+
+            img_buffer = BytesIO()
+            base_map.save(img_buffer, format='PNG', optimize=True)
+            img_buffer.seek(0)
+            return (discord.File(img_buffer, filename="preview.png"), base_map)
+        except Exception as e:
+            self.log.error(f"_generate_preview_map failed: {e}")
+            return (None, None)
+
     def _create_projection_function(self, region: str, width: int, height: int):
-        """Create projection function for cached maps."""
-        # Use the new method that checks shapefile bounds first
         data_path = Path(__file__).parent / "map_data"
         bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
         (lat0, lon0), (lat1, lon1) = bounds
         minx, miny, maxx, maxy = lon0, lat0, lon1, lat1
-        
-        # For germany regions, try to get better bounds
-        if region in ["germany"]:
+        if region == "germany":
             try:
                 base_path = Path(__file__).parent / "map_data"
                 world = gpd.read_file(base_path / "ne_10m_admin_0_countries.shp")
                 de = world[world["ADMIN"] == "Germany"].geometry.unary_union
                 if de is not None:
-                    de_buf = de.buffer(0.1)  # Smaller buffer
-                    bounds = de_buf.bounds
-                    if all(map(lambda v: v is not None and v == v, bounds)) and bounds[2] > bounds[0] and bounds[3] > bounds[1]:  # Check for finite values
-                        minx, miny, maxx, maxy = bounds
-            except Exception as e:
-                self.log.warning(f"Could not recreate Germany bounds: {e}")
-        
+                    minx, miny, maxx, maxy = de.bounds
+            except Exception:
+                pass
+        # Mercator projection matching calculate_image_dimensions() aspect ratio
+        def _merc_y(lat):
+            return math.log(math.tan((90 + lat) * math.pi / 360))
+        y_min = _merc_y(miny)
+        y_max = _merc_y(maxy)
+        y_range = y_max - y_min
         def to_px(lat, lon):
             x = (lon - minx) / (maxx - minx) * width
-            y = (maxy - lat) / (maxy - miny) * height
+            y = (y_max - _merc_y(lat)) / y_range * height if y_range else 0
             return (int(x), int(y))
-        
         return to_px
 
     async def _update_global_overview(self):
-        """Update global overview of all maps."""
-        try:
-            if not self.global_config.get('enabled', False):
-                return
-                
-            overview_channel_id = self.global_config.get('channel_id')
-            if not overview_channel_id:
-                return
-            
-            channel = self.bot.get_channel(overview_channel_id)
-            if not channel:
-                self.log.error(f"Global overview channel {overview_channel_id} not found")
-                return
-            
-            # Create overview embed
-            embed = discord.Embed(
-                title="🗺️ Global Map Overview",
-                description="Overview of all server maps across Discord",
-                color=0x7289da,
-                timestamp=get_german_time()
-            )
-            
-            total_pins = 0
-            active_maps = 0
-            
-            # Group by region
-            region_stats = {}
-            
-            for guild_id, map_data in self.maps.items():
-                try:
-                    guild = self.bot.get_guild(int(guild_id))
-                    if not guild:
-                        continue
-                        
-                    pins = map_data.get('pins', {})
-                    region = map_data.get('region', 'world')
-                    pin_count = len(pins)
-                    
-                    if pin_count > 0:
-                        active_maps += 1
-                        total_pins += pin_count
-                        
-                        if region not in region_stats:
-                            region_stats[region] = {'servers': 0, 'pins': 0}
-                        
-                        region_stats[region]['servers'] += 1
-                        region_stats[region]['pins'] += pin_count
-                        
-                        # Add server info
-                        guild_name = guild.name
-                        if len(guild_name) > 25:
-                            guild_name = guild_name[:22] + "..."
-                            
-                        embed.add_field(
-                            name=f"🔴 {guild_name}",
-                            value=f"📍 {pin_count} pins • 🌍 {region.title()}",
-                            inline=True
-                        )
-                except Exception as e:
-                    self.log.warning(f"Error processing guild {guild_id} for overview: {e}")
-            
-            # Add summary
-            embed.insert_field_at(
-                0,
-                name="📊 Summary",
-                value=f"🗺️ **{active_maps}** active maps\n📍 **{total_pins}** total pins",
-                inline=False
-            )
-            
-            # Add region breakdown
-            if region_stats:
-                region_text = []
-                for region, stats in sorted(region_stats.items()):
-                    region_text.append(f"🌍 **{region.title()}**: {stats['servers']} servers, {stats['pins']} pins")
-                
-                embed.add_field(
-                    name="🌍 By Region",
-                    value="\n".join(region_text),
-                    inline=False
-                )
-            
-            embed.set_footer(text="Updated automatically")
-            
-            # Update existing message or create new one
-            existing_message_id = self.global_config.get('message_id')
-            if existing_message_id:
-                try:
-                    message = await channel.fetch_message(existing_message_id)
-                    await message.edit(embed=embed)
-                    return
-                except discord.NotFound:
-                    self.log.info("Previous global overview message not found, creating new one")
-                except Exception as e:
-                    self.log.warning(f"Failed to edit global overview message: {e}")
-            
-            # Send new message
-            message = await channel.send(embed=embed)
-            self.global_config['message_id'] = message.id
-            await self._save_global_config()
-            
-        except Exception as e:
-            self.log.error(f"Failed to update global overview: {e}")
+        pass
 
-    async def _handle_pin_location(self, interaction: discord.Interaction, location: str):
-        """Handle the actual pin location logic with cooldown check."""
-        guild_id = str(interaction.guild.id)
-        user_id = str(interaction.user.id)
-    
-        if guild_id not in self.maps:
-            await interaction.followup.send("⛔ No map exists for this server. Ask an admin to create one with `/map_create`.", ephemeral=True)
+    # ── Dashboard helpers ──────────────────────────────────────────────
+
+    async def dash_create_map(self, guild_id: int, channel_id: int, region: str, created_by: int):
+        gid = str(guild_id)
+        if gid in self.maps:
+            return False, "A map already exists for this server."
+        self.maps[gid] = {'region': region, 'channel_id': channel_id, 'pins': {},
+                           'created_at': datetime.now().isoformat(), 'created_by': created_by}
+        await self._save_data(gid)
+        await self._update_map(guild_id, channel_id)
+        await self._update_global_overview()
+        return True, None
+
+    async def dash_regenerate(self, guild_id: int):
+        gid = str(guild_id)
+        if gid not in self.maps:
             return
-
-        # Check if user is updating an existing pin and if they're on cooldown
-        is_update = user_id in self.maps[guild_id]['pins']
-        if is_update:
-            on_cooldown, cooldown_expires = self._is_user_on_cooldown(user_id)
-            if on_cooldown:
-                # Calculate remaining time
-                remaining = cooldown_expires - datetime.now()
-                remaining_minutes = int(remaining.total_seconds() / 60)
-                await interaction.followup.send(
-                    f"⛔ You can update your pin again in **{remaining_minutes} minutes**. "
-                    f"There's a {self.config.pin_cooldown_minutes}-minute cooldown after updating your location.",
-                    ephemeral=True
-                )
-                return
-
-        # Geocode the location
-        geocode_result = await self.map_generator.geocode_location(location)
-        if not geocode_result:
-            await interaction.followup.send(
-                f"⛔ Could not find coordinates for '{location}'. Please try a more specific location "
-                f"(e.g., 'Berlin, Germany' instead of just 'Berlin').",
-                ephemeral=True
-            )
-            return
-
-        lat, lng, display_name, country_code = geocode_result
-    
-        # Check if coordinates are within the map region bounds
-        region = self.maps[guild_id]['region']
-        data_path = Path(__file__).parent / "map_data"
-        bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
-        if not (bounds[0][0] <= lat <= bounds[1][0] and bounds[0][1] <= lng <= bounds[1][1]):
-            await interaction.followup.send(
-                f"⛔ The location '{location}' is outside the {region} map region. "
-                f"Please choose a location within {region}.",
-                ephemeral=True
-            )
-            return
-
-        # Get old location for comparison
-        old_location = None
-        if is_update:
-            old_location = self.maps[guild_id]['pins'][user_id].get('location', 'Unknown')  # Use original location
-
-        # Add or update pin - store only the original location
-        # Get avatar hash if user has an avatar
-        avatar_hash = interaction.user.avatar.key if interaction.user.avatar else None
-        
-        pin_data = {
-            'username': interaction.user.display_name,
-            'location': location,  # Original user input
-            'display_name': display_name,  # Geocoded display name for internal use
-            'lat': lat,
-            'lng': lng,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'avatar_hash': avatar_hash,
-            'country_code': country_code
-        }
-        self.maps[guild_id]['pins'][user_id] = pin_data
-
-        # Set cooldown for pin updates
-        if is_update:
-            self._set_user_cooldown(user_id)
-
-        # Save pin to database
-        await self._save_pin(int(guild_id), int(user_id), pin_data)
-    
-        # Show rendering loading message
-        rendering_embed = discord.Embed(
-            title="🗺️ Rendering Map",
-            description="Updating the map with your new pin location...",
-            color=0x7289da
-        )
-        loading_msg = await interaction.followup.send(embed=rendering_embed, ephemeral=True)
-    
-        # Invalidate only final map cache
-        await self.storage.invalidate_final_map_cache_only(int(guild_id))
-        self.log.info(f"Pin update for guild {guild_id}: preserved base map cache for efficiency")
-    
-        # Update the map and global overview
-        channel_id = self.maps[guild_id]['channel_id']
-        await self._update_map(interaction.guild.id, channel_id)
+        await self._invalidate_map_cache(int(gid))
+        await self._update_map(guild_id, self.maps[gid]['channel_id'])
         await self._update_global_overview()
 
-        # Create success embed
-        if is_update:
-            success_embed = discord.Embed(
-                title="📌 Pin Updated Successfully",
-                description="Your location has been updated on the map!",
-                color=0x00ff44
-            )
-            success_embed.add_field(name="Previous Location", value=old_location, inline=False)
-            success_embed.add_field(name="New Location", value=location, inline=False)  # Show user input
-            success_embed.add_field(name="Cooldown", value=f"Next update allowed in {self.config.pin_cooldown_minutes} minutes", inline=False)
-        else:
-            success_embed = discord.Embed(
-                title="📌 Pin Added Successfully", 
-                description="Your location has been pinned on the map!",
-                color=0x7289da
-            )
-            success_embed.add_field(name="Location", value=location, inline=False)  # Show user input
-    
-        success_embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
-        success_embed.set_footer(text=f"Updated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    async def dash_delete_map(self, guild_id: int):
+        gid = str(guild_id)
+        if gid not in self.maps:
+            return 0
+        pin_count = len(self.maps[gid].get('pins', {}))
+        await self._delete_map_message(self.maps[gid])
+        await self._invalidate_map_cache(int(gid))
+        del self.maps[gid]
+        await self._save_data(gid)
+        await self._update_global_overview()
+        return pin_count
 
-        # Replace loading message with success message
-        await loading_msg.edit(embed=success_embed)
+    async def dash_set_region(self, guild_id: int, region: str):
+        gid = str(guild_id)
+        if gid not in self.maps:
+            return
+        self.maps[gid]['region'] = region
+        await self._save_data(gid)
+        await self._invalidate_map_cache(int(gid))
+        await self._update_map(guild_id, self.maps[gid]['channel_id'])
 
-    async def _handle_pin_location_update(self, interaction: discord.Interaction, location: str, original_interaction: discord.Interaction):
-        """Handle pin location update with response replacement and cooldown check."""
+    async def dash_set_channel(self, guild_id: int, new_channel_id: int):
+        gid = str(guild_id)
+        if gid not in self.maps:
+            return
+        await self._delete_map_message(self.maps[gid])
+        self.maps[gid]['channel_id'] = new_channel_id
+        self.maps[gid].pop('message_id', None)
+        await self._save_data(gid)
+        await self._update_map(guild_id, new_channel_id)
+        await self._update_global_overview()
+
+    # ── Legacy pin handlers (called by map_views) ──────────────────────
+
+    async def _handle_pin_location(self, interaction: discord.Interaction, location: str):
+        """Geocode location, save pin, regenerate map — CV2."""
         guild_id = str(interaction.guild.id)
         user_id = str(interaction.user.id)
-    
+
         if guild_id not in self.maps:
-            await interaction.followup.send("⛔ No map exists for this server.", ephemeral=True)
+            v = discord.ui.LayoutView(timeout=0)
+            c = discord.ui.Container()
+            c.add_item(discord.ui.TextDisplay("⛔ No map exists for this server."))
+            v.add_item(c)
+            await interaction.followup.send(view=v, ephemeral=True)
             return
 
-        # Check cooldown for updates
-        on_cooldown, cooldown_expires = self._is_user_on_cooldown(user_id)
-        if on_cooldown:
-            remaining = cooldown_expires - datetime.now()
-            remaining_minutes = int(remaining.total_seconds() / 60)
-            await interaction.followup.send(
-                f"⛔ You can update your pin again in **{remaining_minutes} minutes**. "
-                f"There's a {self.config.pin_cooldown_minutes}-minute cooldown after updating your location.",
-                ephemeral=True
-            )
+        is_update = user_id in self.maps[guild_id].get('pins', {})
+
+        result = await self.map_generator.geocode_location(location)
+        if not result:
+            v = discord.ui.LayoutView(timeout=0)
+            c = discord.ui.Container()
+            c.add_item(discord.ui.TextDisplay(f"⛔ Could not find **'{location}'**. Try a more specific location."))
+            v.add_item(c)
+            await interaction.followup.send(view=v, ephemeral=True)
             return
 
-        # Geocode the location
-        geocode_result = await self.map_generator.geocode_location(location)
-        if not geocode_result:
-            await interaction.followup.send(
-                f"⛔ Could not find coordinates for '{location}'. Please try a more specific location "
-                f"(e.g., 'Berlin, Germany' instead of just 'Berlin').",
-                ephemeral=True
-            )
-            return
+        lat, lng, display_name, country_code = result
 
-        lat, lng, display_name, country_code = geocode_result
-    
-        # Check if coordinates are within the map region bounds
         region = self.maps[guild_id]['region']
         data_path = Path(__file__).parent / "map_data"
         bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
         if not (bounds[0][0] <= lat <= bounds[1][0] and bounds[0][1] <= lng <= bounds[1][1]):
-            await interaction.followup.send(
-                f"⛔ The location '{location}' is outside the {region} map region. "
-                f"Please choose a location within {region}.",
-                ephemeral=True
-            )
+            v = discord.ui.LayoutView(timeout=0)
+            c = discord.ui.Container()
+            c.add_item(discord.ui.TextDisplay(f"⛔ **'{location}'** is outside the **{region}** map region."))
+            v.add_item(c)
+            await interaction.followup.send(view=v, ephemeral=True)
             return
 
-        # Get old location for comparison
-        old_location = None
-        if user_id in self.maps[guild_id]['pins']:
-            old_location = self.maps[guild_id]['pins'][user_id].get('display_name', 'Unknown')
-
-        # Update pin
-        # Get avatar hash if user has an avatar
         avatar_hash = interaction.user.avatar.key if interaction.user.avatar else None
-        
         pin_data = {
             'username': interaction.user.display_name,
             'location': location,
@@ -653,411 +771,139 @@ class MapV2Cog(commands.Cog):
             'lng': lng,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'avatar_hash': avatar_hash,
-            'country_code': country_code
+            'country_code': country_code,
+        }
+        self.maps[guild_id].setdefault('pins', {})[user_id] = pin_data
+
+        await self._save_data(guild_id)
+        await self._invalidate_map_cache(int(guild_id))
+        channel_id = self.maps[guild_id]['channel_id']
+        await self._update_map(int(guild_id), channel_id)
+        await self._update_global_overview()
+
+        v = discord.ui.LayoutView(timeout=0)
+        c = discord.ui.Container()
+        if is_update:
+            c.add_item(discord.ui.TextDisplay(f"📌 Pin updated — **{display_name}**"))
+        else:
+            c.add_item(discord.ui.TextDisplay(f"📌 Pin added — **{display_name}**"))
+        v.add_item(c)
+        await interaction.followup.send(view=v, ephemeral=True)
+
+    async def _handle_pin_location_update(self, interaction: discord.Interaction, location: str, modal_interaction: discord.Interaction, source_interaction: discord.Interaction = None):
+        """Same as _handle_pin_location but via Edit button — uses modal followup.
+
+        source_interaction is the button interaction whose message shows the
+        pre-update "Your Pin" card; it's removed once the update succeeds so the
+        stale location card doesn't linger next to the confirmation."""
+        guild_id = str(interaction.guild.id)
+        user_id = str(interaction.user.id)
+
+        def _err(text):
+            v = discord.ui.LayoutView(timeout=0)
+            v.add_item(discord.ui.Container().add_item(discord.ui.TextDisplay(text)))
+            return v
+
+        if guild_id not in self.maps or user_id not in self.maps[guild_id].get('pins', {}):
+            await modal_interaction.followup.send(view=_err("⛔ No pin found to update."), ephemeral=True)
+            return
+
+        result = await self.map_generator.geocode_location(location)
+        if not result:
+            await modal_interaction.followup.send(
+                view=_err(f"⛔ Could not find **'{location}'**."), ephemeral=True)
+            return
+
+        lat, lng, display_name, country_code = result
+
+        region = self.maps[guild_id]['region']
+        data_path = Path(__file__).parent / "map_data"
+        bounds = self.map_generator.map_config.get_region_bounds(region, data_path)
+        if not (bounds[0][0] <= lat <= bounds[1][0] and bounds[0][1] <= lng <= bounds[1][1]):
+            await modal_interaction.followup.send(
+                view=_err(f"⛔ **'{location}'** is outside the **{region}** map region."), ephemeral=True)
+            return
+
+        old_location = self.maps[guild_id]['pins'][user_id].get('location', 'Unknown')
+        avatar_hash = interaction.user.avatar.key if interaction.user.avatar else None
+        pin_data = {
+            'username': interaction.user.display_name,
+            'location': location,
+            'display_name': display_name,
+            'lat': lat,
+            'lng': lng,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'avatar_hash': avatar_hash,
+            'country_code': country_code,
         }
         self.maps[guild_id]['pins'][user_id] = pin_data
 
-        # Set cooldown for updates
-        self._set_user_cooldown(user_id)
-
-        # Save pin to database
-        await self._save_pin(int(guild_id), int(user_id), pin_data)
-    
-        # Invalidate only final map cache, preserve base maps
-        await self.storage.invalidate_final_map_cache_only(int(guild_id))
-        self.log.info(f"Pin update for guild {guild_id}: preserved base map cache for efficiency")
-        
-        # Update the map and global overview
+        await self._save_data(guild_id)
+        await self._invalidate_map_cache(int(guild_id))
         channel_id = self.maps[guild_id]['channel_id']
-        await self._update_map(interaction.guild.id, channel_id)
+        await self._update_map(int(guild_id), channel_id)
         await self._update_global_overview()
-        
-        # Create embed for update confirmation
-        embed = discord.Embed(
-            title="📌 Pin Updated Successfully",
-            description="Your location has been updated on the map!",
-            color=0x00ff44
-        )
-    
-        if old_location:
-            embed.add_field(name="Previous Location", value=old_location, inline=False)
-    
-        embed.add_field(name="New Location", value=display_name, inline=False)
-        embed.add_field(name="Map Updated", value=f"<#{channel_id}>", inline=False)
-        embed.add_field(name="Cooldown", value=f"Next update allowed in {self.config.pin_cooldown_minutes} minutes", inline=False)
-        embed.set_footer(text=f"Updated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # Try to edit the original message, fallback to new message
-        try:
-            await original_interaction.edit_original_response(embed=embed, view=None)
-        except discord.HTTPException:
-            # If editing fails, send new message
-            await interaction.followup.send(embed=embed, ephemeral=True)
+        # Remove the stale "Your Pin" card that launched this edit.
+        if source_interaction is not None and source_interaction.message is not None:
+            try:
+                await source_interaction.followup.delete_message(source_interaction.message.id)
+            except Exception:
+                pass
 
-    async def _generate_preview_map(self, guild_id: int, preview_settings: Dict, progress_callback=None) -> Optional[Tuple[BytesIO, Image.Image]]:
-        """Generate a preview map with temporary settings - OPTIMIZED with intelligent caching.
-        Returns tuple of (final_preview_image, base_map_for_caching)."""
-        try:
-            guild_id_str = str(guild_id)
-            map_data = self.maps.get(guild_id_str, {})
-            region = map_data.get('region', 'world')
-            pins = map_data.get('pins', {})
-            
-            # Calculate dimensions based on region
-            width, height = self.map_generator.calculate_image_dimensions(region)
-            if region != "germany" and region != "usmainland":
-                height = int(height * 0.8)
-            
-            # OPTIMIZATION: Check if we can reuse existing base map
-            current_settings = map_data.get('settings', {})
-            current_colors = current_settings.get('colors', {})
-            preview_colors = preview_settings.get('colors', {})
-            
-            # If only pin settings changed (not colors/borders), reuse base map
-            colors_changed = (
-                current_colors.get('land') != preview_colors.get('land') or
-                current_colors.get('water') != preview_colors.get('water')
-            )
-            
-            current_borders = current_settings.get('borders', {})
-            preview_borders = preview_settings.get('borders', {})
-            borders_changed = (
-                current_borders.get('country') != preview_borders.get('country') or
-                current_borders.get('road') != preview_borders.get('road')
-            )
-            
-            base_map = None
-            projection_func = None
-            
-            if not colors_changed and not borders_changed:
-                # REUSE: Only pin settings changed, use cached base map
-                self.log.info(f"Preview optimization: Reusing base map for guild {guild_id} (only pins changed)")
-                base_map = await self.storage.get_cached_base_map(region, width, height, guild_id_str, self.maps)
-                if base_map:
-                    projection_func = self._create_projection_function(region, width, height)
-            
-            if not base_map:
-                # GENERATE: Colors/borders changed, need new base map
-                self.log.info(f"Preview generation: Creating new base map for guild {guild_id} (colors/borders changed)")
-                temp_maps = {guild_id_str: map_data.copy()}
-                temp_maps[guild_id_str]['settings'] = preview_settings
-                
-                # Define progress callback for preview rendering
-                async def preview_progress_callback(message, percentage, image_buffer=None):
-                    self.log.info(f"Preview rendering progress: {message} ({percentage}%)")
-                    if progress_callback:
-                        await progress_callback(message, percentage, image_buffer)
-                
-                base_map, projection_func = await self.map_generator.render_geopandas_map(
-                    region, width, height, guild_id_str, temp_maps, preview_progress_callback
-                )
-            
-            if not base_map or not projection_func:
-                # Fallback to simple background
-                temp_maps = {guild_id_str: map_data.copy()}
-                temp_maps[guild_id_str]['settings'] = preview_settings
-                land_color, water_color = self.map_generator.get_map_colors(guild_id_str, temp_maps)
-                base_map = Image.new('RGB', (width, height), color=water_color)
-                projection_func = self._create_projection_function(region, width, height)
-            
-            # Create temporary maps for pin rendering
-            temp_maps = {guild_id_str: map_data.copy()}
-            temp_maps[guild_id_str]['settings'] = preview_settings
-            
-            # Store a copy of the base map before adding pins (for caching when approved)
-            base_map_for_caching = base_map.copy()
-            
-            # Calculate pin size based on preview settings
-            pin_color, custom_pin_size = self.map_generator.get_pin_settings(guild_id_str, temp_maps)
-            base_pin_size = int(height * custom_pin_size / 2400)
-            
-            # Group overlapping pins
-            pin_groups = self.map_generator.group_overlapping_pins(pins, projection_func, base_pin_size)
-            
-            # Draw pins on the map with preview settings
-            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size, guild_id_str, temp_maps)
-            
-            # Convert PIL image to BytesIO
-            img_buffer = BytesIO()
-            base_map.save(img_buffer, format='PNG', optimize=True)
-            img_buffer.seek(0)
-            
-            return img_buffer, base_map_for_caching
-        
-        except Exception as e:
-            self.log.error(f"Failed to generate preview map: {e}")
-            return None, None
-
+        v = discord.ui.LayoutView(timeout=0)
+        c = discord.ui.Container()
+        c.add_item(discord.ui.TextDisplay(
+            f"📌 Pin updated\n{old_location} → **{display_name}**"))
+        v.add_item(c)
+        await modal_interaction.followup.send(view=v, ephemeral=True)
     async def _apply_cached_preview_as_map(self, guild_id: int, cached_preview: BytesIO) -> bool:
-        """Apply a cached preview image as the final map without regenerating."""
-        try:
-            # Cache the preview image as the final map
-            cached_preview.seek(0)
-            await self.storage.cache_map(guild_id, self.maps, cached_preview)
-            
-            # Get map data for view - get current region
-            map_data = self.maps.get(str(guild_id), {})
-            region = map_data.get('region', 'world')
-            channel_id = map_data.get('channel_id')
-            
-            if not channel_id:
-                return False
-            
-            channel = self.bot.get_channel(channel_id)
-            if not channel:
-                return False
+        pass
 
-            # Create the discord file from cached preview
-            cached_preview.seek(0)
-            filename = f"map_{region}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-            map_file = discord.File(cached_preview, filename=filename)
-            
-            # Button with persistent view
-            view = MapPinButtonView(self, region, guild_id)
+    async def _generate_fast_pin_preview(self, guild_id: int, preview_settings: Dict):
+        pass
 
-            # Check if there's an existing map message to edit
-            existing_message_id = map_data.get('message_id')
-            if existing_message_id:
-                try:
-                    message = await channel.fetch_message(existing_message_id)
-                    await message.edit(content=None, attachments=[map_file], view=view)
-                    return True
-                except discord.NotFound:
-                    self.log.info(f"Previous map message {existing_message_id} not found, creating new one")
-                except Exception as e:
-                    self.log.warning(f"Failed to edit existing map message: {e}")
-
-            # Send new message - just image with buttons
-            message = await channel.send(file=map_file, view=view)
-            
-            # Update message ID in data
-            if str(guild_id) not in self.maps:
-                self.maps[str(guild_id)] = {}
-            self.maps[str(guild_id)]['message_id'] = message.id
-            await self._save_data(str(guild_id))
-            
-            return True
-            
-        except Exception as e:
-            self.log.error(f"Failed to apply cached preview as map: {e}")
-            return False
-
-    async def _generate_fast_pin_preview(self, guild_id: int, preview_settings: Dict) -> Optional[BytesIO]:
-        """Generate fast pin preview by reusing cached base map - ALWAYS use cache for pin-only changes."""
-        try:
-            guild_id_str = str(guild_id)
-            map_data = self.maps.get(guild_id_str, {})
-            region = map_data.get('region', 'world')
-            pins = map_data.get('pins', {})
-            
-            # Calculate dimensions based on region
-            width, height = self.map_generator.calculate_image_dimensions(region)
-            if region != "germany" and region != "usmainland":
-                height = int(height * 0.8)
-            
-            # ALWAYS TRY CACHE FIRST for pin previews
-            base_map = await self.storage.get_cached_base_map(region, width, height, guild_id_str, self.maps)
-            projection_func = None
-            
-            if base_map:
-                # CACHE HIT: Use cached base map
-                self.log.info(f"Fast pin preview: Using cached base map for guild {guild_id}")
-                projection_func = self._create_projection_function(region, width, height)
-            else:
-                # CACHE MISS: Generate base map and cache it
-                self.log.info(f"Fast pin preview: Generating and caching base map for guild {guild_id}")
-                base_map, projection_func = await self.map_generator.render_geopandas_map(
-                    region, width, height, guild_id_str, self.maps
-                )
-                if base_map:
-                    await self.storage.cache_base_map(region, width, height, base_map, guild_id_str, self.maps)
-            
-            if not base_map or not projection_func:
-                # Fallback: Generate simple background
-                land_color, water_color = self.map_generator.get_map_colors(guild_id_str, self.maps)
-                base_map = Image.new('RGB', (width, height), color=water_color)
-                projection_func = self._create_projection_function(region, width, height)
-            
-            # Create temporary maps with preview pin settings
-            temp_maps = {guild_id_str: map_data.copy()}
-            temp_maps[guild_id_str]['settings'] = preview_settings
-            
-            # Calculate pin size with preview settings
-            pin_color, custom_pin_size = self.map_generator.get_pin_settings(guild_id_str, temp_maps)
-            base_pin_size = int(height * custom_pin_size / 2400)
-            
-            # Group overlapping pins
-            pin_groups = self.map_generator.group_overlapping_pins(pins, projection_func, base_pin_size)
-            
-            # Draw pins on the map with preview settings
-            self.map_generator.draw_pins_on_map(base_map, pin_groups, width, height, base_pin_size, guild_id_str, temp_maps)
-            
-            # Convert PIL image to BytesIO
-            img_buffer = BytesIO()
-            base_map.save(img_buffer, format='PNG', optimize=True)
-            img_buffer.seek(0)
-            
-            return img_buffer
-        
-        except Exception as e:
-            self.log.error(f"Failed to generate fast pin preview: {e}")
-            return None
-            
     @commands.Cog.listener()
     async def on_member_remove(self, member):
-        """Remove user's pin when they leave the server"""
         try:
             guild_id = str(member.guild.id)
             user_id = str(member.id)
-
             if guild_id in self.maps and user_id in self.maps[guild_id].get('pins', {}):
-                # Remove the pin
-                old_location = self.maps[guild_id]['pins'][user_id].get('display_name', 'Unknown')
                 del self.maps[guild_id]['pins'][user_id]
-
-                # Also remove from cooldown tracking
-                if user_id in self.pin_cooldowns:
-                    del self.pin_cooldowns[user_id]
-
-                # Delete pin from database
                 await self._delete_pin(int(guild_id), int(user_id))
-
-                # Invalidate Cache and update map
                 await self._invalidate_map_cache(int(guild_id))
                 channel_id = self.maps[guild_id]['channel_id']
                 await self._update_map(int(guild_id), channel_id)
                 await self._update_global_overview()
-
-                self.log.info(f"Removed pin for user {member.display_name} ({user_id}) who left guild {guild_id}")
-
         except Exception as e:
             self.log.info(f"Error removing pin for leaving member: {e}")
 
-    # Slash Commands
-    @app_commands.command(name="map_create", description="Create a map for the server")
-    @app_commands.describe(
-        channel="Channel where the map will be posted",
-        region="Map region (world by default)",
-    )
-    @app_commands.choices(region=[
-        # Continents
-        app_commands.Choice(name="🌍 World", value="world"),
-        app_commands.Choice(name="🇪🇺 Europe", value="europe"),
-        app_commands.Choice(name="🌏 Asia", value="asia"),
-        app_commands.Choice(name="🌍 Africa", value="africa"),
-        app_commands.Choice(name="🌎 North America", value="northamerica"),
-        app_commands.Choice(name="🌎 South America", value="southamerica"),
-        app_commands.Choice(name="🇦🇺 Australia", value="australia"),
-        # Major countries (most popular)
-        app_commands.Choice(name="🇺🇸 US-Mainland", value="usmainland"),
-        app_commands.Choice(name="🇩🇪 Germany", value="germany"),
-        app_commands.Choice(name="🇫🇷 France", value="france"),
-        app_commands.Choice(name="🇪🇸 Spain", value="spain"),
-        app_commands.Choice(name="🇮🇹 Italy", value="italy"),
-        app_commands.Choice(name="🇵🇱 Poland", value="poland"),
-        app_commands.Choice(name="🇳🇱 Netherlands", value="netherlands"),
-        app_commands.Choice(name="🇧🇪 Belgium", value="belgium"),
-        app_commands.Choice(name="🇨🇭 Switzerland", value="switzerland"),
-        app_commands.Choice(name="🇸🇪 Sweden", value="sweden"),
-        app_commands.Choice(name="🇷🇺 Russia", value="russia"),
-        app_commands.Choice(name="🇺🇦 Ukraine", value="ukraine"),
-        app_commands.Choice(name="🇹🇷 Turkey", value="turkey"),
-        app_commands.Choice(name="🇯🇵 Japan", value="japan"),
-        app_commands.Choice(name="🇰🇷 South Korea", value="southkorea"),
-        app_commands.Choice(name="🇧🇷 Brazil", value="brazil"),
-        app_commands.Choice(name="🇨🇦 Canada", value="canada"),
-        app_commands.Choice(name="🇲🇽 Mexico", value="mexico")
-    ])
+    @app_commands.command(name="map", description="Manage the server map")
     @app_commands.default_permissions(administrator=True)
-    async def create_map(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        region: str = "world",
-    ):
-        await interaction.response.defer(ephemeral=True)
-
-        guild_id = str(interaction.guild.id)
-        
-        if guild_id in self.maps:
-            await interaction.followup.send("⛔ A map already exists for this server. Use the Admin Tools to remove it first.", ephemeral=True)
+    async def map_dashboard(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Admin only.", ephemeral=True)
             return
-
-        self.maps[guild_id] = {
-            'channel_id': channel.id,
-            'region': region,
-            'pins': {},
-            'created_at': datetime.now().isoformat(),
-            'created_by': interaction.user.id
-        }
-
-        await self._save_data(guild_id)
-        await self._update_map(interaction.guild.id, channel.id, interaction)
-        await self._update_global_overview()
+        from core.map_dashboard import build_map_dashboard
+        view = await build_map_dashboard(self, interaction.guild.id)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
     @app_commands.command(name="map_pin", description="Manage your location on the server map")
     async def pin_on_map_v2(self, interaction: discord.Interaction):
         guild_id = str(interaction.guild.id)
-
         if guild_id not in self.maps:
-            await interaction.response.send_message("⛔ No map exists for this server. Ask an admin to create one with `/map_create`.", ephemeral=True)
+            await interaction.response.send_message("⛔ No map exists.", ephemeral=True)
             return
-
-        # Same functionality as the "My Pin" button
         user_id = str(interaction.user.id)
-        
         if user_id in self.maps[guild_id].get('pins', {}):
-            # User has a pin - show current location and options
-            user_pin = self.maps[guild_id]['pins'][user_id]
-            current_location = user_pin.get('display_name', 'Unknown')
-            
-            embed = discord.Embed(
-                title="📍 Your Current Location",
-                description=f"**Location:** {current_location}\n"
-                           f"**Added:** {user_pin.get('timestamp', 'Unknown')}",
-                color=0x7289da
-            )
-            
-            # Check cooldown status
-            on_cooldown, cooldown_expires = self._is_user_on_cooldown(user_id)
-            if on_cooldown:
-                remaining = cooldown_expires - datetime.now()
-                remaining_minutes = int(remaining.total_seconds() / 60)
-                embed.add_field(
-                    name="Cooldown Status",
-                    value=f"Next update allowed in {remaining_minutes} minutes",
-                    inline=False
-                )
-            
-            from core.map_views import UserPinOptionsView
+            up = self.maps[guild_id]['pins'][user_id]
+            embed = discord.Embed(title="📍 Your Current Location",
+                description=f"**Location:** {up.get('display_name', 'Unknown')}\n**Added:** {up.get('timestamp', 'Unknown')}",
+                color=0x7289da)
             view = UserPinOptionsView(self, int(guild_id))
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         else:
-            # User doesn't have a pin - show modal directly
-            modal = LocationModal(self, int(guild_id))
-            await interaction.response.send_modal(modal)
-
-    @app_commands.command(name="owner_clear_map_cache", description="Clear cached map images (bot owner only)")
-    @app_commands.default_permissions(administrator=True)
-    async def clear_cache(self, interaction: discord.Interaction):
-        if interaction.user.id != self.config.owner_id:
-            await interaction.response.send_message("⛔ This command is only available to the bot owner.", ephemeral=True)
-            return
-            
-        await interaction.response.defer(ephemeral=True)
-        
-        try:
-            deleted_count = await self.storage.clear_all_cache()
-            
-            await interaction.followup.send(
-                f"✅ Cache cleared successfully!\n"
-                f"🗑️ Removed {deleted_count} cached images.",
-                ephemeral=True
-            )
-            
-        except Exception as e:
-            self.log.error(f"Error clearing cache: {e}")
-            await interaction.followup.send("⛔ Error clearing cache.", ephemeral=True)
+            await interaction.response.send_modal(LocationModal(self, int(guild_id)))
 
 
 async def setup(bot: commands.Bot):

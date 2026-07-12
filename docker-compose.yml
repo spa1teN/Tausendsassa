@@ -66,6 +66,9 @@ services:
       # HTTP Configuration
       - HTTP_TIMEOUT=${HTTP_TIMEOUT:-30}
       - MAX_HTTP_CONNECTIONS=${MAX_HTTP_CONNECTIONS:-100}
+      # Gallery proxy & cookies
+      - GALLERY_PROXY_URL=${GALLERY_PROXY_URL}
+      - COOKIES_PATH=${COOKIES_PATH:-/app/data/cookies.txt}
       - MAX_HTTP_CONNECTIONS_PER_HOST=${MAX_HTTP_CONNECTIONS_PER_HOST:-10}
       # Monitor Configuration
       - MONITOR_AUTHORIZED_ROLES=${MONITOR_AUTHORIZED_ROLES}
@@ -75,6 +78,8 @@ services:
       - ./cogs/map_data:/app/cogs/map_data  # Natural Earth shapefiles + map cache
       - ./logs:/app/logs                     # Log files
       - ./data:/app/data                     # Status snapshot for dashboard (see DATA_INTERFACE.md)
+    expose:
+      - "8090"
     networks:
       - tausendsassa-network
 
@@ -95,14 +100,16 @@ services:
       - DB_USER=${DB_USER:-tausendsassa}
       - DB_PASSWORD=${DB_PASSWORD:?Database password required}
       - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - COOKIES_PATH=${COOKIES_PATH:-/app/data/cookies.txt}
+      - GALLERY_PROXY_URL=${GALLERY_PROXY_URL}
     volumes:
       - ./logs:/app/logs:ro                  # Log viewer (read-only)
       - ./cogs/map_data:/app/cogs/map_data   # Map images + avatar cache (writable)
       - ./resources:/app/resources:ro        # Favicon (read-only)
       - ./backups:/app/backups:ro            # Backup freshness check (read-only)
+      - ./data:/app/data                     # Shared data (cookies.txt, status.json)
     networks:
       - tausendsassa-network
-
   # Web Admin Panel (Discord OAuth2 + guild settings)
   webapp:
     build:

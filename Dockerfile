@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libproj-dev \
     gdal-bin \
     libpq-dev \
+    ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean

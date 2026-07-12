@@ -24,270 +24,6 @@ except ImportError:
     exit(1)
 
 
-class CalendarConfigModal(discord.ui.Modal):
-    """Modal for editing calendar blacklist and whitelist"""
-
-    def __init__(self, cog: 'CalendarCog', guild_id: int, calendar_id: str, calendar):
-        super().__init__(title=f"Edit Calendar: {calendar_id}")
-        self.cog = cog
-        self.guild_id = guild_id
-        self.calendar_id = calendar_id
-        self.calendar = calendar
-
-        # Add blacklist field
-        self.blacklist_field = discord.ui.TextInput(
-            label="Blacklist Terms (comma separated)",
-            placeholder="term1, term2, term3",
-            default=", ".join(calendar.blacklist or []),
-            style=discord.TextStyle.paragraph,
-            required=False,
-            max_length=1000
-        )
-        self.add_item(self.blacklist_field)
-
-        # Add whitelist field
-        self.whitelist_field = discord.ui.TextInput(
-            label="Whitelist Terms (comma separated)",
-            placeholder="term1, term2, term3",
-            default=", ".join(calendar.whitelist or []),
-            style=discord.TextStyle.paragraph,
-            required=False,
-            max_length=1000
-        )
-        self.add_item(self.whitelist_field)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        """Handle modal submission"""
-        await interaction.response.defer()
-
-        try:
-            # Parse new blacklist
-            blacklist_text = self.blacklist_field.value.strip()
-            new_blacklist = [term.strip() for term in blacklist_text.split(',') if term.strip()] if blacklist_text else []
-
-            # Parse new whitelist
-            whitelist_text = self.whitelist_field.value.strip()
-            new_whitelist = [term.strip() for term in whitelist_text.split(',') if term.strip()] if whitelist_text else []
-
-            # Update calendar in database
-            if self.cog.bot.db:
-                await self.cog.bot.db.calendars.update_filters(
-                    self.calendar.id,
-                    blacklist=new_blacklist,
-                    whitelist=new_whitelist
-                )
-
-            # Update cache
-            self.calendar.blacklist = new_blacklist
-            self.calendar.whitelist = new_whitelist
-
-            # Create success embed
-            embed = discord.Embed(
-                title="Calendar Configuration Updated",
-                color=0x00ff00
-            )
-            embed.add_field(name="Calendar ID", value=self.calendar_id, inline=False)
-
-            if new_blacklist:
-                embed.add_field(
-                    name="Blacklisted Terms",
-                    value=", ".join(f"`{term}`" for term in new_blacklist),
-                    inline=False
-                )
-            else:
-                embed.add_field(name="Blacklisted Terms", value="None", inline=False)
-
-            if new_whitelist:
-                embed.add_field(
-                    name="Whitelisted Terms",
-                    value=", ".join(f"`{term}`" for term in new_whitelist),
-                    inline=False
-                )
-            else:
-                embed.add_field(name="Whitelisted Terms", value="None", inline=False)
-
-            embed.set_footer(text="Changes will take effect at the next hourly sync.")
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
-            self.cog.log.info(f"Updated calendar config for {self.calendar_id} in guild {self.guild_id}")
-
-        except Exception as e:
-            self.cog.log.error(f"Error updating calendar config: {e}")
-            await interaction.followup.send(
-                f"An error occurred while updating the calendar configuration: {str(e)}",
-                ephemeral=True
-            )
-
-
-class CalendarConfigView(discord.ui.View):
-    """View for configuring calendars with dropdown selection"""
-
-    def __init__(self, cog: 'CalendarCog', guild_id: int, calendars: List):
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.guild_id = guild_id
-        self.calendars = {cal.calendar_id: cal for cal in calendars}
-
-        # Create dropdown options
-        options = []
-        for cal in calendars:
-            guild = cog.bot.get_guild(guild_id)
-            text_channel = guild.get_channel(cal.text_channel_id) if guild else None
-            text_name = text_channel.name if text_channel else f"Channel {cal.text_channel_id}"
-
-            description = f"Posts to #{text_name}"
-            blacklist_len = len(cal.blacklist) if cal.blacklist else 0
-            whitelist_len = len(cal.whitelist) if cal.whitelist else 0
-            if blacklist_len > 0 or whitelist_len > 0:
-                filter_count = blacklist_len + whitelist_len
-                description += f" - {filter_count} filter terms"
-
-            options.append(discord.SelectOption(
-                label=cal.calendar_id,
-                value=cal.calendar_id,
-                description=description[:100]
-            ))
-
-        self.calendar_select = discord.ui.Select(
-            placeholder="Select a calendar to configure...",
-            options=options[:25]
-        )
-        self.calendar_select.callback = self.calendar_selected
-        self.add_item(self.calendar_select)
-
-    async def calendar_selected(self, interaction: discord.Interaction):
-        """Handle calendar selection for configuration"""
-        selected_calendar_id = self.calendar_select.values[0]
-        calendar = self.calendars[selected_calendar_id]
-
-        guild = self.cog.bot.get_guild(self.guild_id)
-        text_channel = guild.get_channel(calendar.text_channel_id) if guild else None
-        voice_channel = guild.get_channel(calendar.voice_channel_id) if guild else None
-
-        embed = discord.Embed(
-            title=f"Calendar Configuration: {selected_calendar_id}",
-            color=0x5865F2
-        )
-
-        embed.add_field(name="Calendar ID", value=selected_calendar_id, inline=True)
-        embed.add_field(name="Text Channel", value=text_channel.mention if text_channel else f"Channel {calendar.text_channel_id}", inline=True)
-        embed.add_field(name="Voice Channel", value=voice_channel.mention if voice_channel else f"Channel {calendar.voice_channel_id}", inline=True)
-        embed.add_field(name="iCal URL", value=calendar.ical_url, inline=False)
-
-        if calendar.blacklist:
-            embed.add_field(
-                name="Blacklisted Terms",
-                value=", ".join(f"`{term}`" for term in calendar.blacklist),
-                inline=False
-            )
-        else:
-            embed.add_field(name="Blacklisted Terms", value="None", inline=False)
-
-        if calendar.whitelist:
-            embed.add_field(
-                name="Whitelisted Terms",
-                value=", ".join(f"`{term}`" for term in calendar.whitelist),
-                inline=False
-            )
-        else:
-            embed.add_field(name="Whitelisted Terms", value="None", inline=False)
-
-        if calendar.reminder_role_id:
-            role = guild.get_role(calendar.reminder_role_id) if guild else None
-            if role:
-                embed.add_field(name="Reminder Role", value=role.mention, inline=True)
-            else:
-                embed.add_field(name="Reminder Role", value=f"Role {calendar.reminder_role_id} (not found)", inline=True)
-        else:
-            embed.add_field(name="Reminder Role", value="None (no role pings)", inline=True)
-
-        if calendar.last_sync:
-            embed.add_field(
-                name="Last Sync",
-                value=f"<t:{int(calendar.last_sync.timestamp())}:R>",
-                inline=True
-            )
-
-        # Get event count from database
-        if self.cog.bot.db:
-            event_ids = await self.cog.bot.db.calendars.get_created_event_ids(calendar.id)
-            embed.add_field(name="Discord Events Created", value=str(len(event_ids)), inline=True)
-
-        view = discord.ui.View(timeout=300)
-        edit_button = discord.ui.Button(
-            label="Edit Filters",
-            style=discord.ButtonStyle.primary,
-            emoji="✏️"
-        )
-
-        async def edit_button_callback(button_interaction):
-            modal = CalendarConfigModal(self.cog, self.guild_id, selected_calendar_id, calendar)
-            await button_interaction.response.send_modal(modal)
-
-        edit_button.callback = edit_button_callback
-        view.add_item(edit_button)
-
-        await interaction.response.edit_message(embed=embed, view=view)
-
-
-class CalendarRemoveView(discord.ui.View):
-    """View for removing calendars with dropdown selection"""
-
-    def __init__(self, cog: 'CalendarCog', guild_id: int, calendars: List):
-        super().__init__(timeout=60)
-        self.cog = cog
-        self.guild_id = guild_id
-        self.calendars = {cal.calendar_id: cal for cal in calendars}
-
-        options = []
-        for cal in calendars:
-            guild = cog.bot.get_guild(guild_id)
-            text_channel = guild.get_channel(cal.text_channel_id) if guild else None
-            text_name = text_channel.name if text_channel else f"Channel {cal.text_channel_id}"
-
-            description = f"Posts to #{text_name}"
-            blacklist_len = len(cal.blacklist) if cal.blacklist else 0
-            if blacklist_len > 0:
-                description += f" - {blacklist_len} blacklisted terms"
-
-            options.append(discord.SelectOption(
-                label=cal.calendar_id,
-                value=cal.calendar_id,
-                description=description[:100]
-            ))
-
-        self.calendar_select = discord.ui.Select(
-            placeholder="Select a calendar to remove...",
-            options=options[:25]
-        )
-        self.calendar_select.callback = self.calendar_selected
-        self.add_item(self.calendar_select)
-
-    async def calendar_selected(self, interaction: discord.Interaction):
-        """Handle calendar selection for removal"""
-        await interaction.response.defer()
-
-        selected_calendar_id = self.calendar_select.values[0]
-
-        success = await self.cog.remove_calendar(self.guild_id, selected_calendar_id)
-
-        if success:
-            embed = discord.Embed(
-                title="Calendar Removed",
-                description=f"Calendar `{selected_calendar_id}` has been successfully removed.",
-                color=0x00ff00
-            )
-        else:
-            embed = discord.Embed(
-                title="Error",
-                description=f"Failed to remove calendar `{selected_calendar_id}`.",
-                color=0xff0000
-            )
-
-        await interaction.edit_original_response(embed=embed, view=None)
-
-
 class CalendarCog(commands.Cog):
     """Cog for managing iCal calendar integration with Discord events and summaries"""
 
@@ -341,214 +77,66 @@ class CalendarCog(commands.Cog):
 
         return {}
 
-    @app_commands.command(name="cal_add", description="Add an iCal calendar for weekly summaries and Discord events")
-    @app_commands.describe(
-        calendar_id="Unique identifier for this calendar",
-        text_channel="Text channel where weekly summaries will be posted",
-        voice_channel="Voice channel to use as location for Discord events",
-        ical_url="URL to the iCal calendar file",
-        blacklist="Comma-separated list of terms to exclude from events (optional)",
-        whitelist="Comma-separated list of terms to include events (optional)",
-        reminder_role="Role to ping in reminders 1 hour before events (optional)"
-    )
-    async def cal_add(
-        self,
-        interaction: discord.Interaction,
-        calendar_id: str,
-        text_channel: discord.TextChannel,
-        voice_channel: discord.VoiceChannel,
-        ical_url: str,
-        blacklist: Optional[str] = None,
-        whitelist: Optional[str] = None,
-        reminder_role: Optional[discord.Role] = None
+    async def create_calendar_validated(
+        self, guild_id: int, calendar_id: str, text_channel_id: int, voice_channel_id: int,
+        ical_url: str, blacklist_terms: List[str], whitelist_terms: List[str],
+        reminder_role_id: Optional[int],
     ):
-        """Add a new iCal calendar for tracking"""
+        """Validate inputs and create a calendar. Returns (calendar, error_message).
 
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "You need administrator permissions to use this command.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True)
+        Shared by the /calendar dashboard's add flow (core/calendar_views.py).
+        Mirrors the validation the old /cal_add slash command performed.
+        """
+        if not ical_url.startswith(('http://', 'https://')):
+            return None, "Please provide a valid HTTP/HTTPS URL for the iCal file."
 
         try:
-            if not ical_url.startswith(('http://', 'https://')):
-                await interaction.followup.send(
-                    "Please provide a valid HTTP/HTTPS URL for the iCal file.",
-                    ephemeral=True
-                )
-                return
+            session = await http_client.get_session()
+            async with session.get(ical_url, timeout=10) as response:
+                if response.status != 200:
+                    return None, f"Could not access iCal URL (HTTP {response.status})."
+                content = await response.text()
+                Calendar.from_ical(content)
+        except Exception as e:
+            return None, f"Error accessing or parsing iCal file: {str(e)}"
 
-            blacklist_terms = []
-            if blacklist:
-                blacklist_terms = [term.strip() for term in blacklist.split(',') if term.strip()]
+        existing = await self.get_guild_calendars(guild_id)
+        if calendar_id in existing:
+            return None, f"A calendar with ID `{calendar_id}` already exists. Choose a different ID."
 
-            whitelist_terms = []
-            if whitelist:
-                whitelist_terms = [term.strip() for term in whitelist.split(',') if term.strip()]
+        if not self.bot.db:
+            return None, "Database not available."
 
-            # Test the iCal URL
-            try:
-                session = await http_client.get_session()
-                async with session.get(ical_url, timeout=10) as response:
-                    if response.status != 200:
-                        await interaction.followup.send(
-                            f"Could not access iCal URL (HTTP {response.status})",
-                            ephemeral=True
-                        )
-                        return
-
-                    content = await response.text()
-                    Calendar.from_ical(content)
-
-            except Exception as e:
-                await interaction.followup.send(
-                    f"Error accessing or parsing iCal file: {str(e)}",
-                    ephemeral=True
-                )
-                return
-
-            guild_id = interaction.guild_id
-
-            # Check if calendar ID already exists
-            existing = await self.get_guild_calendars(guild_id)
-            if calendar_id in existing:
-                await interaction.followup.send(
-                    f"A calendar with ID `{calendar_id}` already exists. Please choose a different ID.",
-                    ephemeral=True
-                )
-                return
-
-            # Create calendar in database
-            if not self.bot.db:
-                await interaction.followup.send("Database not available.", ephemeral=True)
-                return
-
-            calendar_data = {
-                'calendar_id': calendar_id,
-                'text_channel_id': text_channel.id,
-                'voice_channel_id': voice_channel.id,
-                'ical_url': ical_url,
-                'blacklist': blacklist_terms,
-                'whitelist': whitelist_terms,
-                'reminder_role_id': reminder_role.id if reminder_role else None
-            }
-
+        calendar_data = {
+            'calendar_id': calendar_id,
+            'text_channel_id': text_channel_id,
+            'voice_channel_id': voice_channel_id,
+            'ical_url': ical_url,
+            'blacklist': blacklist_terms,
+            'whitelist': whitelist_terms,
+            'reminder_role_id': reminder_role_id,
+        }
+        try:
             calendar = await self.bot.db.calendars.create_calendar(guild_id, calendar_data)
-
-            # Update cache
-            if guild_id not in self._calendars_cache:
-                self._calendars_cache[guild_id] = {}
-            self._calendars_cache[guild_id][calendar_id] = calendar
-
-            # Create success embed
-            embed = discord.Embed(
-                title="Calendar Added Successfully",
-                color=0x00ff00
-            )
-            embed.add_field(name="Calendar ID", value=calendar_id, inline=True)
-            embed.add_field(name="Text Channel", value=text_channel.mention, inline=True)
-            embed.add_field(name="Voice Channel", value=voice_channel.mention, inline=True)
-            embed.add_field(name="iCal URL", value=ical_url, inline=False)
-
-            if blacklist_terms:
-                embed.add_field(
-                    name="Blacklisted Terms",
-                    value=", ".join(f"`{term}`" for term in blacklist_terms),
-                    inline=False
-                )
-
-            if whitelist_terms:
-                embed.add_field(
-                    name="Whitelisted Terms",
-                    value=", ".join(f"`{term}`" for term in whitelist_terms),
-                    inline=False
-                )
-
-            if reminder_role:
-                embed.add_field(name="Reminder Role", value=reminder_role.mention, inline=True)
-            else:
-                embed.add_field(name="Reminder Role", value="None (no role pings)", inline=True)
-
-            embed.set_footer(text="The calendar will be synced automatically every hour. Reminders are sent 1 hour before events.")
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
-            # Trigger immediate sync
+            self._calendars_cache.setdefault(guild_id, {})[calendar_id] = calendar
             await self._sync_calendar(guild_id, calendar)
-
             self.log.info(f"Added calendar {calendar_id} for guild {guild_id}")
-
+            return calendar, None
         except Exception as e:
             self.log.error(f"Error adding calendar: {e}")
-            await interaction.followup.send(
-                f"An error occurred while adding the calendar: {str(e)}",
-                ephemeral=True
-            )
+            return None, f"An error occurred while adding the calendar: {str(e)}"
 
-    @app_commands.command(name="cal_remove", description="Remove an existing iCal calendar")
-    async def cal_remove(self, interaction: discord.Interaction):
-        """Remove an existing iCal calendar"""
-
+    @app_commands.command(name="calendar", description="Manage iCal calendars (add, edit filters, remove)")
+    @app_commands.default_permissions(administrator=True)
+    async def calendar_dashboard(self, interaction: discord.Interaction):
+        """Single Components-V2 dashboard replacing /cal_add, /cal_remove and /cal_config."""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message(
-                "You need administrator permissions to use this command.",
-                ephemeral=True
-            )
+                "You need administrator permissions to use this command.", ephemeral=True)
             return
-
-        guild_id = interaction.guild_id
-        calendars = await self.get_guild_calendars(guild_id)
-
-        if not calendars:
-            await interaction.response.send_message(
-                "No calendars found for this server. Use `/cal_add` to add one first.",
-                ephemeral=True
-            )
-            return
-
-        view = CalendarRemoveView(self, guild_id, list(calendars.values()))
-
-        embed = discord.Embed(
-            title="Remove Calendar",
-            description="Select a calendar to remove from the dropdown below:",
-            color=0xff9900
-        )
-
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-    @app_commands.command(name="cal_config", description="Configure existing calendar filters and settings")
-    async def cal_config(self, interaction: discord.Interaction):
-        """Configure an existing iCal calendar"""
-
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "You need administrator permissions to use this command.",
-                ephemeral=True
-            )
-            return
-
-        guild_id = interaction.guild_id
-        calendars = await self.get_guild_calendars(guild_id)
-
-        if not calendars:
-            await interaction.response.send_message(
-                "No calendars found for this server. Use `/cal_add` to add one first.",
-                ephemeral=True
-            )
-            return
-
-        view = CalendarConfigView(self, guild_id, list(calendars.values()))
-
-        embed = discord.Embed(
-            title="Calendar Configuration",
-            description="Select a calendar to view details and edit filters:",
-            color=0x5865F2
-        )
-
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        from core.calendar_views import build_calendar_dashboard
+        view = await build_calendar_dashboard(self, interaction.guild.id)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
     async def remove_calendar(self, guild_id: int, calendar_id: str) -> bool:
         """Remove a calendar and clean up associated data"""
