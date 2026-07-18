@@ -16,49 +16,6 @@
       overflow: hidden;
     }
 
-    /* ── Header ── */
-    header {
-      background: #2b2d31;
-      border-bottom: 1px solid #3f4147;
-      padding: 10px 16px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      z-index: 10;
-      flex-shrink: 0;
-      transition: background 0.3s, border-color 0.3s;
-    }
-    body.light header { background: #ffffffdd; border-color: #e0e0e0; backdrop-filter: blur(6px); }
-
-    .guild-icon { width: 32px; height: 32px; border-radius: 8px; object-fit: cover; }
-    .guild-icon-placeholder {
-      width: 32px; height: 32px; border-radius: 8px;
-      background: #5865F222; border: 1px solid #5865F244;
-      display: flex; align-items: center; justify-content: center;
-      font-weight: 700; color: #5865F2; font-size: 13px;
-    }
-    header h1 { font-size: 15px; font-weight: 600; color: #fff; transition: color 0.3s; }
-    header .sub { font-size: 12px; color: #80848e; transition: color 0.3s; }
-    body.light header h1 { color: #111; }
-    body.light header .sub { color: #666; }
-    header .spacer { flex: 1; }
-
-    .pill {
-      font-size: 11px; padding: 3px 9px; border-radius: 12px;
-      background: #383a40; color: #80848e; border: 1px solid #3f4147;
-      transition: background 0.3s, color 0.3s, border-color 0.3s;
-    }
-    body.light .pill { background: #f0f0f0; color: #555; border-color: #ccc; }
-
-    #mode-btn {
-      background: #383a40; border: 1px solid #3f4147;
-      color: #dbdee1; border-radius: 8px; padding: 4px 10px;
-      font-size: 13px; cursor: pointer; transition: background 0.2s;
-      white-space: nowrap;
-    }
-    #mode-btn:hover { background: #4e5058; }
-    body.light #mode-btn { background: #f0f0f0; border-color: #ccc; color: #333; }
-
     /* ── Map ── */
     #map { flex: 1; background: radial-gradient(circle at 50% 42%, #131c34 0%, #070b16 68%); }
 
@@ -71,10 +28,6 @@
       padding: 0 !important;
       color: #dbdee1;
     }
-    body.light .maplibregl-popup-content {
-      background: #fff !important;
-      border-color: #e0e0e0 !important;
-    }
     .maplibregl-popup-tip { display: none; }
     .maplibregl-popup-close-button { color: #80848e !important; font-size: 16px !important; top: 6px !important; right: 8px !important; }
     .pop-inner { display: flex; align-items: center; gap: 10px; padding: 10px 13px; }
@@ -86,9 +39,6 @@
     }
     .pop-name { font-weight: 600; color: #fff; font-size: 13px; }
     .pop-loc  { font-size: 11px; color: #80848e; margin-top: 2px; }
-    body.light .pop-name { color: #111; }
-    body.light .pop-loc  { color: #888; }
-
     #dbg {
       position: fixed; bottom: 8px; left: 8px; right: 8px; z-index: 999;
       font-family: monospace; font-size: 11px; color: #b5bac1;
@@ -96,26 +46,22 @@
       white-space: pre-wrap; max-height: 30vh; overflow-y: auto;
       pointer-events: none; display: none;
     }
+
+    #proj-btn {
+      position: fixed; top: 8px; left: 8px; z-index: 10;
+      height: 28px; padding: 0 10px; display: flex; align-items: center;
+      background: rgba(43,45,49,0.92); color: #dbdee1;
+      border: 1px solid #3f4147; border-radius: 6px;
+      font-size: 11px; font-weight: 600; cursor: pointer; letter-spacing: 0.03em;
+      transition: background 0.2s;
+    }
+    #proj-btn:hover { background: rgba(78,80,88,0.92); }
   </style>
 </head>
 <body>
 
-<header>
-  {% if guild_icon %}
-  <img class="guild-icon" src="{{ guild_icon }}" alt="" />
-  {% else %}
-  <div class="guild-icon-placeholder">{{ guild_name[0] | upper }}</div>
-  {% endif %}
-  <div>
-    <h1>{{ guild_name }}</h1>
-    <span class="sub">Member Map</span>
-  </div>
-  <div class="spacer"></div>
-  <span class="pill" id="pin-pill">{{ pin_count }} pin{{ '' if pin_count == 1 else 's' }}</span>
-  <button id="mode-btn" onclick="toggleMode()">☀️ Light</button>
-</header>
-
 <div id="map"></div>
+<button id="proj-btn" onclick="toggleProjection()">2D</button>
 <pre id="dbg"></pre>
 
 <script>
@@ -135,6 +81,8 @@ const GUILD_ID = "{{ guild_id }}";
 const REGION   = {{ region | tojson }};
 
 dbg(`MapLibre ${maplibregl.version} | guild=${GUILD_ID} | region=${REGION}`);
+
+let isGlobe = true;
 
 const STYLES = {
   dark:  'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
@@ -180,10 +128,6 @@ const REGION_BOUNDS = {
   mexico:        [[-118,14],[-86,33]],
 };
 
-let isDark = true;
-
-dbg('MapLibre ' + maplibregl.version);
-
 const map = new maplibregl.Map({
   container: 'map',
   style: STYLES.dark,
@@ -197,13 +141,14 @@ let pinsLoaded = false;
 let cachedFeatures = null;
 
 map.on('style.load', () => {
-  dbg('style.load — setting globe');
-  map.setProjection({ type: 'globe' });
+  dbg('style.load — setting projection');
+  map.setProjection({ type: isGlobe ? 'globe' : 'mercator' });
 
-  // Atmosphere halo so the sphere reads as a 3D globe in space.
-  // Best-effort: older MapLibre builds ignore/omit setSky — never let it break the map.
-  try { map.setSky({ 'atmosphere-blend': 0.85 }); }
-  catch (e) { dbg('setSky skipped: ' + e); }
+  // Atmosphere halo only applies in globe mode.
+  if (isGlobe) {
+    try { map.setSky({ 'atmosphere-blend': 0.85 }); }
+    catch (e) { dbg('setSky skipped: ' + e); }
+  }
 
   if (!pinsLoaded) {
     pinsLoaded = true;
@@ -337,8 +282,6 @@ async function loadPins() {
     const data = await fetch(`/api/map/${GUILD_ID}/pins`).then(r => r.json());
     const features = data.features || [];
     dbg('pins: ' + features.length);
-    document.getElementById('pin-pill').textContent =
-      `${features.length} pin${features.length !== 1 ? 's' : ''}`;
     for (const f of features)
       f.properties.imageId = `pin-${f.properties.user_id}`;
     cachedFeatures = features;
@@ -347,12 +290,16 @@ async function loadPins() {
   } catch(err) { dbg('loadPins FAIL: ' + err); }
 }
 
-function toggleMode() {
-  isDark = !isDark;
-  document.body.classList.toggle('light', !isDark);
-  document.getElementById('mode-btn').textContent = isDark ? '☀️ Light' : '🌙 Dark';
-  map.setStyle(isDark ? STYLES.dark : STYLES.light);
-  // style.load fires → globe + pins re-applied automatically
+function toggleProjection() {
+  isGlobe = !isGlobe;
+  document.getElementById('proj-btn').textContent = isGlobe ? '2D' : '3D';
+  map.setProjection({ type: isGlobe ? 'globe' : 'mercator' });
+  if (isGlobe) {
+    try { map.setSky({ 'atmosphere-blend': 0.85 }); }
+    catch (e) { /* ignore */ }
+  } else {
+    try { map.setSky({}); } catch (e) { /* ignore */ }
+  }
 }
 
 function esc(s) {

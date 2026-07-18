@@ -339,6 +339,59 @@ async def dashboard(request: Request, guild_id: int):
 
 # ── Public Map Routes (no auth required) ─────────────────────────────────────
 
+@app.get("/api/map/all/pins")
+async def map_all_pins_api():
+    """GeoJSON endpoint for all pins across ALL guilds. Public."""
+    async with pool.acquire() as conn:
+        pins = await conn.fetch(
+            "SELECT p.user_id, p.username, p.display_name, p.latitude, p.longitude, "
+            "p.color, p.avatar_hash, p.guild_id, g.name as guild_name "
+            "FROM map_pins p JOIN guilds g ON p.guild_id = g.id"
+        )
+
+    import json as _json
+
+    features = []
+    for pin in pins:
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [float(pin["longitude"]), float(pin["latitude"])],
+            },
+            "properties": {
+                "name": pin["display_name"] or pin["username"],
+                "username": pin["username"],
+                "color": pin["color"] or "#FF4444",
+                "avatar_hash": pin["avatar_hash"],
+                "user_id": str(pin["user_id"]),
+                "guild_id": str(pin["guild_id"]),
+                "guild_name": pin["guild_name"],
+            },
+        })
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+    }
+
+
+@app.get("/map/all", response_class=HTMLResponse)
+async def map_all_page(request: Request):
+    """Interactive globe showing all pins from all guilds. Public."""
+    async with pool.acquire() as conn:
+        total_pins = await conn.fetchval("SELECT COUNT(*) FROM map_pins")
+
+    return templates.TemplateResponse(request, "map.html", {
+        "guild_id": "all",
+        "guild_name": "Alle Server",
+        "guild_icon": None,
+        "region": "world",
+        "pin_count": total_pins or 0,
+        "discord_client_id": os.getenv("DISCORD_CLIENT_ID", ""),
+    })
+
+
 @app.get("/api/map/{guild_id}/pins")
 async def map_pins_api(guild_id: int):
     """GeoJSON endpoint for all pins of a guild. Public — no login required."""
