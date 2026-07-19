@@ -7,40 +7,72 @@
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <link rel="stylesheet" href="/static/tailwind.css" />
   <style>
-    body { background-color: #1e1f22; color: #dbdee1; font-family: system-ui, sans-serif; }
-    .card { background: #2b2d31; border: 1px solid #3f4147; border-radius: 8px; }
-    .badge-on  { background:#23a55a22; color:#23a55a; border:1px solid #23a55a44; }
-    .badge-off { background:#f2343022; color:#f23430; border:1px solid #f2343044; }
-    .badge-warn{ background:#f0b23222; color:#f0b232; border:1px solid #f0b23244; }
+    html { color-scheme: dark; }
+
+    body {
+      margin: 0;
+      background: var(--color-bg, #0d0d0d);
+      color: var(--color-text-2, #c3c2b7);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .card {
+      background: var(--color-surface, #1a1a19);
+      border: 1px solid var(--color-border, rgba(255,255,255,0.08));
+      border-radius: var(--radius, 10px);
+      padding: 18px 20px;
+      min-width: 0;
+    }
+
+    .badge-on  { background: color-mix(in srgb, var(--color-ok, #0ca30c) 15%, transparent);
+                 color: var(--color-ok, #0ca30c);
+                 border: 1px solid color-mix(in srgb, var(--color-ok, #0ca30c) 30%, transparent); }
+    .badge-off { background: color-mix(in srgb, var(--color-bad, #d03b3b) 15%, transparent);
+                 color: var(--color-bad, #d03b3b);
+                 border: 1px solid color-mix(in srgb, var(--color-bad, #d03b3b) 30%, transparent); }
+    .badge-warn{ background: color-mix(in srgb, var(--color-warn-fill, #fab219) 15%, transparent);
+                 color: var(--color-warn-fill, #fab219);
+                 border: 1px solid color-mix(in srgb, var(--color-warn-fill, #fab219) 30%, transparent); }
   </style>
 </head>
-<body class="h-full min-h-screen">
+<body class="h-full min-h-screen bg-bg">
 
 {% if user is defined and user %}
-<nav class="border-b border-[#3f4147] bg-[#2b2d31] px-6 py-3 flex items-center justify-between">
+<nav class="border-b border-border bg-surface px-6 py-3 flex items-center justify-between">
   <div class="flex items-center gap-3">
-    <span class="text-white font-semibold text-lg tracking-tight">Tausendsassa</span>
-    <span class="text-[#80848e] text-sm">Admin Panel</span>
+    <span class="text-white font-semibold text-[15px] tracking-[-0.01em]">Tausendsassa</span>
+    <span class="text-muted text-[13px] font-normal">Admin Panel</span>
   </div>
   <div class="flex items-center gap-4">
+    <a href="/map/all" class="text-[13px] text-muted hover:text-text-2 transition-colors">Globe</a>
+    <a href="/map/region-density" class="text-[13px] text-muted hover:text-text-2 transition-colors">Regions</a>
     {% if guild is defined %}
-    <a href="/guilds" class="text-sm text-[#80848e] hover:text-white transition-colors">← Server list</a>
+    <a href="/guilds" class="text-[13px] text-muted hover:text-text-2 transition-colors">← Server list</a>
     {% endif %}
     <div class="flex items-center gap-2">
       <img src="{{ user_avatar_url(user.id, user.avatar) }}" class="w-7 h-7 rounded-full" alt="" />
-      <span class="text-sm text-[#dbdee1]">{{ user.username }}</span>
+      <span class="text-[13px] text-text-2">{{ user.username }}</span>
       {% if user.is_owner %}
-      <span class="text-xs px-1.5 py-0.5 rounded bg-discord/20 text-discord border border-discord/30">Owner</span>
+      <span class="text-xs px-1.5 py-0.5 rounded-md bg-discord/15 text-discord border border-discord/25">Owner</span>
       {% endif %}
     </div>
-    <a href="/logout" class="text-sm text-[#80848e] hover:text-[#f23430] transition-colors">Logout</a>
+    <a href="/logout" class="text-[13px] text-muted hover:text-bad transition-colors">Logout</a>
   </div>
 </nav>
 {% endif %}
 
-<main class="{% block main_class %}max-w-5xl mx-auto px-6 py-8{% endblock %}">
+<main class="{% block main_class %}max-w-[1240px] mx-auto px-6 py-6{% endblock %}">
   {% block content %}{% endblock %}
 </main>
+
+<footer class="border-t border-border py-4 px-6 text-center text-xs text-muted">
+  <a href="/privacy" class="hover:text-text-2 transition-colors">Privacy Policy</a>
+  <span class="mx-2">·</span>
+  <a href="/terms" class="hover:text-text-2 transition-colors">Terms of Service</a>
+</footer>
 
 </body>
 </html>

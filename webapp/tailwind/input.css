@@ -1,6 +1,26 @@
 @import "tailwindcss" source("../templates");
 
 @theme {
+  /* ── Dashboard-inspired dark palette ─────────────────────────────── */
+  --color-bg: #0d0d0d;
+  --color-surface: #1a1a19;
+  --color-surface-2: #232322;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.14);
+  --color-text: #ffffff;
+  --color-text-2: #c3c2b7;
+  --color-muted: #898781;
+
+  /* Discord blurple — used sparingly as the signature accent */
   --color-discord: #5865F2;
   --color-discord-dark: #4752C4;
+
+  /* Semantic status — dashboard palette */
+  --color-ok: #0ca30c;
+  --color-bad: #d03b3b;
+  --color-warn: #b97e00;
+  --color-warn-fill: #fab219;
+
+  /* Radius */
+  --radius: 10px;
 }

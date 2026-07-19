@@ -4,7 +4,7 @@
 {% block content %}
 <div class="mb-8">
   <h1 class="text-2xl font-semibold text-white">Select a server</h1>
-  <p class="text-sm text-[#80848e] mt-1">
+  <p class="text-sm text-muted mt-1">
     Only servers where you have admin permissions and the bot is active.
   </p>
 </div>
@@ -13,7 +13,7 @@
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
   {% for guild in guilds %}
   <a href="/guild/{{ guild.id }}"
-     class="card p-5 flex items-center gap-4 hover:border-discord/50 hover:bg-[#313338] transition-all group">
+     class="card p-5 flex items-center gap-4 hover:border-border-strong hover:bg-surface-2 transition-all group">
     {% if guild.icon %}
     <img src="{{ guild_icon_url(guild.id, guild.icon) }}"
          class="w-12 h-12 rounded-2xl flex-shrink-0" alt="" />
@@ -28,14 +28,14 @@
       <p class="text-white font-medium truncate group-hover:text-discord transition-colors">
         {{ guild.name }}
       </p>
-      <p class="text-xs text-[#80848e] mt-0.5">ID: {{ guild.id }}</p>
+      <p class="text-xs text-muted mt-0.5">ID: {{ guild.id }}</p>
     </div>
   </a>
   {% endfor %}
 </div>
 
 {% else %}
-<div class="card p-8 text-center text-[#80848e]">
+<div class="card p-8 text-center text-muted">
   <p>No servers found.</p>
   <p class="text-sm mt-1">Make sure the bot is active on at least one of your servers and you have admin permissions there.</p>
 </div>

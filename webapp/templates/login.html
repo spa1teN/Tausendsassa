@@ -11,11 +11,11 @@
       </svg>
     </div>
     <h1 class="text-xl font-semibold text-white">Tausendsassa</h1>
-    <p class="text-sm text-[#80848e] mt-1">Admin Panel</p>
+    <p class="text-sm text-muted mt-1">Admin Panel</p>
   </div>
 
   {% if error %}
-  <div class="mb-4 px-4 py-2.5 rounded-lg bg-[#f2343022] border border-[#f2343044] text-sm text-[#f23430]">
+  <div class="mb-4 px-4 py-2.5 rounded-lg badge-off text-sm">
     {% if error == "access_denied" %}Access denied.
     {% elif error == "no_admin_guilds" %}No servers found where you have admin permissions and the bot is active.
     {% elif error == "invalid_state" %}Invalid request. Please try again.
@@ -32,7 +32,7 @@
     Sign in with Discord
   </a>
 
-  <p class="mt-4 text-xs text-[#80848e]">
+  <p class="mt-4 text-xs text-muted">
     Access is limited to server admins on servers where the bot is active.
   </p>
 </div>

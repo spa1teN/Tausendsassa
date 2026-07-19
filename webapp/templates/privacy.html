@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Privacy Policy{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <div class="mb-6">
+    <a href="/" class="text-sm text-muted hover:text-white transition-colors">← Home</a>
+  </div>
+  <div class="card p-8">
+    {{ content_html | safe }}
+  </div>
+</div>
+{% endblock %}

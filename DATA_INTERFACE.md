@@ -300,6 +300,40 @@ Für nicht gefundene User (User nicht im Cache / nicht in mutual Guilds)
 liefern die Endpoints `"user_name": null, "user_avatar_url": null`.
 
 **Netzwerk:** Der Bot-Container exposed Port 8090 im `tausendsassa-network`.
+## Webapp Map-Endpunkte (Port 8081, öffentlich via nginx)
+
+Die Webapp (`webapp/main.py`) stellt interaktive Karten-Seiten und GeoJSON-
+Endpunkte bereit, die das Dashboard einbetten oder verlinken kann. **Alle
+benötigen Discord-Login** (Session-Cookie vom OAuth2-Flow) — bis auf die
+Activity-Proxy-Route, die auch Anfragen von `discord.com` / `*.discordsays.com`
+zulässt.
+
+### Seiten (HTML)
+
+| Pfad | Auth | Beschreibung |
+|---|---|---|
+| `/map/all` | Login | 3D-Globus mit allen Pins aller Gilden |
+| `/map/{guild_id}` | Guild-Admin | 3D-Globus mit Pins einer Gilde |
+| `/map/region-density` | Login | Weltkarte mit farbigen Regions-Overlays (Verteilung der Map-Typen) |
+| `/activity` | Public | Discord-Activity-Einstieg (ohne Login, SDK liefert Guild-Kontext) |
+
+### JSON/GeoJSON
+
+| Methode | Pfad | Auth | Beschreibung |
+|---|---|---|---|
+| `GET` | `/api/map/all/pins` | Login | GeoJSON FeatureCollection aller Pins aller Gilden (inkl. `guild_id`, `guild_name`) |
+| `GET` | `/api/map/{guild_id}/pins` | Guild-Admin | GeoJSON FeatureCollection der Pins einer Gilde + `region`, `guild_name`, `guild_icon`, `pin_count` |
+| `GET` | `/api/map/{guild_id}/pins-by-country` | Guild-Admin | `[{country_code, count}]` — aggregierte Pin-Zahlen pro Land |
+
+### Einbindung ins Dashboard
+
+Das Dashboard (`~/dashboard/`) kann diese Seiten per `<iframe>` oder Link
+einbinden. Für `<iframe>`-Einbettung muss der Nutzer im Webapp-Tab bereits
+eingeloggt sein (Session-Cookie wird vom Browser mitgesendet). Alternativ
+können die Seiten als eigenständige Tabs verlinkt werden.
+
+Beispiel: `<a href="https://tausendsassa.casparsadenius.de/map/region-density">Region Density</a>`
+
 ## Netzwerk-Integration für `~/dashboard/`
 
 Das Dashboard-Projekt läuft im eigenen `dashboard-network` und tritt zusätzlich

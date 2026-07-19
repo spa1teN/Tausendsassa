@@ -12,7 +12,7 @@ from PIL import Image as PILImage
 from io import BytesIO
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 APOLOGY_TEXT = (
     "## Apology for Spam\n"
@@ -422,15 +422,14 @@ class MapV2Cog(commands.Cog):
                 if exp_file.exists():
                     _APOLOGY_EXPIRY = float(exp_file.read_text().strip())
                     if time.time() > _APOLOGY_EXPIRY:
-                        self.log.info("Apology expired — removing")
+                        self.log.info("Apology expired — removing file")
                         exp_file.unlink(missing_ok=True)
                         _APOLOGY_EXPIRY = 0.0
                     else:
                         self.log.info(f"Apology active until {_APOLOGY_EXPIRY} (from file)")
-                else:
-                    _APOLOGY_EXPIRY = time.time() + 86400
-                    exp_file.write_text(str(_APOLOGY_EXPIRY))
-                    self.log.info(f"Apology active until {_APOLOGY_EXPIRY} (24h from now)")
+                        # Start periodic check to refresh maps when it expires
+                        self._apology_expiry_check.start()
+                # If no file, no apology — don't create a new one
             self.bot.loop.create_task(self._delayed_regen())
         except Exception as e:
             self.log.error(f"cog_load failed: {e}")
@@ -470,6 +469,7 @@ class MapV2Cog(commands.Cog):
             self.log.error(f"_update_map failed: {e}")
 
     async def cog_unload(self):
+        self._apology_expiry_check.cancel()
         for guild_id in list(self.maps.keys()):
             try:
                 await self._save_data(guild_id)
@@ -543,6 +543,27 @@ class MapV2Cog(commands.Cog):
             if cid and map_data.get('message_id'):
                 try:
                     await self._update_map(gid_int, cid)
+                except Exception:
+                    pass
+
+    @tasks.loop(minutes=17)
+    async def _apology_expiry_check(self):
+        """Periodically check if the apology has expired and refresh all maps."""
+        global _APOLOGY_EXPIRY
+        if _APOLOGY_EXPIRY == 0.0 or time.time() < _APOLOGY_EXPIRY:
+            return
+        self.log.info("Apology expired — removing file and regenerating maps")
+        exp_file = self.data_dir / ".apology_expiry"
+        exp_file.unlink(missing_ok=True)
+        _APOLOGY_EXPIRY = 0.0
+        # Stop the loop — one-shot expiry is enough
+        self._apology_expiry_check.cancel()
+        # Regenerate all maps to remove the apology from live messages
+        for guild_id_str, map_data in list(self.maps.items()):
+            cid = map_data.get('channel_id')
+            if cid and map_data.get('message_id'):
+                try:
+                    await self._update_map(int(guild_id_str), cid)
                 except Exception:
                     pass
 

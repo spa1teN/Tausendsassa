@@ -161,6 +161,20 @@ def user_avatar_url(user_id: str, avatar_hash: Optional[str]) -> str:
 templates.env.globals["guild_icon_url"] = guild_icon_url
 templates.env.globals["user_avatar_url"] = user_avatar_url
 
+BOT_API_BASE = os.getenv("BOT_API_BASE", "http://tausendsassa-bot:8090")
+
+
+async def _fetch_bot_api(path: str) -> list[dict] | dict | None:
+    """Fetch data from the bot's internal API. Returns None on failure."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{BOT_API_BASE}{path}")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+    return None
+
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -304,16 +318,19 @@ async def dashboard(request: Request, guild_id: int):
             raise HTTPException(status_code=404, detail="Guild not found")
 
         feeds = await conn.fetch(
-            "SELECT id, name, feed_url, channel_id, enabled, failure_count "
+            "SELECT id, name, feed_url, channel_id, webhook_url, username, "
+            "avatar_url, color, enabled, failure_count "
             "FROM feeds WHERE guild_id = $1 ORDER BY name",
             guild_id,
         )
         calendars = await conn.fetch(
-            "SELECT id, ical_url, text_channel_id FROM calendars WHERE guild_id = $1",
+            "SELECT id, ical_url, text_channel_id, voice_channel_id, "
+            "reminder_role_id, blacklist, whitelist "
+            "FROM calendars WHERE guild_id = $1",
             guild_id,
         )
         map_settings = await conn.fetchrow(
-            "SELECT region, settings FROM map_settings WHERE guild_id = $1",
+            "SELECT region, channel_id, settings FROM map_settings WHERE guild_id = $1",
             guild_id,
         )
         pin_count = await conn.fetchval(
@@ -324,6 +341,67 @@ async def dashboard(request: Request, guild_id: int):
             "SELECT member_log_webhook, join_role_id FROM moderation_config WHERE guild_id = $1",
             guild_id,
         )
+        tz_row = await conn.fetchrow(
+            "SELECT timezone FROM guild_timezones WHERE guild_id = $1",
+            guild_id,
+        )
+        monitor_row = await conn.fetchrow(
+            "SELECT channel_id FROM feed_monitor_channels WHERE guild_id = $1",
+            guild_id,
+        )
+
+        # Moderation log + stats
+        mod_log = await conn.fetch(
+            "SELECT action, target_id, moderator_id, reason, created_at "
+            "FROM moderation_log WHERE guild_id = $1 "
+            "ORDER BY created_at DESC LIMIT 100",
+            guild_id,
+        )
+        mod_stats = await conn.fetchrow(
+            "SELECT "
+            "  COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') as actions_24h, "
+            "  COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') as actions_7d, "
+            "  COUNT(*) FILTER (WHERE action='ban' AND created_at > NOW() - INTERVAL '7 days') as bans_7d, "
+            "  COUNT(*) FILTER (WHERE action='kick' AND created_at > NOW() - INTERVAL '7 days') as kicks_7d, "
+            "  COUNT(*) FILTER (WHERE action='timeout' AND created_at > NOW() - INTERVAL '7 days') as timeouts_7d, "
+            "  COUNT(*) FILTER (WHERE action='join' AND created_at > NOW() - INTERVAL '7 days') as joins_7d, "
+            "  COUNT(*) FILTER (WHERE action='leave' AND created_at > NOW() - INTERVAL '7 days') as leaves_7d "
+            "FROM moderation_log WHERE guild_id = $1",
+            guild_id,
+        )
+
+        # Feedback for this guild
+        feedback_rows = await conn.fetch(
+            "SELECT id, user_id, is_anonymous, subject, message, status, read, admin_note, created_at "
+            "FROM feedback WHERE guild_id = $1 "
+            "ORDER BY created_at DESC LIMIT 50",
+            guild_id,
+        )
+        feedback_unread = await conn.fetchval(
+            "SELECT COUNT(*) FROM feedback WHERE guild_id = $1 AND NOT read", guild_id,
+        )
+        # Top countries by pin count for this guild
+        top_countries = await conn.fetch(
+            "SELECT country_code, COUNT(*) as cnt FROM map_pins "
+            "WHERE guild_id = $1 AND country_code IS NOT NULL "
+            "GROUP BY country_code ORDER BY cnt DESC LIMIT 10",
+            guild_id,
+        )
+
+    timezone = tz_row["timezone"] if tz_row else "Europe/Berlin"
+    monitor_channel_id = str(monitor_row["channel_id"]) if monitor_row else None
+
+    # Fetch Discord-side data from bot API (drops gracefully if bot unreachable)
+    bot_channels = await _fetch_bot_api(f"/api/bot/guild/{guild_id}/channels") or []
+    bot_voice_channels = await _fetch_bot_api(f"/api/bot/guild/{guild_id}/voice-channels") or []
+    bot_roles = await _fetch_bot_api(f"/api/bot/guild/{guild_id}/roles") or []
+    bot_webhooks = await _fetch_bot_api(f"/api/bot/guild/{guild_id}/webhooks") or []
+
+    # ID sets for stale-reference checking in dropdowns
+    channel_id_set = {ch["id"] for ch in bot_channels}
+    voice_channel_id_set = {ch["id"] for ch in bot_voice_channels}
+    role_id_set = {r["id"] for r in bot_roles}
+    webhook_url_set = {wh["url"] for wh in bot_webhooks}
 
     return templates.TemplateResponse(request, "dashboard.html", {
         "user": user,
@@ -334,14 +412,45 @@ async def dashboard(request: Request, guild_id: int):
         "map_settings": dict(map_settings) if map_settings else None,
         "pin_count": pin_count or 0,
         "mod_config": dict(mod_config) if mod_config else None,
+        "bot_channels": bot_channels,
+        "bot_voice_channels": bot_voice_channels,
+        "bot_roles": bot_roles,
+        "bot_webhooks": bot_webhooks,
+        "channel_id_set": channel_id_set,
+        "voice_channel_id_set": voice_channel_id_set,
+        "role_id_set": role_id_set,
+        "webhook_url_set": webhook_url_set,
+        "timezone": timezone,
+        "timezones": COMMON_TIMEZONES,
+        "monitor_channel_id": monitor_channel_id,
+        "mod_log": [dict(r) for r in mod_log],
+        "mod_stats": dict(mod_stats) if mod_stats else {},
+        "feedback_rows": [dict(r) for r in feedback_rows],
+        "feedback_unread": feedback_unread or 0,
+        "top_countries": [dict(r) for r in top_countries],
     })
 
 
 # ── Public Map Routes (no auth required) ─────────────────────────────────────
 
+@app.get("/api/map/{guild_id}/pins-by-country")
+async def map_pins_by_country(guild_id: int):
+    """Aggregated pin counts per country for choropleth maps."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT country_code, COUNT(*) as cnt FROM map_pins "
+            "WHERE guild_id = $1 AND country_code IS NOT NULL "
+            "GROUP BY country_code ORDER BY cnt DESC",
+            guild_id,
+        )
+    return JSONResponse([
+        {"country_code": r["country_code"], "count": r["cnt"]} for r in rows
+    ])
+
 @app.get("/api/map/all/pins")
-async def map_all_pins_api():
-    """GeoJSON endpoint for all pins across ALL guilds. Public."""
+async def map_all_pins_api(request: Request):
+    """GeoJSON endpoint for all pins across ALL guilds. Requires login."""
+    _require_login(request)
     async with pool.acquire() as conn:
         pins = await conn.fetch(
             "SELECT p.user_id, p.username, p.display_name, p.latitude, p.longitude, "
@@ -378,7 +487,8 @@ async def map_all_pins_api():
 
 @app.get("/map/all", response_class=HTMLResponse)
 async def map_all_page(request: Request):
-    """Interactive globe showing all pins from all guilds. Public."""
+    """Interactive globe showing all pins from all guilds. Requires login."""
+    _require_login(request)
     async with pool.acquire() as conn:
         total_pins = await conn.fetchval("SELECT COUNT(*) FROM map_pins")
 
@@ -393,8 +503,9 @@ async def map_all_page(request: Request):
 
 
 @app.get("/api/map/{guild_id}/pins")
-async def map_pins_api(guild_id: int):
-    """GeoJSON endpoint for all pins of a guild. Public — no login required."""
+async def map_pins_api(request: Request, guild_id: int):
+    """GeoJSON endpoint for all pins of a guild. Requires guild access."""
+    await _require_guild_access(request, guild_id)
     async with pool.acquire() as conn:
         pins = await conn.fetch(
             "SELECT user_id, username, display_name, latitude, longitude, color, avatar_hash "
@@ -440,6 +551,7 @@ async def map_pins_api(guild_id: int):
         "guild_icon": guild_icon_url(str(guild_id), guild["icon_hash"]) if guild else None,
         "region": settings_row["region"] if settings_row else "world",
         "settings": settings,
+        "pin_count": len(features),
     })
 
 
@@ -452,14 +564,40 @@ async def activity_page(request: Request):
 
 
 @app.get("/activity/api/map/{guild_id}/pins")
-async def activity_map_pins_api(guild_id: int):
+async def activity_map_pins_api(request: Request, guild_id: int):
     """Proxy for map pins API — Discord prepends /activity to all relative paths."""
-    return await map_pins_api(guild_id)
+    if not _is_discord_activity(request):
+        await _require_guild_access(request, guild_id)
+    return await map_pins_api(request, guild_id)
+
+
+@app.get("/map/region-density", response_class=HTMLResponse)
+async def map_region_density(request: Request):
+    """Map showing how many guilds use each region type. Requires login."""
+    _require_login(request)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT region, COUNT(*) as guild_count "
+            "FROM map_settings GROUP BY region ORDER BY guild_count DESC"
+        )
+    region_counts = [
+        {"region": r["region"], "label": REGION_LABELS.get(r["region"], r["region"]),
+         "guild_count": r["guild_count"]}
+        for r in rows
+    ]
+    total = sum(r["guild_count"] for r in region_counts)
+
+    return templates.TemplateResponse(request, "region-density.html", {
+        "region_counts": region_counts,
+        "total_guilds": total,
+        "discord_client_id": os.getenv("DISCORD_CLIENT_ID", ""),
+    })
 
 
 @app.get("/map/{guild_id}", response_class=HTMLResponse)
 async def map_page(request: Request, guild_id: int):
-    """Interactive OSM map for a guild. Public — no login required."""
+    """Interactive map for a guild. Requires guild access."""
+    await _require_guild_access(request, guild_id)
     async with pool.acquire() as conn:
         guild = await conn.fetchrow("SELECT name, icon_hash FROM guilds WHERE id = $1", guild_id)
         settings_row = await conn.fetchrow(
@@ -484,17 +622,55 @@ async def map_page(request: Request, guild_id: int):
     })
 
 
+# ── Region density map ─────────────────────────────────────────────────────
+
+REGION_LABELS = {
+    "world": "🌍 World", "europe": "🇪🇺 Europe", "germany": "🇩🇪 Germany",
+    "france": "🇫🇷 France", "spain": "🇪🇸 Spain", "italy": "🇮🇹 Italy",
+    "poland": "🇵🇱 Poland", "netherlands": "🇳🇱 Netherlands", "belgium": "🇧🇪 Belgium",
+    "switzerland": "🇨🇭 Switzerland", "sweden": "🇸🇪 Sweden", "russia": "🇷🇺 Russia",
+    "ukraine": "🇺🇦 Ukraine", "unitedkingdom": "🇬🇧 UK",
+    "asia": "🌏 Asia", "japan": "🇯🇵 Japan", "southkorea": "🇰🇷 South Korea",
+    "northamerica": "🌎 North America", "usmainland": "🇺🇸 US Mainland",
+    "canada": "🇨🇦 Canada", "mexico": "🇲🇽 Mexico",
+    "southamerica": "🌎 South America", "brazil": "🇧🇷 Brazil",
+    "africa": "🌍 Africa", "australia": "🇦🇺 Australia",
+    "austria": "🇦🇹 Austria", "czech": "🇨🇿 Czechia", "hungary": "🇭🇺 Hungary",
+    "portugal": "🇵🇹 Portugal", "greece": "🇬🇷 Greece", "norway": "🇳🇴 Norway",
+    "denmark": "🇩🇰 Denmark", "finland": "🇫🇮 Finland", "romania": "🇷🇴 Romania",
+    "bulgaria": "🇧🇬 Bulgaria", "croatia": "🇭🇷 Croatia", "slovenia": "🇸🇮 Slovenia",
+    "slovakia": "🇸🇰 Slovakia", "ireland": "🇮🇪 Ireland",
+    "lithuania": "🇱🇹 Lithuania", "latvia": "🇱🇻 Latvia", "estonia": "🇪🇪 Estonia",
+    "luxembourg": "🇱🇺 Luxembourg", "malta": "🇲🇹 Malta", "cyprus": "🇨🇾 Cyprus",
+    "turkey": "🇹🇷 Turkey",
+}
+
+
 # ── Auth helper for write routes ─────────────────────────────────────────────
 
-async def _require_guild_access(request: Request, guild_id: int):
-    """Return user or raise 401/403. Raises HTTPException on failure."""
+def _require_login(request: Request):
+    """Return user dict or raise 401."""
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not logged in")
+    return user
+
+
+async def _require_guild_access(request: Request, guild_id: int):
+    """Return user or raise 401/403. Raises HTTPException on failure."""
+    user = _require_login(request)
     allowed_ids = {int(g["id"]) for g in user["guilds"]}
     if guild_id not in allowed_ids and not user.get("is_owner"):
         raise HTTPException(status_code=403, detail="Access denied")
     return user
+
+
+def _is_discord_activity(request: Request) -> bool:
+    """Check if request originates from a Discord Activity iframe."""
+    origin = request.headers.get("origin", "")
+    referer = request.headers.get("referer", "")
+    return any(d in origin or d in referer
+               for d in ("discord.com", "discordsays.com"))
 
 
 # ── Feed CRUD routes ──────────────────────────────────────────────────────────
@@ -510,20 +686,17 @@ async def feed_create(
     username: Optional[str] = Form(None),
     avatar_url: Optional[str] = Form(None),
     color: Optional[str] = Form(None),
-    max_items: int = Form(5),
-    crosspost: bool = Form(False),
-    embed_template: Optional[str] = Form(None),
 ):
     await _require_guild_access(request, guild_id)
     async with pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO feeds
                (guild_id, name, feed_url, channel_id, webhook_url, username, avatar_url,
-                color, max_items, crosspost, embed_template, enabled, failure_count)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,0)""",
+                color, enabled, failure_count)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,0)""",
             guild_id, name, feed_url, int(channel_id),
             webhook_url or None, username or None, avatar_url or None,
-            color or None, max_items, crosspost, embed_template or None,
+            color or None,
         )
     return RedirectResponse(f"/guild/{guild_id}", status_code=303)
 
@@ -540,20 +713,16 @@ async def feed_update(
     username: Optional[str] = Form(None),
     avatar_url: Optional[str] = Form(None),
     color: Optional[str] = Form(None),
-    max_items: int = Form(5),
-    crosspost: bool = Form(False),
-    embed_template: Optional[str] = Form(None),
 ):
     await _require_guild_access(request, guild_id)
     async with pool.acquire() as conn:
         await conn.execute(
             """UPDATE feeds SET name=$1, feed_url=$2, channel_id=$3, webhook_url=$4,
-               username=$5, avatar_url=$6, color=$7, max_items=$8,
-               crosspost=$9, embed_template=$10
-               WHERE id=$11 AND guild_id=$12""",
+               username=$5, avatar_url=$6, color=$7
+               WHERE id=$8 AND guild_id=$9""",
             name, feed_url, int(channel_id),
             webhook_url or None, username or None, avatar_url or None,
-            color or None, max_items, crosspost, embed_template or None,
+            color or None,
             feed_id, guild_id,
         )
     return RedirectResponse(f"/guild/{guild_id}", status_code=303)
@@ -672,6 +841,212 @@ async def map_delete(request: Request, guild_id: int):
     async with pool.acquire() as conn:
         await conn.execute(
             "DELETE FROM map_settings WHERE guild_id=$1", guild_id
+        )
+    return RedirectResponse(f"/guild/{guild_id}", status_code=303)
+
+
+# ── Feed URL validation ─────────────────────────────────────────────────────
+
+@app.post("/api/validate/feed-url")
+async def validate_feed_url(request: Request):
+    """Validate a feed URL — checks reachability and content type."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"valid": False, "error": "Invalid JSON"}, status_code=400)
+    url = (body.get("url") or "").strip()
+    if not url:
+        return JSONResponse({"valid": False, "error": "URL required"}, status_code=400)
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers={
+                "User-Agent": "Tausendsassa/1.0 (Feed Validator)",
+                "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+            })
+        content_type = resp.headers.get("content-type", "")
+        is_xml = any(t in content_type for t in ("xml", "rss", "atom"))
+        return JSONResponse({
+            "valid": resp.status_code < 400,
+            "status": resp.status_code,
+            "content_type": content_type,
+            "is_feed": is_xml or ".xml" in url or "/feed" in url or "/rss" in url,
+        })
+    except Exception as e:
+        return JSONResponse({"valid": False, "error": str(e)[:200]})
+
+
+# ── Privacy & Terms ──────────────────────────────────────────────────────────
+
+import re as _re
+
+def _simple_md_to_html(text: str) -> str:
+    """Minimal markdown → HTML: headers, bold, links, lists, paragraphs."""
+    out = []
+    in_list = None  # None, "ul", or "ol"
+    for line in text.split("\n"):
+        # Bold
+        line = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+        # Inline links [text](url)
+        line = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2" class="text-discord hover:underline">\1</a>', line)
+        # H2
+        if line.startswith("## "):
+            if in_list:
+                out.append(f"</{in_list}>")
+                in_list = None
+            out.append(f'<h2 class="text-xl font-semibold text-white mt-8 mb-3">{line[3:]}</h2>')
+        # H1
+        elif line.startswith("# "):
+            if in_list:
+                out.append(f"</{in_list}>")
+                in_list = None
+            out.append(f'<h1 class="text-2xl font-bold text-white mt-6 mb-4">{line[2:]}</h1>')
+        # Unordered list
+        elif line.startswith("- "):
+            if in_list != "ul":
+                if in_list:
+                    out.append(f"</{in_list}>")
+                out.append('<ul class="list-disc pl-5 space-y-1 text-text-2 mb-3">')
+                in_list = "ul"
+            out.append(f"<li>{line[2:]}</li>")
+        # Numbered list
+        elif _re.match(r"^\d+\. ", line):
+            if in_list != "ol":
+                if in_list:
+                    out.append(f"</{in_list}>")
+                out.append('<ol class="list-decimal pl-5 space-y-1 text-text-2 mb-3">')
+                in_list = "ol"
+            list_text = _re.sub(r"^\d+\. ", "", line)
+            out.append(f"<li>{list_text}</li>")
+        # Empty line
+        elif line.strip() == "":
+            if in_list:
+                out.append(f"</{in_list}>")
+                in_list = None
+        # Paragraph
+        else:
+            if in_list:
+                out.append(f"</{in_list}>")
+                in_list = None
+            out.append(f'<p class="text-text-2 mb-3">{line}</p>')
+    if in_list:
+        out.append(f"</{in_list}>")
+    return "\n".join(out)
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page(request: Request):
+    md_path = BASE.parent / "resources" / "privacy-policy.md"
+    md_html = ""
+    if md_path.exists():
+        md_html = _simple_md_to_html(md_path.read_text(encoding="utf-8"))
+    return templates.TemplateResponse(request, "privacy.html", {
+        "title": "Privacy Policy",
+        "content_html": md_html,
+    })
+
+
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_page(request: Request):
+    md_path = BASE.parent / "resources" / "terms-of-service.md"
+    md_html = ""
+    if md_path.exists():
+        md_html = _simple_md_to_html(md_path.read_text(encoding="utf-8"))
+    return templates.TemplateResponse(request, "terms.html", {
+        "title": "Terms of Service",
+        "content_html": md_html,
+    })
+
+
+# ── Guild timezone ──────────────────────────────────────────────────────────
+
+COMMON_TIMEZONES = [
+    "Europe/Berlin", "Europe/London", "Europe/Paris", "Europe/Madrid",
+    "Europe/Rome", "Europe/Warsaw", "Europe/Amsterdam", "Europe/Brussels",
+    "Europe/Vienna", "Europe/Stockholm", "Europe/Zurich", "Europe/Moscow",
+    "Europe/Kiev", "Europe/Istanbul",
+    "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+    "America/Toronto", "America/Vancouver", "America/Mexico_City",
+    "America/Sao_Paulo", "America/Buenos_Aires",
+    "Asia/Tokyo", "Asia/Seoul", "Asia/Shanghai", "Asia/Hong_Kong",
+    "Asia/Singapore", "Asia/Kolkata", "Asia/Dubai", "Asia/Jerusalem",
+    "Australia/Sydney", "Australia/Melbourne",
+    "Pacific/Auckland", "Africa/Cairo", "Africa/Johannesburg",
+    "UTC",
+]
+
+@app.post("/guild/{guild_id}/timezone")
+async def timezone_update(
+    request: Request,
+    guild_id: int,
+    timezone: str = Form(...),
+):
+    await _require_guild_access(request, guild_id)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO guild_timezones (guild_id, timezone)
+               VALUES ($1, $2)
+               ON CONFLICT (guild_id) DO UPDATE SET timezone=$2""",
+            guild_id, timezone,
+        )
+    return RedirectResponse(f"/guild/{guild_id}", status_code=303)
+
+
+# ── Feed monitor channel ────────────────────────────────────────────────────
+
+@app.post("/guild/{guild_id}/monitor-channel")
+async def monitor_channel_update(
+    request: Request,
+    guild_id: int,
+    channel_id: Optional[str] = Form(None),
+):
+    await _require_guild_access(request, guild_id)
+    async with pool.acquire() as conn:
+        if channel_id:
+            await conn.execute(
+                """INSERT INTO feed_monitor_channels (guild_id, channel_id)
+                   VALUES ($1, $2)
+                   ON CONFLICT (guild_id) DO UPDATE SET channel_id=$2""",
+                guild_id, int(channel_id),
+            )
+        else:
+            await conn.execute(
+                "DELETE FROM feed_monitor_channels WHERE guild_id=$1", guild_id,
+            )
+    return RedirectResponse(f"/guild/{guild_id}", status_code=303)
+
+
+# ── Map channel ─────────────────────────────────────────────────────────────
+
+@app.post("/guild/{guild_id}/map/channel")
+async def map_channel_update(
+    request: Request,
+    guild_id: int,
+    channel_id: Optional[str] = Form(None),
+):
+    await _require_guild_access(request, guild_id)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE map_settings SET channel_id=$1 WHERE guild_id=$2",
+            int(channel_id) if channel_id else None, guild_id,
+        )
+    return RedirectResponse(f"/guild/{guild_id}", status_code=303)
+
+
+# ── Feedback management ─────────────────────────────────────────────────────
+
+@app.post("/guild/{guild_id}/feedback/{feedback_id}/status")
+async def feedback_status_update(
+    request: Request,
+    guild_id: int,
+    feedback_id: int,
+    status: str = Form(...),
+    admin_note: Optional[str] = Form(None),
+):
+    await _require_guild_access(request, guild_id)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE feedback SET status=$1, admin_note=$2, read=true WHERE id=$3 AND guild_id=$4",
+            status, admin_note or None, feedback_id, guild_id,
         )
     return RedirectResponse(f"/guild/{guild_id}", status_code=303)
 

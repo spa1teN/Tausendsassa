@@ -21,15 +21,15 @@
 
     /* ── Popup ── */
     .maplibregl-popup-content {
-      background: #2b2d31 !important;
-      border: 1px solid #3f4147 !important;
+      background: #1a1a19 !important;
+      border: 1px solid rgba(255,255,255,0.08) !important;
       border-radius: 10px !important;
       box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
       padding: 0 !important;
-      color: #dbdee1;
+      color: #c3c2b7;
     }
     .maplibregl-popup-tip { display: none; }
-    .maplibregl-popup-close-button { color: #80848e !important; font-size: 16px !important; top: 6px !important; right: 8px !important; }
+    .maplibregl-popup-close-button { color: #898781 !important; font-size: 16px !important; top: 6px !important; right: 8px !important; }
     .pop-inner { display: flex; align-items: center; gap: 10px; padding: 10px 13px; }
     .pop-avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
     .pop-ph {
@@ -38,7 +38,7 @@
       font-weight: 700; font-size: 17px; color: #fff;
     }
     .pop-name { font-weight: 600; color: #fff; font-size: 13px; }
-    .pop-loc  { font-size: 11px; color: #80848e; margin-top: 2px; }
+    .pop-loc  { font-size: 11px; color: #898781; margin-top: 2px; }
     #dbg {
       position: fixed; bottom: 8px; left: 8px; right: 8px; z-index: 999;
       font-family: monospace; font-size: 11px; color: #b5bac1;
@@ -50,12 +50,21 @@
     #proj-btn {
       position: fixed; top: 8px; left: 8px; z-index: 10;
       height: 28px; padding: 0 10px; display: flex; align-items: center;
-      background: rgba(43,45,49,0.92); color: #dbdee1;
-      border: 1px solid #3f4147; border-radius: 6px;
+      background: rgba(26,26,25,0.92); color: #c3c2b7;
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
       font-size: 11px; font-weight: 600; cursor: pointer; letter-spacing: 0.03em;
       transition: background 0.2s;
     }
-    #proj-btn:hover { background: rgba(78,80,88,0.92); }
+    #proj-btn:hover { background: rgba(35,35,34,0.92); color: #fff; }
+    #choro-btn {
+      position: fixed; top: 8px; z-index: 10;
+      height: 28px; padding: 0 10px; display: flex; align-items: center;
+      background: rgba(26,26,25,0.92); color: #c3c2b7;
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
+      font-size: 11px; font-weight: 600; cursor: pointer; letter-spacing: 0.03em;
+      transition: background 0.2s;
+    }
+    #choro-btn:hover { background: rgba(35,35,34,0.92); color: #fff; }
   </style>
 </head>
 <body>
@@ -301,6 +310,97 @@ function toggleProjection() {
     try { map.setSky({}); } catch (e) { /* ignore */ }
   }
 }
+
+// ── Choropleth ─────────────────────────────────────────────────────────
+let choroplethLoaded = false;
+const CHORO_COLORS = [
+  [0, '#0d2137'],       // 0 pins → deep blue
+  [1, '#1a3a5c'],       // 1-4
+  [5, '#2a5291'],
+  [10, '#4a7cc9'],
+  [25, '#7ba4e0'],
+  [50, '#b8cff5'],
+  [100, '#e8a87c'],
+  [200, '#d4756b'],
+  [500, '#c0392b'],     // 500+ → deep red
+];
+
+function getChoroColor(count) {
+  let color = CHORO_COLORS[0][1];
+  for (const [threshold, c] of CHORO_COLORS) {
+    if (count >= threshold) color = c;
+  }
+  return color;
+}
+
+async function loadChoropleth() {
+  if (GUILD_ID === 'all') return; // skip for all-guilds view
+  try {
+    const [geoResp, statsResp] = await Promise.all([
+      fetch('/static/countries.geojson'),
+      fetch(`/api/map/${GUILD_ID}/pins-by-country`),
+    ]);
+    const countries = await geoResp.json();
+    const stats = await statsResp.json();
+    const countByCode = {};
+    let maxCount = 0;
+    for (const s of stats) {
+      countByCode[s.country_code.toLowerCase()] = s.count;
+      if (s.count > maxCount) maxCount = s.count;
+    }
+    if (maxCount === 0) return;
+
+    // Attach pin_count to each country feature
+    for (const f of countries.features) {
+      const iso = (f.properties.ISO_A2 || '').toLowerCase();
+      f.properties.pin_count = countByCode[iso] || 0;
+    }
+
+    if (map.getSource('countries')) {
+      map.getSource('countries').setData(countries);
+    } else {
+      map.addSource('countries', { type: 'geojson', data: countries });
+      map.addLayer({
+        id: 'countries-fill',
+        type: 'fill',
+        source: 'countries',
+        paint: {
+          'fill-color': [
+            'step', ['get', 'pin_count'],
+            '#0d2137',  // default (0 pins)
+            1, '#1a3a5c',
+            5, '#2a5291',
+            10, '#4a7cc9',
+            25, '#7ba4e0',
+            50, '#b8cff5',
+            100, '#e8a87c',
+            200, '#d4756b',
+            500, '#c0392b',
+          ],
+          'fill-opacity': 0.55,
+          'fill-outline-color': '#1a1a2e',
+        },
+      }, 'pins-symbols'); // below pins
+    }
+    choroplethLoaded = true;
+  } catch (e) { dbg('choropleth FAIL: ' + e); }
+}
+
+// ── Choropleth toggle button ────────────────────────────────────────────
+const choroBtn = document.createElement('button');
+choroBtn.id = 'choro-btn';
+choroBtn.textContent = 'Heatmap';
+choroBtn.style.left = '110px';
+choroBtn.onclick = async () => {
+  if (!choroplethLoaded) {
+    choroBtn.textContent = 'Loading...';
+    await loadChoropleth();
+  }
+  const visible = map.getLayoutProperty('countries-fill', 'visibility') !== 'none';
+  map.setLayoutProperty('countries-fill', 'visibility', visible ? 'none' : 'visible');
+  choroBtn.textContent = visible ? 'Heatmap' : 'Hide heatmap';
+};
+document.body.appendChild(choroBtn);
 
 function esc(s) {
   return String(s || '').replace(/[&<>"']/g, c =>
