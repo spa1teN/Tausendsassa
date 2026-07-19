@@ -31,3 +31,5 @@ data/
 
 # Avatar cache (Discord CDN proxy)
 cogs/map_data/avatar_cache/
+resources/privacy-policy.md
+resources/terms-of-service.md

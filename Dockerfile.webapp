@@ -16,7 +16,6 @@ COPY requirements.webapp.txt .
 RUN pip install --no-cache-dir -r requirements.webapp.txt
 
 COPY webapp/ ./webapp/
-COPY resources/ ./resources/
 
 RUN curl -sL -o /usr/local/bin/tailwindcss \
     https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64 \

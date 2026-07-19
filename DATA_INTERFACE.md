@@ -328,11 +328,24 @@ zulässt.
 ### Einbindung ins Dashboard
 
 Das Dashboard (`~/dashboard/`) kann diese Seiten per `<iframe>` oder Link
-einbinden. Für `<iframe>`-Einbettung muss der Nutzer im Webapp-Tab bereits
-eingeloggt sein (Session-Cookie wird vom Browser mitgesendet). Alternativ
-können die Seiten als eigenständige Tabs verlinkt werden.
+einbinden. Da die Seiten Discord-Login erfordern, das Dashboard aber eine
+eigene Session hat, gibt es einen **Shared-Secret-Token**-Mechanismus:
 
-Beispiel: `<a href="https://tausendsassa.casparsadenius.de/map/region-density">Region Density</a>`
+1. Setze `MAP_ACCESS_TOKEN=<geheimer-wert>` in der `.env`-Datei des Tausendsassa-Projekts.
+2. Übergebe den Token als Query-Parameter in der iframe-URL:
+   ```
+   https://tausendsassa.casparsadenius.de/map/all?token=<geheimer-wert>
+   ```
+3. Alternativ als HTTP-Header: `X-Map-Access-Token: <geheimer-wert>`
+
+Bei gültigem Token wird die Auth-Prüfung übersprungen. Ohne Token müssen
+Nutzer über Discord OAuth in der Webapp eingeloggt sein (Session-Cookie).
+
+**Header-Variante (für Server-Side-Requests):**
+```bash
+curl -H "X-Map-Access-Token: ${MAP_ACCESS_TOKEN}" \
+  https://tausendsassa.casparsadenius.de/api/map/all/pins
+```
 
 ## Netzwerk-Integration für `~/dashboard/`
 

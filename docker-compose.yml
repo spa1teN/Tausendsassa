@@ -131,6 +131,7 @@ services:
       - WEBAPP_SECRET_KEY=${WEBAPP_SECRET_KEY:?Secret key required}
       - WEBAPP_BASE_URL=${WEBAPP_BASE_URL:-http://localhost:8081}
       - BOT_OWNER_ID=${BOT_OWNER_ID:-485051896655249419}
+      - MAP_ACCESS_TOKEN=${MAP_ACCESS_TOKEN:-}
     ports:
       - "8081:8081"
     networks:

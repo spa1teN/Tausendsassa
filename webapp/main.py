@@ -46,6 +46,7 @@ DB_PORT     = int(os.getenv("DB_PORT", "5432"))
 DB_NAME     = os.getenv("DB_NAME", "tausendsassa")
 DB_USER     = os.getenv("DB_USER", "tausendsassa")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+MAP_ACCESS_TOKEN    = os.getenv("MAP_ACCESS_TOKEN", "")  # shared secret for dashboard iframe embeds
 
 DISCORD_API = "https://discord.com/api/v10"
 REDIRECT_URI = f"{WEBAPP_BASE_URL}/auth/callback"
@@ -648,8 +649,18 @@ REGION_LABELS = {
 
 # ── Auth helper for write routes ─────────────────────────────────────────────
 
+def _has_access_token(request: Request) -> bool:
+    """Check for shared secret token (query param or header) for dashboard iframe embeds."""
+    if not MAP_ACCESS_TOKEN:
+        return False
+    token = request.query_params.get("token") or request.headers.get("X-Map-Access-Token", "")
+    return token == MAP_ACCESS_TOKEN
+
+
 def _require_login(request: Request):
-    """Return user dict or raise 401."""
+    """Return user dict or raise 401. Bypassed by valid MAP_ACCESS_TOKEN."""
+    if _has_access_token(request):
+        return {"username": "dashboard", "guilds": [], "is_owner": True}
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not logged in")
@@ -657,7 +668,9 @@ def _require_login(request: Request):
 
 
 async def _require_guild_access(request: Request, guild_id: int):
-    """Return user or raise 401/403. Raises HTTPException on failure."""
+    """Return user or raise 401/403. Bypassed by valid MAP_ACCESS_TOKEN."""
+    if _has_access_token(request):
+        return {"username": "dashboard", "guilds": [], "is_owner": True}
     user = _require_login(request)
     allowed_ids = {int(g["id"]) for g in user["guilds"]}
     if guild_id not in allowed_ids and not user.get("is_owner"):
@@ -935,25 +948,19 @@ def _simple_md_to_html(text: str) -> str:
 
 @app.get("/privacy", response_class=HTMLResponse)
 async def privacy_page(request: Request):
-    md_path = BASE.parent / "resources" / "privacy-policy.md"
-    md_html = ""
-    if md_path.exists():
-        md_html = _simple_md_to_html(md_path.read_text(encoding="utf-8"))
+    from webapp.legal import PRIVACY_POLICY
     return templates.TemplateResponse(request, "privacy.html", {
         "title": "Privacy Policy",
-        "content_html": md_html,
+        "content_html": _simple_md_to_html(PRIVACY_POLICY),
     })
 
 
 @app.get("/terms", response_class=HTMLResponse)
 async def terms_page(request: Request):
-    md_path = BASE.parent / "resources" / "terms-of-service.md"
-    md_html = ""
-    if md_path.exists():
-        md_html = _simple_md_to_html(md_path.read_text(encoding="utf-8"))
+    from webapp.legal import TERMS_OF_SERVICE
     return templates.TemplateResponse(request, "terms.html", {
         "title": "Terms of Service",
-        "content_html": md_html,
+        "content_html": _simple_md_to_html(TERMS_OF_SERVICE),
     })
 
 
