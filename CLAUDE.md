@@ -40,7 +40,7 @@ FastAPI admin panel at `https://dashboard.casparsadenius.de/#tausendsassa`:
 |---|---|---|
 | `db_browser:8080` | `/api/dashboard` | Aggregate stats: feeds, maps, calendars, moderation, feedback counts, analytics |
 | `db_browser:8080` | `/api/feedback` | CRUD: list, status, read, admin_note, unread-count |
-| `bot:8090` | `/api/bot/*` | Discord-dependent: bot avatar, user name/avatar by ID |
+| `bot:8090` | `/api/bot/*` | Discord-dependent: bot avatar, user name/avatar, guild channels/roles/webhooks |
 
 See [`DATA_INTERFACE.md`](DATA_INTERFACE.md) for the full schema.
 
@@ -56,7 +56,7 @@ cogs/           Discord cogs (slash commands, listeners)
   feedback.py   /feedback command, modal, CV2 menu
 
 core/           Business logic
-  api_server.py      Internal API (port 8090) — bot avatar, user lookups for dashboard
+  api_server.py      Internal API (port 8090) — bot avatar, user/guild lookups, channel/role/webhook listing for dashboard dropdowns
   feeds_cv2.py       CV2 LayoutView builder, Reddit gallery resolution (cookie-based JSON API)
   feeds_add.py       Feed creation UI (type selector, preview)
   feeds_rss.py       RSS fetch, parse, embed creation (preserves _raw_description)
@@ -149,7 +149,7 @@ Two internal API servers serve the external dashboard:
 | Container | Port | Provides |
 |---|---|---|
 | `db-browser` | 8080 | `/api/dashboard` (aggregate), `/api/feedback` (CRUD), `/api/cookies/status` |
-| `bot` | 8090 | `/api/bot/avatar`, `/api/bot/user/{id}`, `/api/bot/users?ids=` |
+| `bot` | 8090 | `/api/bot/avatar`, `/api/bot/user/{id}`, `/api/bot/users?ids=`, `/api/bot/guild/{id}`, `/api/bot/guild/{id}/channels`, `/api/bot/guild/{id}/voice-channels`, `/api/bot/guild/{id}/roles`, `/api/bot/guild/{id}/webhooks` |
 
 Full schema documented in [`DATA_INTERFACE.md`](DATA_INTERFACE.md).
 
