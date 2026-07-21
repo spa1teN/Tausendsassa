@@ -505,8 +505,8 @@ async def map_all_page(request: Request):
 
 @app.get("/api/map/{guild_id}/pins")
 async def map_pins_api(request: Request, guild_id: int):
-    """GeoJSON endpoint for all pins of a guild. Requires guild access."""
-    await _require_guild_access(request, guild_id)
+    """GeoJSON endpoint for all pins of a guild. Public — no auth needed."""
+    # No auth — guild-specific maps are public
     async with pool.acquire() as conn:
         pins = await conn.fetch(
             "SELECT user_id, username, display_name, latitude, longitude, color, avatar_hash "
@@ -597,8 +597,8 @@ async def map_region_density(request: Request):
 
 @app.get("/map/{guild_id}", response_class=HTMLResponse)
 async def map_page(request: Request, guild_id: int):
-    """Interactive map for a guild. Requires guild access."""
-    await _require_guild_access(request, guild_id)
+    """Interactive map for a guild. Public — no auth needed."""
+    # No auth — guild-specific maps are public
     async with pool.acquire() as conn:
         guild = await conn.fetchrow("SELECT name, icon_hash FROM guilds WHERE id = $1", guild_id)
         settings_row = await conn.fetchrow(
