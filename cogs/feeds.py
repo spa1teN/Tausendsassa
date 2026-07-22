@@ -260,6 +260,9 @@ class FeedCog(commands.Cog):
             webhook = self._webhook_cache[channel.id]
             try:
                 await webhook.fetch()
+                # Ensure state is attached for interactive components (e.g. Feedback button)
+                if not webhook._state:
+                    webhook._state = self.bot._connection
                 return webhook
             except discord.NotFound:
                 del self._webhook_cache[channel.id]
