@@ -118,7 +118,7 @@
               </div>
               <div>
                 <label class="text-xs text-muted">Color</label>
-                <input name="color" type="color" value="{{ feed.color or '#5865F2' }}"
+                <input name="color" type="color" value="{{ format_color_hex(feed.color) or '#5865F2' }}"
                        class="w-full mt-0.5 h-9 rounded bg-bg border border-border cursor-pointer focus:outline-none focus:border-discord" />
               </div>
             </div>

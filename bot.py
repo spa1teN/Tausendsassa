@@ -13,6 +13,7 @@ from typing import Dict, Optional
 
 import discord
 from discord.ext import commands
+
 from core.config import config
 from core.cache_manager import cache_manager
 from core.http_client import http_client
@@ -191,18 +192,20 @@ class Tausendsassa(commands.Bot):
                 "⚠️ Global sync blocked by Activity Entry Point command (code 50240). "
                 "Global commands remain as-is; syncing to test guild as fallback."
             )
-            test_guild_id = config.test_guild_id
-            if test_guild_id:
-                test_guild = discord.Object(id=test_guild_id)
-                self.tree.copy_global_to(guild=test_guild)
-                await self.tree.sync(guild=test_guild)
-                log.info(f"✅ Slash commands synced to test guild {test_guild_id}")
+
+        # Clear stale guild-specific commands that would otherwise shadow
+        # (or duplicate) the global command list
+        test_guild_id = config.test_guild_id
+        if test_guild_id:
+            test_guild = discord.Object(id=test_guild_id)
+            self.tree.clear_commands(guild=test_guild)
+            log.info(f"✅ Stale guild commands cleared for test guild {test_guild_id}")
 
     async def on_ready(self):
         status = discord.Status.online
         activity = discord.Activity(
             type=discord.ActivityType.listening,
-            name="/help"
+            name="/help · /feedback"
         )
         await self.change_presence(status=status, activity=activity)
         log.info(f"🤖 Logged in as {self.user} (ID: {self.user.id})")
@@ -227,6 +230,19 @@ class Tausendsassa(commands.Bot):
                 except Exception as e:
                     log.warning(f"Failed to update guild {guild.id}: {e}")
             log.info("✅ Guild info synced to database")
+
+        # Purge stale guild-specific command overrides across all guilds
+        # (prevents duplicate commands when global + guild registrations overlap)
+        cleared = 0
+        for guild in self.guilds:
+            try:
+                self.tree.clear_commands(guild=guild)
+                cleared += 1
+                await asyncio.sleep(0.3)  # avoid rate limits
+            except Exception:
+                pass
+        if cleared:
+            log.info(f"✅ Stale guild commands cleared for {cleared} guilds")
 
         print("------")
 

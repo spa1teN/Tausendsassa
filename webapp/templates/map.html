@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ guild_name }} — Map</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png" />
   <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.19.0/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.19.0/dist/maplibre-gl.js"></script>
   <style>
@@ -56,15 +57,6 @@
       transition: background 0.2s;
     }
     #proj-btn:hover { background: rgba(35,35,34,0.92); color: #fff; }
-    #choro-btn {
-      position: fixed; top: 8px; z-index: 10;
-      height: 28px; padding: 0 10px; display: flex; align-items: center;
-      background: rgba(26,26,25,0.92); color: #c3c2b7;
-      border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
-      font-size: 11px; font-weight: 600; cursor: pointer; letter-spacing: 0.03em;
-      transition: background 0.2s;
-    }
-    #choro-btn:hover { background: rgba(35,35,34,0.92); color: #fff; }
   </style>
 </head>
 <body>
@@ -86,8 +78,9 @@ document.addEventListener('keydown', e => {
 });
 
 // ── Config ───────────────────────────────────────────────────────────────────
-const GUILD_ID = "{{ guild_id }}";
-const REGION   = {{ region | tojson }};
+const GUILD_ID     = "{{ guild_id }}";
+const REGION       = {{ region | tojson }};
+const ACCESS_TOKEN = {{ (access_token or "") | tojson }};
 
 dbg(`MapLibre ${maplibregl.version} | guild=${GUILD_ID} | region=${REGION}`);
 
@@ -142,6 +135,7 @@ const map = new maplibregl.Map({
   style: STYLES.dark,
   center: [10, 30],
   zoom: 2,
+  renderWorldCopies: false,
 });
 
 map.on('error', e => dbg('MAP ERROR: ' + (e.error?.message || JSON.stringify(e))));
@@ -288,7 +282,8 @@ async function addPinLayers(features) {
 async function loadPins() {
   dbg('loadPins...');
   try {
-    const data = await fetch(`/api/map/${GUILD_ID}/pins`).then(r => r.json());
+    const params = ACCESS_TOKEN ? `?token=${encodeURIComponent(ACCESS_TOKEN)}` : '';
+    const data = await fetch(`/api/map/${GUILD_ID}/pins${params}`).then(r => r.json());
     const features = data.features || [];
     dbg('pins: ' + features.length);
     for (const f of features)
@@ -310,97 +305,6 @@ function toggleProjection() {
     try { map.setSky({}); } catch (e) { /* ignore */ }
   }
 }
-
-// ── Choropleth ─────────────────────────────────────────────────────────
-let choroplethLoaded = false;
-const CHORO_COLORS = [
-  [0, '#0d2137'],       // 0 pins → deep blue
-  [1, '#1a3a5c'],       // 1-4
-  [5, '#2a5291'],
-  [10, '#4a7cc9'],
-  [25, '#7ba4e0'],
-  [50, '#b8cff5'],
-  [100, '#e8a87c'],
-  [200, '#d4756b'],
-  [500, '#c0392b'],     // 500+ → deep red
-];
-
-function getChoroColor(count) {
-  let color = CHORO_COLORS[0][1];
-  for (const [threshold, c] of CHORO_COLORS) {
-    if (count >= threshold) color = c;
-  }
-  return color;
-}
-
-async function loadChoropleth() {
-  if (GUILD_ID === 'all') return; // skip for all-guilds view
-  try {
-    const [geoResp, statsResp] = await Promise.all([
-      fetch('/static/countries.geojson'),
-      fetch(`/api/map/${GUILD_ID}/pins-by-country`),
-    ]);
-    const countries = await geoResp.json();
-    const stats = await statsResp.json();
-    const countByCode = {};
-    let maxCount = 0;
-    for (const s of stats) {
-      countByCode[s.country_code.toLowerCase()] = s.count;
-      if (s.count > maxCount) maxCount = s.count;
-    }
-    if (maxCount === 0) return;
-
-    // Attach pin_count to each country feature
-    for (const f of countries.features) {
-      const iso = (f.properties.ISO_A2 || '').toLowerCase();
-      f.properties.pin_count = countByCode[iso] || 0;
-    }
-
-    if (map.getSource('countries')) {
-      map.getSource('countries').setData(countries);
-    } else {
-      map.addSource('countries', { type: 'geojson', data: countries });
-      map.addLayer({
-        id: 'countries-fill',
-        type: 'fill',
-        source: 'countries',
-        paint: {
-          'fill-color': [
-            'step', ['get', 'pin_count'],
-            '#0d2137',  // default (0 pins)
-            1, '#1a3a5c',
-            5, '#2a5291',
-            10, '#4a7cc9',
-            25, '#7ba4e0',
-            50, '#b8cff5',
-            100, '#e8a87c',
-            200, '#d4756b',
-            500, '#c0392b',
-          ],
-          'fill-opacity': 0.55,
-          'fill-outline-color': '#1a1a2e',
-        },
-      }, 'pins-symbols'); // below pins
-    }
-    choroplethLoaded = true;
-  } catch (e) { dbg('choropleth FAIL: ' + e); }
-}
-
-// ── Choropleth toggle button ────────────────────────────────────────────
-const choroBtn = document.createElement('button');
-choroBtn.id = 'choro-btn';
-choroBtn.textContent = 'Heatmap';
-choroBtn.style.left = '110px';
-choroBtn.onclick = async () => {
-  if (!choroplethLoaded) {
-    choroBtn.textContent = 'Loading...';
-    await loadChoropleth();
-  }
-  const visible = map.getLayoutProperty('countries-fill', 'visibility') !== 'none';
-  map.setLayoutProperty('countries-fill', 'visibility', visible ? 'none' : 'visible');
-  choroBtn.textContent = visible ? 'Heatmap' : 'Hide heatmap';
-};
-document.body.appendChild(choroBtn);
 
 function esc(s) {
   return String(s || '').replace(/[&<>"']/g, c =>

@@ -93,9 +93,9 @@ class MapV2Cog(commands.Cog):
         pin_btn.callback = self._cv2_pin_callback
         row.add_item(pin_btn)
         if bot_config.webapp_url:
-            row.add_item(discord.ui.Button(label="3D View", emoji="🌍", style=discord.ButtonStyle.link,
+            row.add_item(discord.ui.Button(label="3D View", style=discord.ButtonStyle.link,
                                            url=f"{bot_config.webapp_url}/map/{guild_id}"))
-        fb_btn = discord.ui.Button(label="Feedback", emoji="💬", style=discord.ButtonStyle.secondary,
+        fb_btn = discord.ui.Button(label="Feedback", style=discord.ButtonStyle.secondary,
                                    custom_id=f"map_cv2_feedback:{guild_id}")
         fb_btn.callback = self._cv2_feedback_callback
         row.add_item(fb_btn)

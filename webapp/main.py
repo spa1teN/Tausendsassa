@@ -158,9 +158,30 @@ def user_avatar_url(user_id: str, avatar_hash: Optional[str]) -> str:
     return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.{ext}"
 
 
+def _parse_hex_color(val: Optional[str]) -> Optional[int]:
+    """Convert '#a85a00' → 0xa85a00 (int). Returns None on empty/invalid input."""
+    if not val:
+        return None
+    try:
+        return int(val.lstrip("#"), 16)
+    except (ValueError, TypeError):
+        return None
+
+
+def format_color_hex(val) -> Optional[str]:
+    """Convert 0xa85a00 (int) → '#a85a00'. Returns None for NULL/0."""
+    if not val:
+        return None
+    try:
+        return f"#{int(val):06X}"
+    except (ValueError, TypeError):
+        return None
+
+
 # Register helpers as template globals
 templates.env.globals["guild_icon_url"] = guild_icon_url
 templates.env.globals["user_avatar_url"] = user_avatar_url
+templates.env.globals["format_color_hex"] = format_color_hex
 
 BOT_API_BASE = os.getenv("BOT_API_BASE", "http://tausendsassa-bot:8090")
 
@@ -451,7 +472,7 @@ async def map_pins_by_country(guild_id: int):
 @app.get("/api/map/all/pins")
 async def map_all_pins_api(request: Request):
     """GeoJSON endpoint for all pins across ALL guilds. Requires login."""
-    _require_login(request)
+    _require_access_token(request)
     async with pool.acquire() as conn:
         pins = await conn.fetch(
             "SELECT p.user_id, p.username, p.display_name, p.latitude, p.longitude, "
@@ -489,9 +510,13 @@ async def map_all_pins_api(request: Request):
 @app.get("/map/all", response_class=HTMLResponse)
 async def map_all_page(request: Request):
     """Interactive globe showing all pins from all guilds. Requires login."""
-    _require_login(request)
+    _require_access_token(request)
     async with pool.acquire() as conn:
         total_pins = await conn.fetchval("SELECT COUNT(*) FROM map_pins")
+
+    # Pass the access token into the template so the JS can include it in
+    # its fetch to /api/map/all/pins (which also requires the token).
+    access_token = request.query_params.get("token") or request.headers.get("X-Map-Access-Token", "")
 
     return templates.TemplateResponse(request, "map.html", {
         "guild_id": "all",
@@ -500,6 +525,7 @@ async def map_all_page(request: Request):
         "region": "world",
         "pin_count": total_pins or 0,
         "discord_client_id": os.getenv("DISCORD_CLIENT_ID", ""),
+        "access_token": access_token,
     })
 
 
@@ -575,7 +601,7 @@ async def activity_map_pins_api(request: Request, guild_id: int):
 @app.get("/map/region-density", response_class=HTMLResponse)
 async def map_region_density(request: Request):
     """Map showing how many guilds use each region type. Requires login."""
-    _require_login(request)
+    _require_access_token(request)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT region, COUNT(*) as guild_count "
@@ -667,6 +693,12 @@ def _require_login(request: Request):
     return user
 
 
+def _require_access_token(request: Request):
+    """Raise 401 unless the request carries a valid MAP_ACCESS_TOKEN."""
+    if not _has_access_token(request):
+        raise HTTPException(status_code=401, detail="Not authorized")
+
+
 async def _require_guild_access(request: Request, guild_id: int):
     """Return user or raise 401/403. Bypassed by valid MAP_ACCESS_TOKEN."""
     if _has_access_token(request):
@@ -709,7 +741,7 @@ async def feed_create(
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,0)""",
             guild_id, name, feed_url, int(channel_id),
             webhook_url or None, username or None, avatar_url or None,
-            color or None,
+            _parse_hex_color(color),
         )
     return RedirectResponse(f"/guild/{guild_id}", status_code=303)
 
@@ -735,7 +767,7 @@ async def feed_update(
                WHERE id=$8 AND guild_id=$9""",
             name, feed_url, int(channel_id),
             webhook_url or None, username or None, avatar_url or None,
-            color or None,
+            _parse_hex_color(color),
             feed_id, guild_id,
         )
     return RedirectResponse(f"/guild/{guild_id}", status_code=303)
