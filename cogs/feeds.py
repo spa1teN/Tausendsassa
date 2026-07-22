@@ -20,6 +20,7 @@ from core.config import config
 from core.validation import ConfigValidator
 from core.timezone_util import get_current_time, get_current_timestamp
 from core import feeds_cv2
+from discord.webhook.async_ import _WebhookState
 
 
 class FeedCog(commands.Cog):
@@ -256,36 +257,42 @@ class FeedCog(commands.Cog):
     async def _get_or_create_webhook(self, channel: discord.TextChannel,
                                       feed_name: str) -> Optional[discord.Webhook]:
         """Get webhook for channel from cache or create new one"""
+        webhook = None
+
         if channel.id in self._webhook_cache:
             webhook = self._webhook_cache[channel.id]
             try:
                 await webhook.fetch()
-                # Ensure state is attached for interactive components (e.g. Feedback button)
-                if not webhook._state:
-                    webhook._state = self.bot._connection
-                return webhook
             except discord.NotFound:
                 del self._webhook_cache[channel.id]
                 await self._delete_webhook_cache(channel.id)
+                webhook = None
             except Exception:
-                pass
+                webhook = None
 
-        # Create new webhook
-        try:
-            webhook = await channel.create_webhook(
-                name=f"RSS Bot - {feed_name}",
-                reason="Auto-created webhook for RSS feed"
-            )
-            self._webhook_cache[channel.id] = webhook
-            await self._save_webhook(channel.id, webhook)
-            self.log.info(f"Created new webhook for channel #{channel.name}")
-            return webhook
-        except discord.Forbidden:
-            self.log.error(f"No permission to create webhook in #{channel.name}")
-            return None
-        except Exception:
-            self.log.exception(f"Error creating webhook in #{channel.name}")
-            return None
+        if webhook is None:
+            # Create new webhook
+            try:
+                webhook = await channel.create_webhook(
+                    name=f"RSS Bot - {feed_name}",
+                    reason="Auto-created webhook for RSS feed"
+                )
+                self._webhook_cache[channel.id] = webhook
+                await self._save_webhook(channel.id, webhook)
+                self.log.info(f"Created new webhook for channel #{channel.name}")
+            except discord.Forbidden:
+                self.log.error(f"No permission to create webhook in #{channel.name}")
+                return None
+            except Exception:
+                self.log.exception(f"Error creating webhook in #{channel.name}")
+                return None
+
+        # discord.py requires real ConnectionState (not _WebhookState)
+        # for views with interactive components like the Feedback button
+        if isinstance(webhook._state, _WebhookState):
+            webhook._state = self.bot._connection
+
+        return webhook
 
     # ==========================================
     # Event Handlers
