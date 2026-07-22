@@ -204,11 +204,13 @@ def build_entry_view(
     feed_color: int = 0x3498DB,
     *,
     gallery_images: list[str] | None = None,
+    guild_id: int | None = None,
 ) -> discord.ui.LayoutView:
     """Build a single-entry CV2 LayoutView from _create_embed output.
 
     gallery_images: Optional list from the Pi proxy. If provided, replaces the
     single RSS thumbnail with all gallery images in the MediaGallery.
+    guild_id: If provided, a Feedback button is added next to the Open button.
     """
     view = discord.ui.LayoutView(timeout=None)
     container = discord.ui.Container(accent_colour=discord.Colour(feed_color))
@@ -255,13 +257,42 @@ def build_entry_view(
             gallery.add_item(media=img)
         container.add_item(gallery)
 
-    # Open button
+    # Open + Feedback buttons
 
-    # Open button (link buttons are fine in webhooks)
     if url:
         row = discord.ui.ActionRow()
         row.add_item(discord.ui.Button(
             label="Open", style=discord.ButtonStyle.link, url=url))
+        if guild_id:
+            fb_btn = discord.ui.Button(
+                label="Feedback", style=discord.ButtonStyle.secondary,
+                custom_id=f"feed_cv2_feedback:{guild_id}")
+
+            async def _feedback_callback(interaction: discord.Interaction):
+                try:
+                    await interaction.response.defer(ephemeral=True)
+                    from core.feedback_menu import build_feedback_menu
+                    fb_cog = interaction.client.get_cog("FeedbackCog")
+                    if not fb_cog:
+                        await interaction.followup.send(
+                            "Feedback system unavailable.", ephemeral=True)
+                        return
+                    view = build_feedback_menu(
+                        fb_cog, interaction.guild_id, interaction.user.id)
+                    await interaction.followup.send(view=view, ephemeral=True)
+                except Exception:
+                    from logging import getLogger
+                    getLogger(__name__).error(
+                        "Feed feedback callback failed", exc_info=True)
+                    try:
+                        await interaction.followup.send(
+                            "Something went wrong. Try `/feedback` instead.",
+                            ephemeral=True)
+                    except Exception:
+                        pass
+
+            fb_btn.callback = _feedback_callback
+            row.add_item(fb_btn)
         container.add_item(row)
 
     view.add_item(container)

@@ -490,7 +490,7 @@ class FeedCog(commands.Cog):
                 # Compute media resolution count for dashboard markers
                 media_count = (len(gallery_images) if gallery_images else 0) + (len(attach_files) if attach_files else 0)
 
-                view = feeds_cv2.build_entry_view(e, name, int(color), gallery_images=gallery_images)
+                view = feeds_cv2.build_entry_view(e, name, int(color), gallery_images=gallery_images, guild_id=int(guild_id))
 
                 if is_update and message_info:
                     message_id, old_channel_id = message_info
