@@ -144,6 +144,14 @@ class FeedCog(commands.Cog):
         if not self.bot.db:
             return False
 
+        # All new feeds must use CV2 (Components V2) — legacy embed-only feeds
+        # are no longer supported and won't get the Open/Feedback buttons.
+        tpl = feed_data.get("embed_template")
+        if tpl:
+            tpl["cv2"] = True
+        else:
+            feed_data["embed_template"] = {"cv2": True}
+
         try:
             feed = await self.bot.db.feeds.create_feed(guild_id, feed_data)
             # Update cache
