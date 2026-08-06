@@ -51,11 +51,24 @@
 
 ## 📸 Screenshots
 
-| Feed Post (CV2) | Map with Pins | Web Panel |
-|---|---|---|
-| *Coming soon* | *Coming soon* | *Coming soon* |
-
-> Getting clean screenshots from a test guild — PRs welcome!
+<table>
+  <tr>
+    <td><strong>📰 Feed Post (CV2)</strong></td>
+    <td><strong>🗺️ World Map</strong></td>
+  </tr>
+  <tr>
+    <td><img src="screenshots/feed-post.png" width="400" alt="CV2 feed post with MediaGallery"></td>
+    <td><img src="screenshots/map.png" width="400" alt="Interactive map with user pins"></td>
+  </tr>
+  <tr>
+    <td><strong>💬 /help Command</strong></td>
+    <td><strong>🌐 Web Admin Panel</strong></td>
+  </tr>
+  <tr>
+    <td><img src="screenshots/help.png" width="400" alt="/help command output"></td>
+    <td><img src="screenshots/web-panel.png" width="400" alt="Web admin panel dashboard"></td>
+  </tr>
+</table>
 
 ## 🏗️ Architecture
 
