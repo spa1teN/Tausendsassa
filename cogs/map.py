@@ -435,12 +435,18 @@ class MapV2Cog(commands.Cog):
             self.log.error(f"cog_load failed: {e}")
 
     async def _update_map(self, guild_id: int, channel_id: int, interaction=None):
+        gid_str = str(guild_id)
         try:
             channel = self.bot.get_channel(channel_id)
             if not channel:
                 try:
                     channel = await self.bot.fetch_channel(channel_id)
-                except (discord.NotFound, discord.Forbidden):
+                except discord.NotFound:
+                    return
+                except discord.Forbidden:
+                    self.log.warning(f"No access to channel {channel_id} for guild {guild_id} "
+                                     f"— clearing stale map refs")
+                    self._clear_map_refs(gid_str)
                     return
 
             map_file = await self._generate_map_image(guild_id)
@@ -448,7 +454,7 @@ class MapV2Cog(commands.Cog):
                 return
             map_file.filename = "map.png"
 
-            map_data = self.maps.get(str(guild_id), {})
+            map_data = self.maps.get(gid_str, {})
             view = self._build_map_card_view(guild_id)
 
             existing_message_id = map_data.get('message_id')
@@ -459,14 +465,37 @@ class MapV2Cog(commands.Cog):
                     return
                 except discord.NotFound:
                     pass
+                except discord.Forbidden:
+                    self.log.warning(f"Cannot edit map message in channel {channel_id} for guild {guild_id} "
+                                     f"— clearing stale map refs")
+                    self._clear_map_refs(gid_str)
+                    return
 
-            message = await channel.send(file=map_file, view=view)
-            if str(guild_id) not in self.maps:
-                self.maps[str(guild_id)] = {}
-            self.maps[str(guild_id)]['message_id'] = message.id
-            await self._save_data(str(guild_id))
+            try:
+                message = await channel.send(file=map_file, view=view)
+            except discord.Forbidden:
+                self.log.warning(f"Cannot send map message to channel {channel_id} for guild {guild_id} "
+                                 f"— clearing stale map refs")
+                self._clear_map_refs(gid_str)
+                return
+
+            if gid_str not in self.maps:
+                self.maps[gid_str] = {}
+            self.maps[gid_str]['message_id'] = message.id
+            await self._save_data(gid_str)
         except Exception as e:
-            self.log.error(f"_update_map failed: {e}")
+            self.log.error(f"_update_map failed for guild {guild_id} channel {channel_id}: {e}")
+
+    def _clear_map_refs(self, guild_id_str: str):
+        """Clear channel/message refs for a guild where the bot lost access."""
+        if guild_id_str in self.maps:
+            self.maps[guild_id_str].pop('channel_id', None)
+            self.maps[guild_id_str].pop('message_id', None)
+            if hasattr(self.bot, 'db') and self.bot.db:
+                try:
+                    self.bot.loop.create_task(self._save_data(guild_id_str))
+                except Exception:
+                    pass
 
     async def cog_unload(self):
         self._apology_expiry_check.cancel()
@@ -500,7 +529,14 @@ class MapV2Cog(commands.Cog):
                         pass
                 continue
             except discord.Forbidden:
-                self.log.info("No access to channel %s for guild %s — skipping cleanup", cid, guild_id_str)
+                self.log.info("No access to channel %s for guild %s — clearing stale map refs", cid, guild_id_str)
+                self.maps[guild_id_str].pop('channel_id', None)
+                self.maps[guild_id_str].pop('message_id', None)
+                if hasattr(self.bot, 'db') and self.bot.db:
+                    try:
+                        await self.bot.db.maps.save_map_data(int(guild_id_str), self.maps[guild_id_str])
+                    except Exception:
+                        pass
                 continue
             except Exception as e:
                 self.log.warning("Cleanup failed for guild %s: %s", guild_id_str, e)
@@ -529,6 +565,16 @@ class MapV2Cog(commands.Cog):
                             self.log.info(f"Deleted extra map message {msg.id} in channel {cid}")
                         except Exception as e:
                             self.log.warning(f"Failed to delete {msg.id}: {e}")
+            except discord.Forbidden:
+                self.log.warning("Orphan cleanup: no access to channel %s for guild %s "
+                                 "— clearing stale map refs", cid, guild_id_str)
+                self.maps[guild_id_str].pop('channel_id', None)
+                self.maps[guild_id_str].pop('message_id', None)
+                if hasattr(self.bot, 'db') and self.bot.db:
+                    try:
+                        await self.bot.db.maps.save_map_data(int(guild_id_str), self.maps[guild_id_str])
+                    except Exception:
+                        pass
             except Exception as e:
                 self.log.warning(f"Orphan cleanup failed for guild {guild_id_str}: {e}")
 

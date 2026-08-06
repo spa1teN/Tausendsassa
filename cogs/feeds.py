@@ -332,6 +332,7 @@ class FeedCog(commands.Cog):
             feeds = await self.bot.db.feeds.get_guild_feeds(guild_id, enabled_only=False)
             for feed in feeds:
                 await self.bot.db.feeds.delete_feed(feed.id)
+            await self.bot.db.guilds.delete(guild_id)
 
         # Clean up caches
         self._feeds_cache.pop(guild_id, None)

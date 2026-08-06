@@ -222,6 +222,7 @@ class Tausendsassa(commands.Bot):
 
         # Update guild info in database
         if self.db and self.db.is_connected:
+            current_guild_ids = {guild.id for guild in self.guilds}
             for guild in self.guilds:
                 try:
                     # guild.icon is an Asset with a .key attribute containing the hash
@@ -230,6 +231,15 @@ class Tausendsassa(commands.Bot):
                 except Exception as e:
                     log.warning(f"Failed to update guild {guild.id}: {e}")
             log.info("✅ Guild info synced to database")
+
+            # Clean up guilds the bot was removed from while offline
+            db_guilds = await self.db.guilds.get_all()
+            stale = [g for g in db_guilds if g.id not in current_guild_ids]
+            if stale:
+                for g in stale:
+                    await self.db.guilds.delete(g.id)
+                log.info(f"🧹 Cleaned up {len(stale)} stale guild(s) removed while offline: "
+                         f"{', '.join(f'{g.name} ({g.id})' for g in stale)}")
 
         # Purge stale guild-specific command overrides across all guilds
         # (prevents duplicate commands when global + guild registrations overlap)
