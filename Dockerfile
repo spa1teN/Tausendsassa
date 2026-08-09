@@ -39,7 +39,7 @@ COPY bot.py .
 COPY core/ ./core/
 COPY cogs/ ./cogs/
 COPY db/ ./db/
-COPY scripts/ ./scripts/
+COPY scripts/health_check.py ./scripts/
 COPY resources/commands.md ./resources/
 #COPY pb.png .
 

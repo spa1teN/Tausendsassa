@@ -1,1 +1,0 @@
-# Tausendsassa utility scripts

@@ -13,7 +13,6 @@ backups/
 # Runtime directories
 logs/
 cogs/map_data/
-cogs/map_data/
 !cogs/map_data/ne*
 db/connect_to_db.sh
 data/

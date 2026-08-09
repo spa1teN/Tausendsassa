@@ -17,11 +17,6 @@ class BotConfig:
         return os.getenv("DISCORD_TOKEN", "")
     
     @property
-    def guild_id(self) -> Optional[int]:
-        guild_id = os.getenv("GUILD_ID")
-        return int(guild_id) if guild_id else None
-
-    @property
     def test_guild_id(self) -> Optional[int]:
         """Guild ID of the designated test server for early feature rollout."""
         guild_id = os.getenv("TEST_GUILD_ID")
@@ -111,20 +106,6 @@ class BotConfig:
     def max_connections_per_host(self) -> int:
         return int(os.getenv("MAX_HTTP_CONNECTIONS_PER_HOST", "10"))
     
-    # Monitor Configuration
-    @property
-    def monitor_authorized_roles(self) -> List[int]:
-        roles_str = os.getenv("MONITOR_AUTHORIZED_ROLES", "1402526603057303653,1398500235541610639")
-        return [int(role_id.strip()) for role_id in roles_str.split(",") if role_id.strip()]
-    
-    @property
-    def system_metrics_interval(self) -> int:
-        return int(os.getenv("SYSTEM_METRICS_INTERVAL", "60"))
-    
-    @property
-    def monitor_update_interval(self) -> int:
-        return int(os.getenv("MONITOR_UPDATE_INTERVAL", "300"))
-
     # Database Configuration
     @property
     def db_host(self) -> str:
@@ -168,7 +149,6 @@ class BotConfig:
     def log_configuration(self):
         """Log current configuration (excluding sensitive data)"""
         log.info("Bot Configuration:")
-        log.info(f"  Guild ID: {self.guild_id}")
         log.info(f"  Owner ID: {self.owner_id}")
         log.info(f"  Log Level: {self.log_level}")
         log.info(f"  RSS Poll Interval: {self.poll_interval_minutes} minutes")

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Multi-purpose Discord bot</strong> — RSS/Reddit/Bluesky news feeds,
-  interactive world map, iCal calendar sync, moderation logging, and a web
+  interactive map, iCal calendar sync, moderation logging, and a web
   admin dashboard. Built with discord.py and PostgreSQL, deployed via Docker.
 </p>
 
@@ -31,52 +31,60 @@
 
 ---
 
-## ✨ Features
+**[Invite the Bot](https://discord.com/oauth2/authorize?client_id=1398477775828029645&permissions=537259968&scope=bot%20applications.commands)**
+·
+**[Web Admin Panel](https://tausendsassa.casparsadenius.de)**
+·
+**[Support Server](https://discord.gg/yVNkpH6vDS)**
+·
+**[Privacy Policy](https://tausendsassa.casparsadenius.de/privacy)**
+·
+**[Terms of Service](https://tausendsassa.casparsadenius.de/terms)**
 
-| | | |
-|---|---|---|
-| 📰 **News Feeds** | RSS, Atom, Reddit (subreddits & users), Bluesky — 89+ feeds across 65+ servers. Rich CV2 embeds with MediaGallery, RedGifs → GIF conversion, per-feed webhook avatars |
-| 🗺️ **World Map** | Interactive pinboard with Natural Earth rendering, 3D globe view, per-guild regions. Users set pins via slash commands; Discord CV2 cards with media + action buttons |
-| 📅 **Calendar** | iCal/ICS sync with automatic Discord event lifecycle (create → start → end), weekly summaries, blacklist/whitelist filtering |
-| 🛡️ **Moderation** | Join/leave logging, kick/ban/timeout tracking with moderator attribution, purge command, auto-join role |
-| 💬 **Feedback** | Per-server `/feedback` with subject categories, anonymous toggle, status workflow (new → important → in_progress → archived) |
-| 🌐 **Web Panel** | Discord OAuth2 admin dashboard at [tausendsassa.casparsadenius.de](https://tausendsassa.casparsadenius.de) — manage feeds, calendars, maps, moderation, and feedback across all your servers |
+### Features
 
-## 🚀 Quick Links
+| | |
+|---|---|
+| **News Feeds** | RSS, Atom, Reddit (subreddits & users), Bluesky — 89+ feeds across 65+ servers. Rich CV2 embeds with MediaGallery, RedGifs to GIF conversion, per-feed webhook avatars |
+| **Interactive Map** | Pinboard with Natural Earth rendering, 3D globe view, per-guild regions. Users set pins via slash commands; Discord CV2 cards with media and action buttons |
+| **Calendar** | iCal/ICS sync with automatic Discord event lifecycle (create, start, end), weekly summaries, blacklist/whitelist filtering |
+| **Moderation** | Join/leave logging, kick/ban/timeout tracking with moderator attribution, purge command, auto-join role |
+| **Feedback** | Per-server `/feedback` with subject categories, anonymous toggle, status workflow (new, important, in_progress, archived) |
+| **Web Panel** | Discord OAuth2 admin dashboard at [tausendsassa.casparsadenius.de](https://tausendsassa.casparsadenius.de) — manage feeds, calendars, maps, moderation, and feedback across all your servers |
 
-- **[Invite the Bot](https://discord.com/oauth2/authorize?client_id=1398477775828029645&permissions=537259968&scope=bot%20applications.commands)** — add Tausendsassa to your server
-- **[Web Admin Panel](https://tausendsassa.casparsadenius.de)** — manage your server's feeds, maps, and calendars
-- **[Support Server](https://discord.gg/yVNkpH6vDS)** — get help, report bugs, suggest features
-- **[Privacy Policy](https://tausendsassa.casparsadenius.de/privacy)** · **[Terms of Service](https://tausendsassa.casparsadenius.de/terms)**
-
-## 📸 Screenshots
+### Screenshots
 
 <table>
   <tr>
-    <td><strong>📰 Feed Post (CV2)</strong></td>
-    <td><strong>🗺️ World Map</strong></td>
+    <td><strong>Feed Post (CV2)</strong></td>
+    <td><strong>Interactive Map</strong></td>
   </tr>
   <tr>
-    <td><img src="screenshots/feed-post.png" width="400" alt="CV2 feed post with MediaGallery"></td>
-    <td><img src="screenshots/map.png" width="400" alt="Interactive map with user pins"></td>
+    <td><img src="resources/screenshots/feed-post.png" width="400" alt="CV2 feed post with MediaGallery"></td>
+    <td><img src="resources/screenshots/map.png" width="400" alt="Interactive map with user pins"></td>
   </tr>
   <tr>
-    <td><strong>💬 /help Command</strong></td>
-    <td><strong>🌐 Web Admin Panel</strong></td>
+    <td><strong>/help Command</strong></td>
+    <td><strong>Web Admin Panel</strong></td>
   </tr>
   <tr>
-    <td><img src="screenshots/help.png" width="400" alt="/help command output"></td>
-    <td><img src="screenshots/web-panel.png" width="400" alt="Web admin panel dashboard"></td>
+    <td><img src="resources/screenshots/help.png" width="400" alt="/help command output"></td>
+    <td><img src="resources/screenshots/web-panel.png" width="400" alt="Web admin panel dashboard"></td>
   </tr>
 </table>
 
-## 🏗️ Architecture
+> **Documentation**:<br/>
+> **[DATA_INTERFACE.md](DATA_INTERFACE.md)** — API contract for dashboard consumers<br/>
+> **[CLAUDE.md](CLAUDE.md)** — detailed architecture, key invariants, and development guide
+
+---
+### Architecture
 
 ```
 cogs/           Discord cogs (slash commands, listeners)
   feeds.py      Feed polling, posting, /feeds dashboard
   calendar.py   iCal sync, Discord events, reminders
-  map.py        World map with user pins (CV2 LayoutView)
+  map.py        Interactive map with user pins (CV2 LayoutView)
   moderation.py Join/leave logs, kick/ban/timeout, purge
   help.py       /help command
   feedback.py   /feedback command, modal, CV2 menu
@@ -91,63 +99,50 @@ core/           Business logic
 
 db/             PostgreSQL via asyncpg, repository pattern
 webapp/         FastAPI admin panel (Discord OAuth2)
-scripts/        Backfill, migration, and health-check scripts
+resources/      Static assets (favicon, screenshots)
 ```
-
+### Container
 | Container | Role | Port |
-|---|---|---|
+|:---|---:|:---|
 | `tausendsassa-bot` | Discord bot + internal API | :8090 (internal) |
 | `tausendsassa-db-browser` | Dashboard API + feedback CRUD | :8080 (internal) |
 | `tausendsassa-webapp` | FastAPI admin panel | :8081 (published, proxied) |
-| `tausendsassa-db` | PostgreSQL 16 | — |
+| `tausendsassa-db` | PostgreSQL 16 | --- |
 
-## 🔧 Self-Hosting
+---
+## Setup
+### Prerequisites:
+> - Docker and Docker Compose
+> - A [Discord Bot Application](https://discord.com/developers/applications) with token
+> - (Optional) Discord OAuth2 client for the web panel
 
-### Prerequisites
-
-- Docker & Docker Compose
-- A [Discord Bot Application](https://discord.com/developers/applications) with token
-- (Optional) Discord OAuth2 client for the web panel
-
-### Setup
-
+### 1. Clone the repo and configure environment:
 ```bash
-# 1. Clone the repo
 git clone https://github.com/spa1teN/Tausendsassa.git
 cd Tausendsassa
-
-# 2. Configure environment
 cp .env.example .env
-# Edit .env — set DISCORD_TOKEN, DB_PASSWORD, and other values
-
-# 3. Start all services
+```
+<sup>*in `.env` — set `DISCORD_TOKEN` and `DB_PASSWORD` at minimum* </sup>
+### 2. Start all services and check health:
+```bash
 docker compose up -d
-
-# 4. Check health
 docker compose logs bot --tail 20
 curl -s http://localhost:8081/  # should return 307 (redirect to /login)
 ```
 
 ### Required Bot Permissions
 
-The bot needs these permissions to function:
 - **Send Messages** & **Embed Links** — feed posts and embeds
 - **Manage Webhooks** — per-feed webhook posting
 - **Attach Files** — map images, feed media, GIFs
-- **Create Events** — calendar → Discord event sync
+- **Create Events** — calendar to Discord event sync
 - **Read Message History** — map message editing
 - **Use External Emojis** — feed formatting
 
-## 📄 License
+## License
 
 MIT © [spa1teN](https://github.com/spa1teN)
 
 The bot's [Privacy Policy](https://tausendsassa.casparsadenius.de/privacy) and
 [Terms of Service](https://tausendsassa.casparsadenius.de/terms) apply to all
 users of the hosted instance.
-
----
-
-<p align="center">
-  <sub>Built with ❤️ using Python, discord.py, PostgreSQL, and Docker</sub>
-</p>
