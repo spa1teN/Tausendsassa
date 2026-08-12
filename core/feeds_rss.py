@@ -305,10 +305,13 @@ def _create_embed(entry, feed_cfg: Dict[str, Any], guild_id: int = None) -> Dict
     if not img.get("url") and thumb:
         embed["image"] = {"url": thumb}
 
-    # Propagate author for "Posted by u/..." display
+    # Propagate author for "Posted by u/..." display. Kept under a private
+    # key: a bare string in embed["author"] is serialized as-is on the legacy
+    # webhook path, which Discord rejects (400/50035 "Expected an
+    # object/dictionary").
     author = entry.get("author", "").strip()
     if author:
-        embed["author"] = author
+        embed["_author_name"] = author
     return embed
 
 

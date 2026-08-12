@@ -224,7 +224,7 @@ def build_entry_view(
 
     # Timestamp + optional author (Reddit: "Posted by u/username · 2h ago")
     ts = _fmt_timestamp(entry_data.get("timestamp"))
-    author = entry_data.get("author", "").strip()
+    author = entry_data.get("_author_name", "").strip()
     if author and author.startswith("/u/"):
         author = author[1:]  # "/u/username" → "u/username"
     byline_parts = [f"Posted by {author}"] if author else []
