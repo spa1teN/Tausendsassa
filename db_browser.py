@@ -1792,7 +1792,6 @@ async def api_dashboard() -> Dict[str, Any]:
             "db_size_mb": round(db_size / (1024 * 1024), 1) if db_size else None,
         },
         "cookie": _cookie_status(),
-        "proxy": await _proxy_status(),
     }
 
 
@@ -1857,25 +1856,6 @@ async def log_viewer(
     return render_page("Logs", body, "logs")
 
 
-# ── Proxy Status ────────────────────────────────────────────────────────
-
-_PROXY_URL = os.environ.get("GALLERY_PROXY_URL", "").rstrip("/")
-
-
-async def _proxy_status() -> dict:
-    """Check if the Pi gallery proxy is configured and reachable."""
-    if not _PROXY_URL:
-        return {"available": False, "error": "GALLERY_PROXY_URL not configured"}
-    try:
-        import httpx
-        async with httpx.AsyncClient() as c:
-            r = await c.get(f"{_PROXY_URL}/gallery", timeout=5)
-            available = r.status_code in (200, 405)
-        if available:
-            return {"available": True, "url": _PROXY_URL}
-        return {"available": False, "error": f"Proxy returned {r.status_code}", "url": _PROXY_URL}
-    except Exception as exc:
-        return {"available": False, "error": str(exc), "url": _PROXY_URL}
 # ── Cookie Upload ──────────────────────────────────────────────────────
 
 COOKIE_PATH = Path(os.environ.get("COOKIES_PATH", "/app/data/cookies.txt"))

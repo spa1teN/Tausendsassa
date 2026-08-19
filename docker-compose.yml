@@ -63,8 +63,7 @@ services:
       - HTTP_TIMEOUT=${HTTP_TIMEOUT:-30}
       - MAX_HTTP_CONNECTIONS=${MAX_HTTP_CONNECTIONS:-100}
       - MAX_HTTP_CONNECTIONS_PER_HOST=${MAX_HTTP_CONNECTIONS_PER_HOST:-10}
-      # Gallery proxy & cookies
-      - GALLERY_PROXY_URL=${GALLERY_PROXY_URL}
+      # Cookies
       - COOKIES_PATH=${COOKIES_PATH:-/app/data/cookies.txt}
     volumes:
       - ./cogs/map_data:/app/cogs/map_data  # Natural Earth shapefiles + map cache
@@ -93,7 +92,6 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:?Database password required}
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - COOKIES_PATH=${COOKIES_PATH:-/app/data/cookies.txt}
-      - GALLERY_PROXY_URL=${GALLERY_PROXY_URL}
     volumes:
       - ./logs:/app/logs:ro                  # Log viewer (read-only)
       - ./cogs/map_data:/app/cogs/map_data   # Map images + avatar cache (writable)

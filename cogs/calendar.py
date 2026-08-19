@@ -48,6 +48,11 @@ class CalendarCog(commands.Cog):
         self.event_status_task.cancel()
         self.reminder_task.cancel()
 
+    @commands.Cog.listener()
+    async def on_db_ready(self):
+        """Database connection (re)established — load calendars we missed at startup."""
+        await self._load_all_calendars()
+
     async def _load_all_calendars(self):
         """Load all calendars from database into cache"""
         self._calendars_cache.clear()

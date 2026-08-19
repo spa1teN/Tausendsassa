@@ -312,7 +312,7 @@ class MediaDownloader:
 
         cookies_available = bool(self.cookies)
 
-        # Try Reddit gallery (replaces Pi proxy)
+        # Try Reddit gallery
         gallery_images = await self.fetch_reddit_gallery(entry_link)
         if gallery_images:
             if cookies_available:
@@ -326,13 +326,6 @@ class MediaDownloader:
                         attachments.append(result)
                 gallery_urls = [ref for ref, _ in attachments] if attachments else gallery_images
             else:
-                gallery_urls = gallery_images
-        else:
-            # Fall back to Pi proxy
-            from core import feeds_cv2
-
-            gallery_images = await feeds_cv2.fetch_gallery_images(entry_link)
-            if gallery_images:
                 gallery_urls = gallery_images
 
         # Try RedGifs: download HD video, convert to GIF for CV2 attachment

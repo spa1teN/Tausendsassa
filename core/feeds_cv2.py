@@ -10,9 +10,8 @@ Each entry -> Container(accent=feed_color) inside LayoutView:
 Sent via webhook with per-feed username/avatar.
 
 Reddit gallery support:
-  Set GALLERY_PROXY_URL env var to the Pi's address (e.g. http://192.168.1.50:8090).
-  When configured, Reddit posts are checked for gallery images via the proxy.
-  Falls back to RSS thumbnail if the proxy is unreachable.
+  Cookie-authenticated Reddit JSON API (no browser needed). Falls back to the
+  RSS thumbnail if the API is unreachable or yields no images.
 """
 from __future__ import annotations
 
@@ -30,12 +29,10 @@ from core.feeds_rss import _strip_html
 
 log = logging.getLogger("tausendsassa.feeds_cv2")
 TZ = ZoneInfo("Europe/Berlin")
-GALLERY_PROXY_URL = os.getenv("GALLERY_PROXY_URL", "").rstrip("/")
 _EMOJI_RE = re.compile(r"[^\w\s@#\-.,!?(){}|&+/'\":;—–]")
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]+\)")
 _BOILERPLATE = re.compile(r"\s*submitted\s+by\s+/?u?/?[^\s\]]+", re.IGNORECASE)
 _META = re.compile(r"\s*\[link\]\s*\[comments\]\s*", re.IGNORECASE)
-_REDDIT_POST_RE = re.compile(r"reddit\.com/r/\w+/comments/")
 _REDDIT_POST_ID_RE = re.compile(r"reddit\.com/r/\w+/comments/([a-z0-9]+)")
 _PREVIEW_REDD_RE = re.compile(r"https?://preview\.redd\.it/([^?]+)\?")
 _SVG_RE = re.compile(r"\.svg(\?|#|$)", re.IGNORECASE)
@@ -152,17 +149,12 @@ def _extract_gallery_images(data: list) -> list[str]:
         return []
 
 async def fetch_gallery_images(post_url: str) -> list[str] | None:
-    """Resolve Reddit gallery images via JSON API with cookies (no browser).
-
-    Falls back to the Pi proxy (GALLERY_PROXY_URL) only if direct API fails
-    and the proxy is configured.
-    """
+    """Resolve Reddit gallery images via the JSON API with cookies (no browser)."""
     m = _REDDIT_POST_ID_RE.search(post_url)
     if not m:
         return None
     post_id = m.group(1)
 
-    # Try direct Reddit JSON API with cookies first
     cookies = _load_cookies()
     try:
         async with aiohttp.ClientSession() as session:
@@ -178,23 +170,6 @@ async def fetch_gallery_images(post_url: str) -> list[str] | None:
                         return images
     except Exception:
         pass
-
-    # Fall back to Pi proxy if configured
-    if GALLERY_PROXY_URL and _REDDIT_POST_RE.search(post_url):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{GALLERY_PROXY_URL}/gallery",
-                    json={"url": post_url},
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as r:
-                    if r.status == 200:
-                        data = await r.json()
-                        images = data.get("images", [])
-                        if images:
-                            return images
-        except Exception:
-            pass
     return None
 
 
@@ -208,8 +183,8 @@ def build_entry_view(
 ) -> discord.ui.LayoutView:
     """Build a single-entry CV2 LayoutView from _create_embed output.
 
-    gallery_images: Optional list from the Pi proxy. If provided, replaces the
-    single RSS thumbnail with all gallery images in the MediaGallery.
+    gallery_images: Optional gallery images. If provided, replaces the single
+    RSS thumbnail with all gallery images in the MediaGallery.
     guild_id: If provided, a Feedback button is added next to the Open button.
     """
     view = discord.ui.LayoutView(timeout=None)

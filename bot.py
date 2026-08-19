@@ -137,8 +137,9 @@ class Tausendsassa(commands.Bot):
             log.info("✅ Database connection established")
         except Exception as e:
             log.error(f"❌ Failed to connect to database: {e}")
-            log.warning("⚠️ Bot will continue without database - some features may not work")
+            log.warning("⚠️ Retrying database connection in background - feeds, maps and calendars load once it recovers")
             self.db = None
+            self._db_reconnect_task = asyncio.create_task(self._db_reconnect_loop())
 
         # Start cache management
         await cache_manager.start_cleanup_task()
@@ -200,6 +201,29 @@ class Tausendsassa(commands.Bot):
             test_guild = discord.Object(id=test_guild_id)
             self.tree.clear_commands(guild=test_guild)
             log.info(f"✅ Stale guild commands cleared for test guild {test_guild_id}")
+
+    async def _db_reconnect_loop(self):
+        """Retry the database connection with backoff until it succeeds, then
+        dispatch db_ready so cogs can load the configuration they missed.
+
+        DatabaseManager.get_instance() keeps the failed instance around with
+        _connected=False, so each get_db() call re-attempts connect()."""
+        delay = 5.0
+        while True:
+            await asyncio.sleep(delay)
+            try:
+                self.db = await get_db()
+            except Exception as e:
+                log.warning(f"⚠️ Database reconnect failed: {e} (retrying in {delay:.0f}s)")
+                delay = min(delay * 2, 60.0)
+                continue
+            log.info("✅ Database connection established (recovered after retry)")
+            # Wait for the gateway READY so self.guilds is populated — cogs load
+            # per-guild configs on db_ready just like they do on on_ready.
+            while not self.is_ready():
+                await asyncio.sleep(1)
+            self.dispatch("db_ready")
+            break
 
     async def on_ready(self):
         status = discord.Status.online
@@ -334,6 +358,12 @@ class Tausendsassa(commands.Bot):
     async def close(self):
         """Cleanup when bot is shutting down"""
         log.info("🔄 Bot is shutting down...")
+
+        # Stop the DB reconnect retry loop (if it never succeeded, it may
+        # still be sleeping between attempts)
+        reconnect_task = getattr(self, "_db_reconnect_task", None)
+        if reconnect_task and not reconnect_task.done():
+            reconnect_task.cancel()
 
         await status_reporter.stop()
 

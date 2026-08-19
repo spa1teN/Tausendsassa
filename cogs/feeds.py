@@ -8,6 +8,7 @@ import json
 
 import discord
 import aiohttp
+import asyncpg
 from discord import app_commands
 from discord.ext import commands, tasks
 
@@ -99,6 +100,44 @@ class FeedCog(commands.Cog):
 
         total_feeds = sum(len(feeds) for feeds in self._feeds_cache.values())
         self.log.info(f"Loaded {total_feeds} feeds for {len(self._feeds_cache)} guilds from database")
+
+    async def _refresh_configs_from_db(self):
+        """Reload feed configs from the database, preserving per-feed stats.
+
+        The webapp dashboard edits feeds directly in Postgres, so the
+        in-memory cache goes stale between restarts. A deleted feed left in
+        the cache keeps posting and then fails on posted_entries' feed_id
+        foreign key - refreshing every cycle keeps the cache in sync with
+        out-of-band changes (add/delete/toggle/edit)."""
+        new_cache = {}
+        for guild in self.bot.guilds:
+            feeds = await self.bot.db.feeds.get_guild_feeds(guild.id)
+            if feeds:
+                new_cache[guild.id] = [self._feed_to_dict(f) for f in feeds]
+
+        self._feeds_cache = new_cache
+
+        # Drop stats for feeds that no longer exist. New feeds initialize
+        # their stats lazily in _poll_url via setdefault.
+        for guild_id in list(self.stats.keys()):
+            names = {f["name"] for f in new_cache.get(guild_id, [])}
+            self.stats[guild_id] = {
+                name: entry
+                for name, entry in self.stats[guild_id].items()
+                if name in names
+            }
+
+    def _evict_feed(self, guild_id: int, name: str):
+        """Remove a feed from the in-memory cache and its stats entry."""
+        feeds = self._feeds_cache.get(guild_id)
+        if feeds:
+            feeds = [f for f in feeds if f.get("name") != name]
+            if feeds:
+                self._feeds_cache[guild_id] = feeds
+            else:
+                self._feeds_cache.pop(guild_id, None)
+        if guild_id in self.stats:
+            self.stats[guild_id].pop(name, None)
 
     def _feed_to_dict(self, feed) -> dict:
         """Convert Feed model to dict for compatibility"""
@@ -322,6 +361,13 @@ class FeedCog(commands.Cog):
             self.cleanup_loop.start()
 
     @commands.Cog.listener()
+    async def on_db_ready(self):
+        """Database connection (re)established — load feed configs we missed at startup."""
+        self.log.info("Database available - reloading feed configs")
+        await self._load_all_configs()
+        await self._load_webhook_cache()
+
+    @commands.Cog.listener()
     async def on_guild_remove(self, guild: discord.Guild):
         """Handle bot being removed from a guild"""
         guild_id = guild.id
@@ -451,6 +497,12 @@ class FeedCog(commands.Cog):
                         except discord.HTTPException as exc:
                             self.log.warning("Publish failed for %s: %s", name, exc)
 
+            except asyncpg.exceptions.ForeignKeyViolationError:
+                # The feed was deleted out-of-band (e.g. via the webapp dashboard)
+                # while still in our cache. The message above is already posted;
+                # evict the feed so it stops polling and re-posting.
+                self.log.warning("Feed %s no longer exists in database - removing from cache", name)
+                self._evict_feed(guild_id, name)
             except Exception as ex:
                 self.log.exception("Failed to process embed for %s: %s", name, ex)
 
@@ -487,7 +539,7 @@ class FeedCog(commands.Cog):
                     await self._post_raw_video_url(channel, feed_cfg, e, guild_id, guid, video_url, is_update, message_info)
                     posts_made += 1
                     continue
-                # Collect images: cookie-based gallery + RedGifs, fallback to Pi proxy
+                # Collect images: cookie-based Reddit gallery + RedGifs
                 gallery_images = None
                 attach_files = None
                 if entry_link:
@@ -572,6 +624,12 @@ class FeedCog(commands.Cog):
                         except discord.HTTPException as exc:
                             self.log.warning("Publish failed for %s: %s", name, exc)
 
+            except asyncpg.exceptions.ForeignKeyViolationError:
+                # The feed was deleted out-of-band (e.g. via the webapp dashboard)
+                # while still in our cache. The message above is already posted;
+                # evict the feed so it stops polling and re-posting.
+                self.log.warning("Feed %s no longer exists in database - removing from cache", name)
+                self._evict_feed(guild_id, name)
             except Exception as ex:
                 self.log.exception("Failed to process CV2 entry for %s: %s", name, ex)
 
@@ -615,6 +673,13 @@ class FeedCog(commands.Cog):
         """Main polling loop: fetch each unique URL once, fan out to all guilds."""
         if not self.bot.db:
             return
+
+        # Refresh feed configs from the DB so out-of-band changes (webapp
+        # dashboard CRUD) apply within one cycle; see _refresh_configs_from_db.
+        try:
+            await self._refresh_configs_from_db()
+        except Exception as e:
+            self.log.warning(f"Failed to refresh feed configs from DB: {e}")
 
         # Group enabled feeds by URL so a URL shared across guilds is fetched a
         # single time and every guild gets its own posting decision (per-guild

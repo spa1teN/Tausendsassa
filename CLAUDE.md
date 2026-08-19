@@ -30,7 +30,6 @@ RedGifs links in RSS feeds are resolved via RedGifs API v2 (temporary auth token
 ### Dashboard & Data Interface
 FastAPI admin panel at `https://dashboard.casparsadenius.de/#tausendsassa`:
 - Cookie status chip (green/yellow/red, click-to-upload modal); gated to guild `694270970558546051`
-- Pi Proxy status chip (green/yellow) — now a fallback, rarely needed
 - Moderation chart + stats box
 - Feedback inbox tab with status workflow (new → important → in_progress → archived)
 - CV2 posting toggle per feed
@@ -93,7 +92,7 @@ Description text...        ← ≤800 chars, Reddit boilerplate stripped
 **Per-type handling:**
 - **RSS/Atom**: Standard feed parsing, thumbnail from OpenGraph/media tags
 - **Reddit**: `/new.rss` for chronological posts, `i.redd.it` full-res images
-- **Reddit gallery**: Cookie-authenticated Reddit JSON API (no browser needed); Pi proxy as fallback
+- **Reddit gallery**: Cookie-authenticated Reddit JSON API (no browser needed)
 - **Bluesky**: `get_image_urls()` for all post images, template for static titles
 - **BBC**: `/976/` upscaled CDN images
 - **RedGifs**: API v2 → ffmpeg GIF conversion → `attachment://` in MediaGallery (guild `694270970558546051` only)
@@ -115,10 +114,7 @@ Flow: type → modal → preview webhook → confirm. All new feeds get `cv2: tr
 
 Gallery images from Reddit posts are resolved via the **Reddit JSON API**
 (`reddit.com/comments/{id}.json`) authenticated with the browser cookie from
-`cookies.txt`. This is a lightweight HTTP GET — no headless browser, no Pi proxy.
-
-The Pi proxy (`scripts/reddit_gallery_proxy.py`) is kept as an optional fallback
-(`GALLERY_PROXY_URL` env var). It only runs if direct API fails and is configured.
+`cookies.txt`. This is a lightweight HTTP GET — no headless browser.
 
 ## Configuration
 
@@ -129,7 +125,6 @@ See `.env.example` for all options. Key ones:
 | `DISCORD_TOKEN` | Bot token |
 | `DB_PASSWORD` | PostgreSQL password |
 | `COOKIES_PATH` | Reddit cookies file for gallery/API auth (default `/app/data/cookies.txt`) |
-| `GALLERY_PROXY_URL` | Pi gallery proxy fallback (optional, rarely needed) |
 | `RSS_POLL_INTERVAL_MINUTES` | Poll frequency (default 1.0) |
 
 ## Database

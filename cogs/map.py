@@ -434,6 +434,26 @@ class MapV2Cog(commands.Cog):
         except Exception as e:
             self.log.error(f"cog_load failed: {e}")
 
+    @commands.Cog.listener()
+    async def on_db_ready(self):
+        """Database connection (re)established — load maps we missed at startup."""
+        try:
+            self.log.info("Database available - reloading maps")
+            self.maps = await self.bot.db.maps.load_all_maps()
+            self.global_config = await self.bot.db.maps.get_all_global_config()
+            await self.storage.cache.memory_cache.clear()
+
+            for guild_id in list(self.maps.keys()):
+                try:
+                    guild = await self.bot.fetch_guild(int(guild_id))
+                    self._guild_names[guild_id] = guild.name
+                except Exception:
+                    self._guild_names[guild_id] = str(guild_id)
+
+            self.bot.loop.create_task(self._delayed_regen())
+        except Exception as e:
+            self.log.error(f"Map reload after db_ready failed: {e}")
+
     async def _update_map(self, guild_id: int, channel_id: int, interaction=None):
         gid_str = str(guild_id)
         try:
