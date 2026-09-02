@@ -1931,9 +1931,26 @@ async def api_feedback_list(
     query = """SELECT f.id, f.guild_id,
                       CASE WHEN f.is_anonymous THEN 0 ELSE f.user_id END AS user_id,
                       f.is_anonymous, f.subject, f.message, f.status, f.created_at, f.read,
-                      f.admin_note, g.name AS guild_name
+                      f.admin_note, g.name AS guild_name,
+                      COALESCE(fm.unread_messages, 0) AS unread_messages,
+                      fm.last_message_at, lm.last_message
                FROM feedback f
                JOIN guilds g ON g.id = f.guild_id
+               LEFT JOIN LATERAL (
+                   SELECT COUNT(*) FILTER (WHERE direction = 'in' AND NOT read)::int AS unread_messages,
+                          MAX(created_at) AS last_message_at
+                   FROM feedback_messages
+                   WHERE feedback_id = f.id
+               ) fm ON true
+               LEFT JOIN LATERAL (
+                   SELECT CASE WHEN content <> '' THEN content
+                               WHEN image IS NOT NULL THEN '[Image]'
+                               ELSE content END AS last_message
+                   FROM feedback_messages
+                   WHERE feedback_id = f.id
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1
+               ) lm ON true
                WHERE f.guild_id = $1"""
     args: list = [int(guild_id)]
     idx = 2
@@ -1957,6 +1974,9 @@ async def api_feedback_list(
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "read": r["read"],
             "admin_note": r["admin_note"],
+            "unread_messages": r["unread_messages"],
+            "last_message_at": r["last_message_at"].isoformat() if r["last_message_at"] else None,
+            "last_message": r["last_message"],
         }
         for r in rows
     ]
@@ -1997,6 +2017,212 @@ async def api_feedback_unread_count(guild_id: str = Query(...)):
         "SELECT COUNT(*)::int FROM feedback WHERE guild_id = $1 AND read = FALSE",
         int(guild_id)) or 0
     return {"count": count}
+
+
+@app.get("/api/feedback/{feedback_id}/messages")
+async def api_feedback_messages(feedback_id: int):
+    """Full conversation thread for a feedback entry.
+
+    Returns the original feedback as the first 'in' message, followed by all
+    stored DM replies (both directions) from feedback_messages, oldest first.
+    """
+    p = await get_pool()
+    feedback = await p.fetchrow(
+        """SELECT f.id, f.guild_id,
+                  CASE WHEN f.is_anonymous THEN 0 ELSE f.user_id END AS user_id,
+                  f.is_anonymous, f.subject, f.message, f.status, f.created_at, f.read,
+                  f.admin_note, g.name AS guild_name
+           FROM feedback f JOIN guilds g ON g.id = f.guild_id
+           WHERE f.id = $1""",
+        feedback_id,
+    )
+    if not feedback:
+        raise HTTPException(404, "Feedback not found")
+    rows = await p.fetch(
+        """SELECT id, feedback_id, guild_id, user_id, direction, content,
+                  image IS NOT NULL AS has_image, image_mime, image_size, created_at
+           FROM feedback_messages WHERE feedback_id = $1
+           ORDER BY created_at, id""",
+        feedback_id,
+    )
+    messages = [
+        {
+            "id": "seed",
+            "feedback_id": feedback["id"],
+            "direction": "in",
+            "content": feedback["message"],
+            "created_at": feedback["created_at"].isoformat() if feedback["created_at"] else None,
+            "image": None,
+        }
+    ]
+    messages.extend([
+        {
+            "id": str(r["id"]),
+            "feedback_id": r["feedback_id"],
+            "direction": r["direction"],
+            "content": r["content"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "image": _image_meta(r),
+        }
+        for r in rows
+    ])
+    return {
+        "feedback": {
+            "id": feedback["id"],
+            "guild_id": str(feedback["guild_id"]),
+            "guild_name": feedback["guild_name"],
+            "user_id": str(feedback["user_id"]) if feedback["user_id"] else None,
+            "is_anonymous": feedback["is_anonymous"],
+            "subject": feedback["subject"],
+            "status": feedback["status"],
+            "read": feedback["read"],
+            "admin_note": feedback["admin_note"],
+        },
+        "messages": messages,
+    }
+
+
+def _image_meta(row) -> dict | None:
+    """Build the image metadata dict for a feedback_messages row."""
+    if not row.get("has_image"):
+        return None
+    return {
+        "message_id": row["id"],
+        "mime": row.get("image_mime") or "image/png",
+        "size": row.get("image_size") or 0,
+    }
+
+
+@app.get("/api/feedback/user/{user_id}/conversation")
+async def api_feedback_user_conversation(user_id: str):
+    """Merged conversation for a user across all their feedback threads.
+
+    Returns their feedback entries plus all stored DM messages (both
+    directions), interleaved chronologically. Each feedback entry is included
+    as a synthetic 'in' message so the initial message sits at the top.
+    """
+    p = await get_pool()
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "invalid user_id")
+    entries = await p.fetch(
+        """SELECT f.id, f.guild_id, f.user_id, f.is_anonymous, f.subject, f.message,
+                  f.status, f.created_at, f.read, f.admin_note, g.name AS guild_name
+           FROM feedback f JOIN guilds g ON g.id = f.guild_id
+           WHERE f.user_id = $1
+           ORDER BY f.created_at""",
+        uid,
+    )
+    stored = await p.fetch(
+        """SELECT id, feedback_id, guild_id, user_id, direction, content,
+                  image IS NOT NULL AS has_image, image_mime, image_size, created_at
+           FROM feedback_messages WHERE user_id = $1
+           ORDER BY created_at, id""",
+        uid,
+    )
+    # Interleave: seed messages (from entries) + stored messages, sorted by time.
+    items: list[dict] = []
+    for e in entries:
+        items.append({
+            "id": f"seed-{e['id']}",
+            "feedback_id": e["id"],
+            "direction": "in",
+            "content": e["message"],
+            "created_at": e["created_at"].isoformat() if e["created_at"] else None,
+            "image": None,
+        })
+    for r in stored:
+        items.append({
+            "id": str(r["id"]),
+            "feedback_id": r["feedback_id"],
+            "direction": r["direction"],
+            "content": r["content"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "image": _image_meta(r),
+        })
+    items.sort(key=lambda m: (m["created_at"] or "", m["id"]))
+
+    return {
+        "user_id": str(uid),
+        "entries": [{
+            "id": e["id"],
+            "guild_id": str(e["guild_id"]),
+            "guild_name": e["guild_name"],
+            "user_id": str(e["user_id"]) if e["user_id"] else None,
+            "is_anonymous": e["is_anonymous"],
+            "subject": e["subject"],
+            "status": e["status"],
+            "read": e["read"],
+            "admin_note": e["admin_note"],
+            "created_at": e["created_at"].isoformat() if e["created_at"] else None,
+        } for e in entries],
+        "messages": items,
+    }
+
+
+@app.get("/api/feedback/image/{message_id}")
+async def api_feedback_image(message_id: int):
+    """Serve a stored feedback image as raw bytes."""
+    p = await get_pool()
+    row = await p.fetchrow(
+        "SELECT image, image_mime FROM feedback_messages WHERE id = $1 AND image IS NOT NULL",
+        message_id,
+    )
+    if not row:
+        raise HTTPException(404, "Image not found")
+    return Response(
+        content=bytes(row["image"]),
+        media_type=row["image_mime"] or "application/octet-stream",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.get("/api/feedback/unread-messages")
+async def api_feedback_unread_messages():
+    """Aggregate unread incoming messages: {"total": int, "users": {uid: count}}."""
+    p = await get_pool()
+    rows = await p.fetch(
+        """SELECT user_id, COUNT(*)::int AS cnt
+           FROM feedback_messages
+           WHERE direction = 'in' AND NOT read AND user_id > 0
+           GROUP BY user_id""",
+    )
+    users = {str(r["user_id"]): r["cnt"] for r in rows}
+    return {"total": sum(users.values()), "users": users}
+
+
+@app.post("/api/feedback/read-messages")
+async def api_feedback_read_messages(body: dict):
+    """Mark a user's (or a thread's) incoming messages as read.
+
+    Body: {"user_id": 123} or {"feedback_id": 456}. Returns {"ok": true, "updated": n}.
+    """
+    p = await get_pool()
+    user_id = body.get("user_id")
+    feedback_id = body.get("feedback_id")
+    updated = 0
+    if user_id:
+        result = await p.execute(
+            "UPDATE feedback_messages SET read = TRUE WHERE user_id = $1 AND direction = 'in' AND NOT read",
+            int(user_id),
+        )
+        try:
+            updated = int(result.split()[1])
+        except (IndexError, ValueError):
+            updated = 0
+    elif feedback_id:
+        result = await p.execute(
+            "UPDATE feedback_messages SET read = TRUE WHERE feedback_id = $1 AND direction = 'in' AND NOT read",
+            int(feedback_id),
+        )
+        try:
+            updated = int(result.split()[1])
+        except (IndexError, ValueError):
+            updated = 0
+    else:
+        raise HTTPException(400, "Provide user_id or feedback_id")
+    return {"ok": True, "updated": updated}
 
 
 

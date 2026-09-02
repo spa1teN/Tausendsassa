@@ -49,7 +49,7 @@
 | **Interactive Map** | Pinboard with Natural Earth rendering, 3D globe view, per-guild regions. Users set pins via slash commands; Discord CV2 cards with media and action buttons |
 | **Calendar** | iCal/ICS sync with automatic Discord event lifecycle (create, start, end), weekly summaries, blacklist/whitelist filtering |
 | **Moderation** | Join/leave logging, kick/ban/timeout tracking with moderator attribution, purge command, auto-join role |
-| **Feedback** | Per-server `/feedback` with subject categories, anonymous toggle, status workflow (new, important, in_progress, archived) |
+| **Feedback** | Per-server `/feedback` with subject categories, anonymous toggle, status workflow (new, important, in_progress, archived), and **DM replies** — admins answer directly from the web panel or dashboard inbox, the full user↔bot conversation (text & images) is stored and shown as a chat thread |
 | **Web Panel** | Discord OAuth2 admin dashboard at [tausendsassa.casparsadenius.de](https://tausendsassa.casparsadenius.de) — manage feeds, calendars, maps, moderation, and feedback across all your servers |
 
 ### Screenshots
@@ -87,7 +87,7 @@ cogs/           Discord cogs (slash commands, listeners)
   map.py        Interactive map with user pins (CV2 LayoutView)
   moderation.py Join/leave logs, kick/ban/timeout, purge
   help.py       /help command
-  feedback.py   /feedback command, modal, CV2 menu
+  feedback.py   /feedback command, modal, CV2 menu, DM listener
 
 core/           Business logic
   feeds_cv2.py        CV2 LayoutView builder

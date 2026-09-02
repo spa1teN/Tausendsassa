@@ -198,6 +198,16 @@ async def _fetch_bot_api(path: str) -> list[dict] | dict | None:
     return None
 
 
+async def _post_bot_api(path: str, json: dict) -> dict | None:
+    """POST JSON to the bot's internal API. Returns parsed JSON or None on failure."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(f"{BOT_API_BASE}{path}", json=json)
+            return {"status": resp.status_code, **resp.json()}
+    except Exception:
+        return None
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -330,6 +340,8 @@ async def dashboard(request: Request, guild_id: int):
     if not user:
         return RedirectResponse("/login")
 
+    flash = request.session.pop("flash", None)
+
     allowed_ids = {int(g["id"]) for g in user["guilds"]}
     if guild_id not in allowed_ids and not user["is_owner"]:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -450,6 +462,7 @@ async def dashboard(request: Request, guild_id: int):
         "feedback_rows": [dict(r) for r in feedback_rows],
         "feedback_unread": feedback_unread or 0,
         "top_countries": [dict(r) for r in top_countries],
+        "flash": flash,
     })
 
 
@@ -1088,6 +1101,48 @@ async def feedback_status_update(
             status, admin_note or None, feedback_id, guild_id,
         )
     return RedirectResponse(f"/guild/{guild_id}", status_code=303)
+
+
+@app.post("/guild/{guild_id}/feedback/{feedback_id}/dm")
+async def feedback_dm_reply(
+    request: Request,
+    guild_id: int,
+    feedback_id: int,
+    message: str = Form(...),
+):
+    """Reply to a feedback sender via a bot DM."""
+    await _require_guild_access(request, guild_id)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT user_id, is_anonymous FROM feedback WHERE id=$1 AND guild_id=$2",
+            feedback_id, guild_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Feedback not found")
+        if row["is_anonymous"] or not row["user_id"]:
+            request.session["flash"] = {"type": "error", "text": "Anonymous feedback cannot be replied to by DM."}
+            return RedirectResponse(f"/guild/{guild_id}#feedback", status_code=303)
+
+    text = message.strip()
+    if not text:
+        request.session["flash"] = {"type": "error", "text": "Reply message must not be empty."}
+        return RedirectResponse(f"/guild/{guild_id}#feedback", status_code=303)
+
+    result = await _post_bot_api("/api/bot/dm", {"user_id": row["user_id"], "message": text, "feedback_id": feedback_id})
+    if result is None:
+        request.session["flash"] = {"type": "error", "text": "Bot API unreachable — DM not sent."}
+        return RedirectResponse(f"/guild/{guild_id}#feedback", status_code=303)
+
+    if result.get("ok"):
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE feedback SET read=true WHERE id=$1 AND guild_id=$2",
+                feedback_id, guild_id,
+            )
+        request.session["flash"] = {"type": "success", "text": "DM sent to the feedback sender."}
+    else:
+        request.session["flash"] = {"type": "error", "text": f"DM failed: {result.get('error', 'unknown error')}"}
+    return RedirectResponse(f"/guild/{guild_id}#feedback", status_code=303)
 
 
 # ── Moderation route ──────────────────────────────────────────────────────────

@@ -238,8 +238,13 @@ bereit. Alle Antworten sind `application/json`.
 
 | Methode | Pfad | Query/Body | Antwort |
 |---|---|---|---|
-| `GET` | `/api/feedback` | `?guild_id=X&status=Y` (status optional) | `[{id, guild_id, guild_name, user_id, is_anonymous, subject, message, status, read, admin_note, created_at}]` |
+| `GET` | `/api/feedback` | `?guild_id=X&status=Y` (status optional) | `[{id, guild_id, guild_name, user_id, is_anonymous, subject, message, status, read, admin_note, created_at, unread_messages, last_message_at, last_message}]` |
 | `GET` | `/api/feedback/unread-count` | `?guild_id=X` (required) | `{"count": 3}` |
+| `GET` | `/api/feedback/{id}/messages` | — | `{"feedback": {…}, "messages": [{id, feedback_id, direction, content, created_at, image}, …]}` — voller Konversations-Thread (originales Feedback als erste `in`-Nachricht + gespeicherte DM-Antworten beider Richtungen) |
+| `GET` | `/api/feedback/user/{user_id}/conversation` | — | `{"user_id", "user_name", "user_avatar_url", "entries": […], "messages": […]}` — nutzerübergreifend gemergter Chat (alle Feedback-Threads des Users, chronologisch verzahnt) |
+| `GET` | `/api/feedback/image/{message_id}` | — | Roh-Bild-Bytes (`image_mime` als Content-Type) einer gespeicherten DM-Bild-Nachricht |
+| `GET` | `/api/feedback/unread-messages` | — | `{"total": int, "users": {"<user_id>": count}}` — ungelesene eingehende DM-Nachrichten, gruppiert pro User |
+| `POST` | `/api/feedback/read-messages` | Body: `{"user_id": int}` **oder** `{"feedback_id": int}` | `{"ok": true, "updated": n}` — markiert eingehende Nachrichten des Users/Threads als gelesen |
 | `PATCH` | `/api/feedback/{id}/read` | — | `{"ok": true}` |
 | `PATCH` | `/api/feedback/{id}/status` | `?status=X` | `{"ok": true}` |
 | `PATCH` | `/api/feedback/{id}/note` | `?note=...` | `{"ok": true}` |
@@ -255,6 +260,34 @@ und merged `user_name`/`user_avatar_url` in die Antwort. Siehe Abschnitt [Bot-ei
 
 **`admin_note`** ist eine freie Text-Notiz, die das Dashboard für interne
 Vermerke nutzen kann. `null` wenn keine gesetzt wurde.
+
+**Ungelesen-Zähler im `/api/feedback`-List-Response** (seit v1.1.0): Pro Eintrag
+liefert die Liste zusätzlich `unread_messages` (Anzahl ungelesener eingehender
+DM-Nachrichten im Thread), `last_message_at` (Zeitstempel der neuesten
+gespeicherten Nachricht, sonst `null`) und `last_message` (Text der neuesten
+Nachricht; `"[Image]"` bei reinen Bild-Nachrichten, sonst `null`). Damit kann
+das Dashboard die Chat-Liste nach letzter Aktivität sortieren und die Vorschau
+anzeigen, ohne den vollen Thread laden zu müssen.
+
+**Antwort per DM:** Die Webapp bietet pro nicht-anonymem Feedback-Eintrag ein
+„Reply DM"-Formular (`POST /guild/{guild_id}/feedback/{feedback_id}/dm`). Die
+Webapp reicht den Text an den Bot weiter (`POST /api/bot/dm` auf Port 8090),
+der die DM an `feedback.user_id` sendet. Anonyme Einträge (`is_anonymous`)
+sind ausgeschlossen. Markiert den Eintrag als gelesen, wenn die DM zugestellt
+wurde.
+
+**Feedback-Konversation (Chat):** Damit Admins den Verlauf zwischen Bot und
+Nutzer im Dashboard-Inbox-Chat sehen, wird jede DM-Antwort persistiert. Der
+Bot schreibt ausgehende DMs in `feedback_messages` (`direction='out'`) und
+loggt eingehende DM-Antworten des Nutzers (`direction='in'`, `on_message`-Listener
+in `cogs/feedback.py` — nur für Nutzer mit bestehendem Feedback-Eintrag, erste
+Bild-Anlage wird als BYTEA gespeichert, 5-MB-Cap).
+`GET /api/feedback/{id}/messages` (db-browser) liefert den vollständigen Thread.
+Ein Chat pro Nutzer über alle Threads hinweg: `GET /api/feedback/user/{user_id}/conversation`
+(im Dashboard-Proxy um `user_name`/`user_avatar_url` aus der Bot-API angereichert).
+Das Öffnen eines Chats markiert dessen eingehende Nachrichten als gelesen
+(`POST /api/feedback/read-messages`); `GET /api/feedback/unread-messages` speist
+den Ungelesen-Zähler in der Dashboard-Navigation.
 
 ## Analytics API
 
@@ -295,6 +328,7 @@ und kann daher User-Informationen und das Bot-Avatar auflösen.
 | `GET` | `/api/bot/avatar` | — | `{"bot_avatar_url": "https://cdn.discordapp.com/avatars/…"}` |
 | `GET` | `/api/bot/user/{user_id}` | — | `{"user_name": "spa1teN", "user_avatar_url": "https://…"}` |
 | `GET` | `/api/bot/users` | `?ids=1,2,3` | `{"1": {"user_name": …, "user_avatar_url": …}, …}` |
+| `POST` | `/api/bot/dm` | Body: `{"user_id": int, "message": str, "feedback_id": int (optional)}` | `{"ok": true}` bzw. `{"ok": false, "error": …}` (403 = DMs deaktiviert/kein gemeinsamer Server, 404 = User nicht gefunden) |
 
 Für nicht gefundene User (User nicht im Cache / nicht in mutual Guilds)
 liefern die Endpoints `"user_name": null, "user_avatar_url": null`.

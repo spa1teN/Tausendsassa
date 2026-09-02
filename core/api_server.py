@@ -10,6 +10,7 @@ import logging
 import time
 from typing import Any
 
+import discord
 from aiohttp import web
 
 log = logging.getLogger("tausendsassa.api")
@@ -260,6 +261,79 @@ async def handle_guild_webhooks(request: web.Request) -> web.Response:
     return web.json_response(webhooks)
 
 
+async def handle_dm(request: web.Request) -> web.Response:
+    """POST /api/bot/dm — send a DM to a user from the bot.
+
+    Body: {"user_id": int, "message": str, "feedback_id": int (optional)}
+    Returns 200 {"ok": true} on success, 4xx/5xx {"ok": false, "error"} on failure.
+    """
+    bot = request.app["bot"]
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid JSON body"}, status=400)
+
+    try:
+        user_id = int(data.get("user_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"ok": False, "error": "invalid user_id"}, status=400)
+    message = (data.get("message") or "").strip()
+    if user_id <= 0:
+        return web.json_response({"ok": False, "error": "invalid user_id"}, status=400)
+    if not message:
+        return web.json_response({"ok": False, "error": "empty message"}, status=400)
+    feedback_id = None
+    try:
+        raw_fid = data.get("feedback_id")
+        if raw_fid is not None:
+            feedback_id = int(raw_fid)
+    except (TypeError, ValueError):
+        feedback_id = None
+
+    user = bot.get_user(user_id)
+    if user is None:
+        try:
+            user = await bot.fetch_user(user_id)
+        except discord.NotFound:
+            return web.json_response({"ok": False, "error": "user not found"}, status=404)
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": f"failed to fetch user: {exc}"}, status=500)
+
+    try:
+        await user.send(message)
+    except discord.Forbidden:
+        return web.json_response(
+            {"ok": False, "error": "user has DMs disabled or shares no guild with the bot"},
+            status=403,
+        )
+    except discord.HTTPException as exc:
+        return web.json_response({"ok": False, "error": f"failed to send DM: {exc}"}, status=500)
+
+    # Persist the outgoing message to the feedback conversation thread.
+    # Must never fail the request — logging is best-effort.
+    try:
+        db = getattr(bot, "db", None)
+        if db and db.is_connected:
+            if feedback_id:
+                row = await db.feedback.fetchrow(
+                    "SELECT guild_id FROM feedback WHERE id = $1", feedback_id)
+                guild_id = row["guild_id"] if row else 0
+            else:
+                guild_id = 0
+            await db.feedback.add_message(
+                feedback_id=feedback_id or 0,
+                guild_id=guild_id,
+                user_id=user_id,
+                direction="out",
+                content=message,
+            )
+    except Exception:
+        log.exception("Failed to record outgoing DM for user=%s", user_id)
+
+    log.info("DM sent to user=%s", user_id)
+    return web.json_response({"ok": True})
+
+
 # ── App factory ──────────────────────────────────────────────────────────
 
 def create_app(bot: Any) -> web.Application:
@@ -269,6 +343,7 @@ def create_app(bot: Any) -> web.Application:
     app.router.add_get("/api/bot/avatar", handle_bot_avatar)
     app.router.add_get("/api/bot/user/{user_id}", handle_user_info)
     app.router.add_get("/api/bot/users", handle_users_batch)
+    app.router.add_post("/api/bot/dm", handle_dm)
     app.router.add_get("/api/bot/guild/{guild_id}", handle_guild_info)
     app.router.add_get("/api/bot/guild/{guild_id}/channels", handle_guild_channels)
     app.router.add_get("/api/bot/guild/{guild_id}/voice-channels", handle_guild_voice_channels)

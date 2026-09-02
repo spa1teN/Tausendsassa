@@ -18,6 +18,7 @@ Maps use **discord.ui.LayoutView** with Container-based CV2 rendering:
 - Message-only modal (subject + anonymity pre-set from menu)
 - On submit: CV2 menu dismissed via `delete_original_response()`, ephemeral "✅ Feedback sent!" confirmation
 - Stored in `feedback` table (PostgreSQL) with status tracking (new/important/in_progress/archived)
+- **DM conversation thread** (`feedback_messages` table): admins reply to non-anonymous senders via `POST /api/bot/dm` (webapp "Reply DM" form + dashboard inbox). Outgoing DMs are persisted as `direction='out'`; a DM `on_message` listener records user replies as `direction='in'` (only users with an existing feedback entry; first image attachment ≤5 MB stored as BYTEA). Dashboard inbox shows a WhatsApp-style messenger (chat list + conversation pane, unread message counters, live append on refresh).
 
 ### RedGifs → GIF in CV2 Feeds
 RedGifs links in RSS feeds are resolved via RedGifs API v2 (temporary auth token):
@@ -38,8 +39,8 @@ FastAPI admin panel at `https://dashboard.casparsadenius.de/#tausendsassa`:
 | Source | URL | Provides |
 |---|---|---|
 | `db_browser:8080` | `/api/dashboard` | Aggregate stats: feeds, maps, calendars, moderation, feedback counts, analytics |
-| `db_browser:8080` | `/api/feedback` | CRUD: list, status, read, admin_note, unread-count |
-| `bot:8090` | `/api/bot/*` | Discord-dependent: bot avatar, user name/avatar, guild channels/roles/webhooks |
+| `db_browser:8080` | `/api/feedback` | CRUD: list (incl. `unread_messages`/`last_message_at`/`last_message`), messages, user conversation, image, read-messages, status, admin_note, unread-count, unread-messages |
+| `bot:8090` | `/api/bot/*` | Discord-dependent: bot avatar, user name/avatar, DM send (`/api/bot/dm`), guild channels/roles/webhooks |
 
 See [`DATA_INTERFACE.md`](DATA_INTERFACE.md) for the full schema.
 
@@ -52,10 +53,9 @@ cogs/           Discord cogs (slash commands, listeners)
   map.py        World map with user pins (CV2 LayoutView)
   moderation.py Join/leave logs, kick/ban/timeout, purge
   help.py       /help command
-  feedback.py   /feedback command, modal, CV2 menu
-
+  feedback.py   /feedback command, modal, CV2 menu, DM on_message listener
 core/           Business logic
-  api_server.py      Internal API (port 8090) — bot avatar, user/guild lookups, channel/role/webhook listing for dashboard dropdowns
+  api_server.py      Internal API (port 8090) — bot avatar, user/guild lookups, DM send (/api/bot/dm), channel/role/webhook listing for dashboard dropdowns
   feeds_cv2.py       CV2 LayoutView builder, Reddit gallery resolution (cookie-based JSON API)
   feeds_add.py       Feed creation UI (type selector, preview)
   feeds_rss.py       RSS fetch, parse, embed creation (preserves _raw_description)
@@ -69,7 +69,7 @@ core/           Business logic
   http_client.py      aiohttp session pool
 
 db/             PostgreSQL via asyncpg, repository pattern
-  schema.sql          Tables: feeds, calendars, map_settings, posted_entries (media_count), feedback, moderation_log
+  schema.sql          Tables: feeds, calendars, map_settings, posted_entries (media_count), feedback, feedback_messages, moderation_log
   repositories/       Per-table query classes including feedback_repository.py
 
 webapp/         FastAPI admin panel (Discord OAuth2)
@@ -135,6 +135,7 @@ See `.env.example` for all options. Key ones:
 | `map_settings` | Map region, pin data, message_id per guild |
 | `posted_entries` | Posted feed entries with `media_count` tracking |
 | `feedback` | User feedback with `status`, `read`, `admin_note` columns |
+| `feedback_messages` | DM conversation thread: `direction` (in/out), content, optional image (BYTEA), `read` flag (unread only tracked for 'in') |
 | `moderation_log` | Join/leave, kick/ban/timeout events |
 
 ## Data Interface
@@ -143,8 +144,8 @@ Two internal API servers serve the external dashboard:
 
 | Container | Port | Provides |
 |---|---|---|
-| `db-browser` | 8080 | `/api/dashboard` (aggregate), `/api/feedback` (CRUD), `/api/cookies/status` |
-| `bot` | 8090 | `/api/bot/avatar`, `/api/bot/user/{id}`, `/api/bot/users?ids=`, `/api/bot/guild/{id}`, `/api/bot/guild/{id}/channels`, `/api/bot/guild/{id}/voice-channels`, `/api/bot/guild/{id}/roles`, `/api/bot/guild/{id}/webhooks` |
+| `db-browser` | 8080 | `/api/dashboard` (aggregate), `/api/feedback` (CRUD incl. messages/conversation/image/unread-messages/read-messages), `/api/cookies/status` |
+| `bot` | 8090 | `/api/bot/avatar`, `/api/bot/user/{id}`, `/api/bot/users?ids=`, `/api/bot/dm`, `/api/bot/guild/{id}`, `/api/bot/guild/{id}/channels`, `/api/bot/guild/{id}/voice-channels`, `/api/bot/guild/{id}/roles`, `/api/bot/guild/{id}/webhooks` |
 
 Full schema documented in [`DATA_INTERFACE.md`](DATA_INTERFACE.md).
 

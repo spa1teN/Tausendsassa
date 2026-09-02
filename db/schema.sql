@@ -303,6 +303,25 @@ CREATE TABLE IF NOT EXISTS feedback (
 CREATE INDEX IF NOT EXISTS idx_feedback_guild ON feedback(guild_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(guild_id, status);
 
+-- Feedback conversation: DM replies between the bot and a feedback sender.
+-- 'in' = user -> bot, 'out' = bot -> user. The original feedback entry serves
+-- as the thread's first 'in' message (synthesized by the API, not stored here).
+CREATE TABLE IF NOT EXISTS feedback_messages (
+    id          BIGSERIAL PRIMARY KEY,
+    feedback_id BIGINT NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+    guild_id    BIGINT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
+    user_id     BIGINT NOT NULL,                     -- 0 when is_anonymous
+    direction   VARCHAR(8) NOT NULL DEFAULT 'in',    -- in | out
+    content     TEXT NOT NULL DEFAULT '',
+    image       BYTEA,                               -- raw image bytes for image-only DMs
+    image_mime  VARCHAR(64),                         -- e.g. image/png
+    image_size  INTEGER,                             -- bytes
+    read        BOOLEAN NOT NULL DEFAULT FALSE,      -- admin has seen this message (unread only tracked for 'in')
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_messages_thread ON feedback_messages(feedback_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_messages_user ON feedback_messages(user_id, created_at);
+
 -- Analytics: page views and interactions, low-cardinality daily rollup
 CREATE TABLE IF NOT EXISTS analytics (
     id              BIGSERIAL PRIMARY KEY,

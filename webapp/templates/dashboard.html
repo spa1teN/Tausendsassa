@@ -21,6 +21,12 @@
   </div>
 </div>
 
+{% if flash %}
+<div id="flash" class="mb-4 px-4 py-2 rounded-lg text-sm border {% if flash.type == 'success' %}bg-emerald-500/10 text-emerald-400 border-emerald-500/30{% else %}bg-red-500/10 text-red-400 border-red-500/30{% endif %}">
+  {{ flash.text }}
+</div>
+{% endif %}
+
 {# ── Tab bar ──────────────────────────────────────────────────────────────── #}
 <div class="flex gap-1 mb-6 border-b border-border" id="tab-bar">
   <button onclick="showTab('overview')" id="tab-overview"
@@ -611,7 +617,7 @@
   </div>
 
   {# ── Feedback ── #}
-  <div class="card p-5">
+  <div class="card p-5" id="feedback">
     <div class="flex items-center justify-between mb-4">
       <h2 class="font-semibold text-white flex items-center gap-2">
         <span class="text-lg">💬</span> Feedback
@@ -652,6 +658,16 @@
             Update
           </button>
         </form>
+        {% if not fb.is_anonymous %}
+        <form action="/guild/{{ guild_id }}/feedback/{{ fb.id }}/dm" method="post" class="flex items-center gap-2 mt-2 pt-2 border-t border-border">
+          <input name="message" placeholder="Reply via DM..." required
+                 class="flex-1 text-xs px-2 py-1 rounded bg-bg border border-border text-white focus:outline-none focus:border-discord" />
+          <button type="submit"
+                  class="text-xs px-2 py-1 rounded bg-discord/20 text-discord border border-discord/30 hover:bg-discord/30 transition-colors">
+            Reply DM
+          </button>
+        </form>
+        {% endif %}
       </div>
       {% endfor %}
     </div>

@@ -80,6 +80,51 @@ class FeedbackCog(commands.Cog):
         view = build_feedback_menu(self, interaction.guild_id, interaction.user.id)
         await interaction.response.send_message(view=view, ephemeral=True)
 
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """Log user DM replies to the bot so admins see the full conversation
+        in the dashboard chat. Only messages from users with an existing
+        feedback entry are recorded (privacy boundary). Supports image-only
+        DMs: the first image attachment is downloaded and stored."""
+        if message.guild is not None:
+            return  # guild messages are not part of a feedback DM conversation
+        if message.author.bot:
+            return
+        db = getattr(self.bot, "db", None)
+        if not db or not db.is_connected:
+            return
+        content = message.content or ""
+        image: bytes | None = None
+        image_mime: str | None = None
+        for att in message.attachments:
+            ct = (att.content_type or "").lower()
+            if ct.startswith("image/"):
+                try:
+                    if att.size and att.size <= 5 * 1024 * 1024:  # 5 MB cap
+                        image = await att.read()
+                        image_mime = ct
+                except Exception:
+                    log.exception("Failed to download attachment from user=%s", message.author.id)
+                break
+        if not content and not image:
+            return
+        try:
+            latest = await db.feedback.get_latest_feedback_for_user(message.author.id)
+            if latest:
+                await db.feedback.add_message(
+                    feedback_id=latest["id"],
+                    guild_id=latest["guild_id"],
+                    user_id=message.author.id,
+                    direction="in",
+                    content=content,
+                    image=image,
+                    image_mime=image_mime,
+                )
+                log.info("Recorded incoming DM from user=%s into feedback thread=%s (image=%s)",
+                         message.author.id, latest["id"], bool(image))
+        except Exception:
+            log.exception("Failed to record incoming DM from user=%s", message.author.id)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(FeedbackCog(bot))
