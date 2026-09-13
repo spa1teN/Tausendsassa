@@ -128,6 +128,13 @@ class ModerationRepository(BaseRepository):
         reason: str = None
     ) -> None:
         """Record a moderation action (join/leave/kick/ban/unban/timeout) for stats."""
+        # moderation_log has a FK to guilds — ensure the row exists first.
+        # Member events can fire for guilds that were never registered or were
+        # removed (e.g. a leave racing on_guild_remove), which previously
+        # raised a ForeignKeyViolationError and dropped the audit entry.
+        from db.repositories.guild_repository import GuildRepository
+        await GuildRepository(self.pool).ensure_exists(guild_id)
+
         await self.execute(
             """INSERT INTO moderation_log (guild_id, action, target_id, moderator_id, reason)
                VALUES ($1, $2, $3, $4, $5)""",

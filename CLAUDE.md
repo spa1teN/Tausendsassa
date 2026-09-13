@@ -136,7 +136,7 @@ See `.env.example` for all options. Key ones:
 | `posted_entries` | Posted feed entries with `media_count` tracking |
 | `feedback` | User feedback with `status`, `read`, `admin_note` columns |
 | `feedback_messages` | DM conversation thread: `direction` (in/out), content, optional image (BYTEA), `read` flag (unread only tracked for 'in') |
-| `moderation_log` | Join/leave, kick/ban/timeout events |
+| `moderation_log` | Join/leave, kick/ban/timeout events — guild row auto-ensured on write (prevents FK errors for events on unregistered/removed guilds) |
 
 ## Data Interface
 
