@@ -172,7 +172,7 @@ class UnifiedCacheManager:
             cached_image = await self.memory_cache.get(cache_key)
             if cached_image:
                 self.log.info(f"Using in-memory cached {cache_type} for guild {guild_id}")
-                return cached_image
+                return cached_image.copy()
         
         # Check disk cache
         cache_dir, cache_location = self._get_cache_location(guild_id, maps)
@@ -210,8 +210,8 @@ class UnifiedCacheManager:
         
         try:
             if cache_type in ["base_map", "closeup_base_map"] and isinstance(item, Image.Image):
-                # Store in memory
-                await self.memory_cache.set(cache_key, item)
+                # Store a copy in memory: callers may mutate the image afterwards.
+                await self.memory_cache.set(cache_key, item.copy())
                 # Store on disk
                 item.save(cache_file, 'PNG', optimize=True)
             elif isinstance(item, BytesIO):
@@ -362,7 +362,9 @@ class MapStorage:
         cached_image = await self.cache.memory_cache.get(cache_key)
         if cached_image:
             self.log.info(f"Using in-memory cached base map for guild {guild_id}")
-            return cached_image
+            # Return a copy: draw_pins_on_map mutates the image in place, and the
+            # base map is shared across guilds with identical region/settings.
+            return cached_image.copy()
         
         # Check disk cache
         cache_dir, cache_location = self.cache._get_cache_location(guild_id, maps)
@@ -389,8 +391,9 @@ class MapStorage:
             cache_file = cache_dir / f"{cache_key}.png"
             
             try:
-                # Store in memory
-                await self.cache.memory_cache.set(cache_key, image)
+                # Store a copy in memory: the caller draws pins onto `image`
+                # afterwards, which would otherwise pollute the shared cache.
+                await self.cache.memory_cache.set(cache_key, image.copy())
                 # Store on disk
                 image.save(cache_file, 'PNG', optimize=True)
                 self.log.info(f"Cached base map for guild {guild_id} in {cache_location}")
