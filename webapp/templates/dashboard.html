@@ -251,15 +251,19 @@
     <div class="mb-3">
       <p class="text-xs text-muted mb-2">Pins by country</p>
       {% set max_cnt = top_countries[0].cnt if top_countries else 1 %}
+      <div class="space-y-1.5">
       {% for c in top_countries[:8] %}
-      <div class="flex items-center gap-2 mb-1">
-        <span class="text-xs text-text w-8 text-right font-mono">{{ c.cnt }}</span>
-        <span class="text-xs uppercase text-muted w-6">{{ c.country_code or '??' }}</span>
-        <div class="flex-1 h-2 rounded-full bg-surface-2 overflow-hidden">
-          <div class="h-full rounded-full bg-discord" style="width:{{ (c.cnt / max_cnt * 100) | int }}%"></div>
+        {% set pct = (c.cnt / max_cnt * 100) | int %}
+        {% set opac = 0.35 + 0.65 * (c.cnt / max_cnt) %}
+        <div class="flex items-center gap-2">
+          <span class="text-xs uppercase text-muted w-7">{{ c.country_code or '??' }}</span>
+          <div class="flex-1 h-2 rounded-r-full bg-surface-2 overflow-hidden">
+            <div class="h-full rounded-r-full" style="width:{{ pct }}%;background:var(--color-discord,#5865F2);opacity:{{ '%.2f'|format(opac) }}"></div>
+          </div>
+          <span class="text-xs text-text-2 font-mono tabular-nums w-8 text-right">{{ c.cnt }}</span>
         </div>
-      </div>
       {% endfor %}
+      </div>
     </div>
     {% endif %}
 
@@ -567,14 +571,35 @@
       </h2>
     </div>
     {% if mod_stats %}
-    <div class="flex gap-3 mb-4 flex-wrap">
-      <span class="text-xs px-2 py-1 rounded bg-surface-2 text-muted">24h: {{ mod_stats.actions_24h or 0 }}</span>
-      <span class="text-xs px-2 py-1 rounded bg-surface-2 text-muted">7d: {{ mod_stats.actions_7d or 0 }}</span>
-      {% if mod_stats.bans_7d %}<span class="badge-off text-xs px-1.5 py-0.5 rounded">{{ mod_stats.bans_7d }} bans</span>{% endif %}
-      {% if mod_stats.kicks_7d %}<span class="badge-warn text-xs px-1.5 py-0.5 rounded">{{ mod_stats.kicks_7d }} kicks</span>{% endif %}
-      {% if mod_stats.timeouts_7d %}<span class="badge-warn text-xs px-1.5 py-0.5 rounded">{{ mod_stats.timeouts_7d }} timeouts</span>{% endif %}
-      {% if mod_stats.joins_7d %}<span class="badge-on text-xs px-1.5 py-0.5 rounded">{{ mod_stats.joins_7d }} joins</span>{% endif %}
-      {% if mod_stats.leaves_7d %}<span class="text-xs px-1.5 py-0.5 rounded bg-surface-2 text-muted">{{ mod_stats.leaves_7d }} leaves</span>{% endif %}
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+      <div class="stat-tile">
+        <span class="stat-value">{{ mod_stats.actions_24h or 0 }}</span>
+        <span class="stat-label">Actions · 24h</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-value">{{ mod_stats.actions_7d or 0 }}</span>
+        <span class="stat-label">Actions · 7d</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-value" {% if mod_stats.bans_7d %}style="color:var(--color-bad,#d03b3b)"{% endif %}>{{ mod_stats.bans_7d or 0 }}</span>
+        <span class="stat-label">Bans · 7d</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-value">{{ mod_stats.kicks_7d or 0 }}</span>
+        <span class="stat-label">Kicks · 7d</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-value">{{ mod_stats.timeouts_7d or 0 }}</span>
+        <span class="stat-label">Timeouts · 7d</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-value" {% if mod_stats.joins_7d %}style="color:var(--color-ok,#0ca30c)"{% endif %}>{{ mod_stats.joins_7d or 0 }}</span>
+        <span class="stat-label">Joins · 7d</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-value">{{ mod_stats.leaves_7d or 0 }}</span>
+        <span class="stat-label">Leaves · 7d</span>
+      </div>
     </div>
     {% endif %}
     {% if mod_log %}

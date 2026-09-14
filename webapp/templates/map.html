@@ -48,21 +48,104 @@
       pointer-events: none; display: none;
     }
 
-    #proj-btn {
-      position: fixed; top: 8px; left: 8px; z-index: 10;
-      height: 28px; padding: 0 10px; display: flex; align-items: center;
+    /* ── Controls panel (top-right, hideable) ── */
+    #controls { position: fixed; top: 10px; right: 10px; z-index: 20; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; zoom: 0.65; }
+
+    #controls-toggle {
+      height: 64px; padding: 0 26px; display: flex; align-items: center; gap: 12px;
       background: rgba(26,26,25,0.92); color: #c3c2b7;
-      border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
-      font-size: 11px; font-weight: 600; cursor: pointer; letter-spacing: 0.03em;
-      transition: background 0.2s;
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 13px;
+      font-size: 24px; font-weight: 600; cursor: pointer; letter-spacing: 0.03em;
+      transition: background 0.2s, color 0.2s;
     }
-    #proj-btn:hover { background: rgba(35,35,34,0.92); color: #fff; }
+    #controls-toggle:hover { background: rgba(35,35,34,0.92); color: #fff; }
+    #controls-toggle .ctl-dot {
+      width: 13px; height: 13px; border-radius: 50%;
+      background: #5865F2; box-shadow: 0 0 0 7px rgba(88,101,242,0.22);
+    }
+
+    #controls-panel {
+      width: 470px; background: rgba(26,26,25,0.96);
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 18px;
+      padding: 26px; box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+      opacity: 0; transform: translateY(-6px); pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+    #controls-panel.open { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+    .ctl-section + .ctl-section { margin-top: 26px; padding-top: 26px; border-top: 1px solid rgba(255,255,255,0.07); }
+    .ctl-section h3 {
+      margin: 0 0 16px; font-size: 21px; font-weight: 700; letter-spacing: 0.1em;
+      text-transform: uppercase; color: #898781;
+    }
+
+    /* segmented 2D/3D switch */
+    .ctl-seg { display: flex; background: rgba(255,255,255,0.06); border-radius: 14px; padding: 5px; }
+    .ctl-seg-btn {
+      flex: 1; height: 58px; border: 0; border-radius: 10px; cursor: pointer;
+      background: transparent; color: #898781; font-size: 26px; font-weight: 600;
+      transition: background 0.15s, color 0.15s;
+    }
+    .ctl-seg-btn.active { background: #5865F2; color: #fff; }
+
+    /* borders / labels toggles */
+    .ctl-row { display: flex; gap: 12px; }
+    .ctl-opt {
+      flex: 1; height: 64px; display: flex; align-items: center; justify-content: center; gap: 10px;
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; cursor: pointer;
+      background: rgba(255,255,255,0.03); color: #898781; font-size: 24px; font-weight: 600;
+      transition: all 0.15s;
+    }
+    .ctl-opt .ctl-chk { font-size: 24px; opacity: 0; transition: opacity 0.15s; }
+    .ctl-opt.active { background: rgba(88,101,242,0.16); border-color: rgba(88,101,242,0.5); color: #c9d0ff; }
+    .ctl-opt.active .ctl-chk { opacity: 1; }
+
+    /* ko-fi — scaled up to match the bigger controls.
+       The widget renders .btn-container > a.kofi-button (not an iframe).
+       Flex + transform-origin center keeps it centered; the wrapper fills
+       the panel content box so the scaled button can't overflow off-center. */
+    .ctl-kofi { display: flex; justify-content: center; align-items: center; width: 100%; height: 110px; }
+    .ctl-kofi iframe, .ctl-kofi a { display: block; }
+    .ctl-kofi .btn-container {
+      transform: scale(2.0);
+      transform-origin: center center;
+    }
+    .ctl-kofi iframe {
+      transform: scale(2.0); transform-origin: center center;
+      width: 210px; height: 48px;
+    }
   </style>
 </head>
 <body>
 
 <div id="map"></div>
-<button id="proj-btn" onclick="toggleProjection()">2D</button>
+
+<div id="controls">
+  <button id="controls-toggle" aria-expanded="false" aria-controls="controls-panel">
+    <span class="ctl-dot"></span> Controls
+  </button>
+  <div id="controls-panel" aria-hidden="true">
+    <div class="ctl-section">
+      <h3>View</h3>
+      <div class="ctl-seg" role="group" aria-label="Map projection">
+        <button type="button" class="ctl-seg-btn active" id="ctl-3d">3D</button>
+        <button type="button" class="ctl-seg-btn" id="ctl-2d">2D</button>
+      </div>
+    </div>
+    <div class="ctl-section">
+      <h3>Overlays</h3>
+      <div class="ctl-row">
+        <button type="button" class="ctl-opt active" id="ctl-borders" aria-pressed="true"><span class="ctl-chk">✓</span> Borders</button>
+        <button type="button" class="ctl-opt active" id="ctl-labels" aria-pressed="true"><span class="ctl-chk">✓</span> Labels</button>
+      </div>
+    </div>
+    <div class="ctl-section ctl-kofi">
+      <script type='text/javascript' src='https://storage.ko-fi.com/cdn/widget/Widget_2.js'></script>
+      <script type='text/javascript'>kofiwidget2.init('Support me on Ko-fi', '#72a4f2', 'S5J826XE6U');kofiwidget2.draw();</script>
+    </div>
+  </div>
+</div>
+
 <pre id="dbg"></pre>
 
 <script>
@@ -152,6 +235,12 @@ map.on('style.load', () => {
     try { map.setSky({ 'atmosphere-blend': 0.85 }); }
     catch (e) { dbg('setSky skipped: ' + e); }
   }
+
+  // Discover border/label layers after each style load so the toggles
+  // keep working across style swaps.
+  discoverLayers();
+  applyBorders();
+  applyLabels();
 
   if (!pinsLoaded) {
     pinsLoaded = true;
@@ -294,17 +383,79 @@ async function loadPins() {
   } catch(err) { dbg('loadPins FAIL: ' + err); }
 }
 
-function toggleProjection() {
-  isGlobe = !isGlobe;
-  document.getElementById('proj-btn').textContent = isGlobe ? '2D' : '3D';
-  map.setProjection({ type: isGlobe ? 'globe' : 'mercator' });
-  if (isGlobe) {
-    try { map.setSky({ 'atmosphere-blend': 0.85 }); }
-    catch (e) { /* ignore */ }
+// ── Controls panel ───────────────────────────────────────────────────────────
+const controlsToggle = document.getElementById('controls-toggle');
+const controlsPanel = document.getElementById('controls-panel');
+controlsToggle.addEventListener('click', () => {
+  const open = controlsPanel.classList.toggle('open');
+  controlsPanel.setAttribute('aria-hidden', String(!open));
+  controlsToggle.setAttribute('aria-expanded', String(open));
+});
+
+// 2D / 3D switch
+const btn2d = document.getElementById('ctl-2d');
+const btn3d = document.getElementById('ctl-3d');
+function setMode(globe) {
+  isGlobe = globe;
+  btn2d.classList.toggle('active', !globe);
+  btn3d.classList.toggle('active', globe);
+  map.setProjection({ type: globe ? 'globe' : 'mercator' });
+  if (globe) {
+    try { map.setSky({ 'atmosphere-blend': 0.85 }); } catch (e) { /* ignore */ }
   } else {
     try { map.setSky({}); } catch (e) { /* ignore */ }
   }
 }
+btn2d.addEventListener('click', () => setMode(false));
+btn3d.addEventListener('click', () => setMode(true));
+
+// Borders / labels — same layer-discovery trick as casparsadenius.de/trips/
+let borderLayers = [];
+let labelLayers = [];
+let bordersHidden = false;
+let labelsHidden = false;
+
+function discoverLayers() {
+  const style = map.getStyle();
+  if (!style || !style.layers) return;
+  borderLayers = [];
+  labelLayers = [];
+  style.layers.forEach(layer => {
+    const id = layer.id || '';
+    if (id.indexOf('admin') !== -1 || id.indexOf('boundary') !== -1) borderLayers.push(id);
+    if ((id.indexOf('label') !== -1 || id.indexOf('place') !== -1 || id.indexOf('road') !== -1)
+        && layer.type === 'symbol') labelLayers.push(id);
+  });
+}
+
+function applyBorders() {
+  if (!borderLayers.length) discoverLayers();
+  borderLayers.forEach(id => {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', bordersHidden ? 'none' : 'visible');
+  });
+}
+
+function applyLabels() {
+  if (!labelLayers.length) discoverLayers();
+  labelLayers.forEach(id => {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', labelsHidden ? 'none' : 'visible');
+  });
+}
+
+const ctlBorders = document.getElementById('ctl-borders');
+const ctlLabels = document.getElementById('ctl-labels');
+ctlBorders.addEventListener('click', () => {
+  const on = ctlBorders.classList.toggle('active');
+  ctlBorders.setAttribute('aria-pressed', String(on));
+  bordersHidden = !on;
+  applyBorders();
+});
+ctlLabels.addEventListener('click', () => {
+  const on = ctlLabels.classList.toggle('active');
+  ctlLabels.setAttribute('aria-pressed', String(on));
+  labelsHidden = !on;
+  applyLabels();
+});
 
 function esc(s) {
   return String(s || '').replace(/[&<>"']/g, c =>

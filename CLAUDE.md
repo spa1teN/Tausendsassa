@@ -29,7 +29,7 @@ RedGifs links in RSS feeds are resolved via RedGifs API v2 (temporary auth token
 - `_raw_description` field preserved through HTML cleaning for URL extraction
 
 ### Dashboard & Data Interface
-FastAPI admin panel at `https://dashboard.casparsadenius.de/#tausendsassa`:
+FastAPI admin panel at `https://tausendsassa-bot.eu`:
 - Cookie status chip (green/yellow/red, click-to-upload modal); gated to guild `694270970558546051`
 - Moderation chart + stats box
 - Feedback inbox tab with status workflow (new → important → in_progress → archived)
@@ -43,6 +43,20 @@ FastAPI admin panel at `https://dashboard.casparsadenius.de/#tausendsassa`:
 | `bot:8090` | `/api/bot/*` | Discord-dependent: bot avatar, user name/avatar, DM send (`/api/bot/dm`), guild channels/roles/webhooks |
 
 See [`DATA_INTERFACE.md`](DATA_INTERFACE.md) for the full schema.
+
+### Webapp UI
+FastAPI admin panel at `https://tausendsassa-bot.eu` (Discord OAuth2):
+- Dark theme with radial Discord-blue glow (`base.html`), sticky blurred nav with favicon, `now` template global for the © year
+- **Stat tiles** (`webapp/tailwind/input.css`): `.stat-tile` / `.stat-value` / `.stat-label` components — used for the moderation stats box
+- **Pins-by-country** bars use single-hue sequential encoding (opacity = magnitude, `#5865F2`), not a cycling rainbow (`dashboard.html`, `region-density.html`)
+- **Ko-fi** widget in the footer and map popout (scaled 2.0× via `.ctl-kofi .btn-container`, flex-centered so it can't overflow off-center); homepage (`casparsadenius.de`) + GitHub links in footer
+- Legal pages (`/privacy`, `/terms`) render embedded markdown via `_simple_md_to_html` (H1/H2/H3, bold, links, UL/OL)
+
+### Map Webapp Controls Popout (`webapp/templates/map.html`)
+Hideable Controls panel (top-right) replacing the old `#proj-btn`:
+- 2D/3D segmented switch (globe/mercator projection + sky atmosphere)
+- Overlays: Borders/Labels toggles — `discoverLayers()` on `style.load` finds `admin`/`boundary` and `label`/`place`/`road` symbol layers, so the toggles survive style swaps
+- Ko-fi button; the whole panel is `zoom: 0.65` (touch-sized base sizes, uniformly shrunk)
 
 ## Architecture
 

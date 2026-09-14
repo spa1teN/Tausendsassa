@@ -8,7 +8,7 @@ description: Run, smoke-test, deploy, and health-check Tausendsassa (multi-guild
 Multi-guild Discord bot (~84 guilds), four containers: `tausendsassa-bot`
 (discord.py + API :8090), `tausendsassa-db-browser` (dashboard API :8080),
 `tausendsassa-webapp` (FastAPI, **published** :8081, proxied at
-`tausendsassa.casparsadenius.de`), `tausendsassa-db` (Postgres). Discord is the
+`tausendsassa-bot.eu`), `tausendsassa-db` (Postgres). Discord is the
 main user surface — not headless-drivable; verification goes through
 status.json, the two APIs, the webapp, and Postgres. Paths relative to
 `/root/Tausendsassa/`.
@@ -54,7 +54,7 @@ and run the smoke test — status.json freshness confirms the reporter loop.
 
 - **Webapp `/` answers 307 → `/login` when unauthenticated — that IS the healthy
   signal.** A real session needs Discord OAuth in a browser (human path:
-  `https://tausendsassa.casparsadenius.de`).
+  `https://tausendsassa-bot.eu`).
 - Bot API (:8090) and db-browser (:8080) have **no published ports** — docker
   network `tausendsassa-network` only. Don't confuse the two: db-browser serves
   `/api/dashboard` + feedback CRUD; the bot serves `/api/bot/*` (Discord-

@@ -220,7 +220,7 @@ The Bot provides the following services on Discord:
    actions (kick, ban, unban, timeout) with moderator and reason tracking.
 5. **Feedback System**: Per-server feedback collection with status management.
 6. **Web Admin Panel**: Browser-based dashboard at
-   `tausendsassa.casparsadenius.de` where server admins can manage feeds,
+   `tausendsassa-bot.eu` where server admins can manage feeds,
    calendars, maps, moderation settings, and feedback.
 
 ## 2. User Responsibilities

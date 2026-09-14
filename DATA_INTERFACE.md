@@ -368,7 +368,7 @@ eigene Session hat, gibt es einen **Shared-Secret-Token**-Mechanismus:
 1. Setze `MAP_ACCESS_TOKEN=<geheimer-wert>` in der `.env`-Datei des Tausendsassa-Projekts.
 2. Übergebe den Token als Query-Parameter in der iframe-URL:
    ```
-   https://tausendsassa.casparsadenius.de/map/all?token=<geheimer-wert>
+   https://tausendsassa-bot.eu/map/all?token=<geheimer-wert>
    ```
 3. Alternativ als HTTP-Header: `X-Map-Access-Token: <geheimer-wert>`
 
@@ -378,7 +378,7 @@ Nutzer über Discord OAuth in der Webapp eingeloggt sein (Session-Cookie).
 **Header-Variante (für Server-Side-Requests):**
 ```bash
 curl -H "X-Map-Access-Token: ${MAP_ACCESS_TOKEN}" \
-  https://tausendsassa.casparsadenius.de/api/map/all/pins
+  https://tausendsassa-bot.eu/api/map/all/pins
 ```
 
 ## Netzwerk-Integration für `~/dashboard/`

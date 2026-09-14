@@ -75,15 +75,14 @@
   <p class="sub">{{ total_guilds }} guilds across <strong>{{ region_counts|length }}</strong> regions</p>
   <div id="region-list">
     {% set max_count = region_counts[0].guild_count if region_counts else 1 %}
-    {% set colors = ['#5865F2','#4a7cc9','#3987e5','#2a9d8f','#e9c46a','#f4a261','#e76f51','#c0392b'] %}
     {% for rc in region_counts %}
     {% set pct = (rc.guild_count / max_count * 100)|int %}
-    {% set idx = loop.index0 % colors|length %}
+    {% set opac = 0.30 + 0.70 * (rc.guild_count / max_count) %}
     <div class="region-row" data-region="{{ rc.region }}"
          onclick="flyToRegion('{{ rc.region }}')">
       <span class="region-label">{{ rc.label }}</span>
       <span class="region-bar-track">
-        <span class="region-bar-fill" style="width:{{ pct }}%;background:{{ colors[idx] }}"></span>
+        <span class="region-bar-fill" style="width:{{ pct }}%;background:#5865F2;opacity:{{ '%.2f'|format(opac) }}"></span>
       </span>
       <span class="region-count">{{ rc.guild_count }}</span>
     </div>
@@ -143,9 +142,10 @@ const REGION_BOUNDS = {
   cyprus:        [[32,34],[35,36]],
 };
 
-const COLORS = ['#5865F2','#4a7cc9','#3987e5','#2a9d8f','#e9c46a','#f4a261','#e76f51','#c0392b'];
+const COLORS = ['#5865F2']; // sequential single hue — magnitude via opacity
 const counts = {{ region_counts | tojson }};
 const maxCount = counts.length ? counts[0].guild_count : 1;
+const ACCENT = '#5865F2';
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -162,8 +162,7 @@ map.on('style.load', () => {
   counts.forEach((rc, i) => {
     const bounds = REGION_BOUNDS[rc.region];
     if (!bounds) return;
-    const opacity = 0.25 + (rc.guild_count / maxCount) * 0.35;
-    const color = COLORS[i % COLORS.length];
+    const opacity = 0.14 + 0.38 * (rc.guild_count / maxCount);
     const colorKey = `region-${rc.region}`;
 
     map.addSource(colorKey, {
@@ -189,7 +188,7 @@ map.on('style.load', () => {
       type: 'fill',
       source: colorKey,
       paint: {
-        'fill-color': color,
+        'fill-color': ACCENT,
         'fill-opacity': opacity,
       },
       layout: { visibility: (i < 12 ? 'visible' : 'none') },
@@ -200,9 +199,9 @@ map.on('style.load', () => {
       type: 'line',
       source: colorKey,
       paint: {
-        'line-color': color,
+        'line-color': ACCENT,
         'line-width': 1.5,
-        'line-opacity': 0.6,
+        'line-opacity': Math.min(0.9, 0.35 + opacity),
       },
       layout: { visibility: (i < 12 ? 'visible' : 'none') },
     });

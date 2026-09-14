@@ -11,7 +11,11 @@
 
     body {
       margin: 0;
-      background: var(--color-bg, #0d0d0d);
+      background:
+        radial-gradient(1100px 520px at 50% -12%, rgba(88, 101, 242, 0.12), transparent 62%),
+        radial-gradient(900px 500px at 100% 0%, rgba(114, 164, 242, 0.05), transparent 55%),
+        var(--color-bg, #0d0d0d);
+      background-attachment: fixed;
       color: var(--color-text-2, #c3c2b7);
       font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
       font-size: 14px;
@@ -41,8 +45,10 @@
 <body class="h-full min-h-screen bg-bg">
 
 {% if user is defined and user %}
-<nav class="border-b border-border bg-surface px-6 py-3 flex items-center justify-between">
+<nav class="border-b border-border px-6 py-3 flex items-center justify-between sticky top-0 z-20 backdrop-blur-md"
+     style="background: color-mix(in srgb, var(--color-surface, #1a1a19) 82%, transparent);">
   <div class="flex items-center gap-3">
+    <img src="/static/favicon.png" alt="" class="w-6 h-6 rounded-md" />
     <span class="text-white font-semibold text-[15px] tracking-[-0.01em]">Tausendsassa</span>
     <span class="text-muted text-[13px] font-normal">Admin Panel</span>
   </div>
@@ -66,10 +72,21 @@
   {% block content %}{% endblock %}
 </main>
 
-<footer class="border-t border-border py-4 px-6 text-center text-xs text-muted">
-  <a href="/privacy" class="hover:text-text-2 transition-colors">Privacy Policy</a>
-  <span class="mx-2">·</span>
-  <a href="/terms" class="hover:text-text-2 transition-colors">Terms of Service</a>
+<footer class="border-t border-border py-5 px-6 mt-auto">
+  <div class="max-w-[1240px] mx-auto flex flex-col items-center gap-3 sm:flex-row sm:justify-between">
+    <div class="text-xs text-muted">
+      © {{ now.year }} Tausendsassa — <a href="https://casparsadenius.de" target="_blank" rel="noopener" class="hover:text-text-2 transition-colors">casparsadenius.de</a> · <a href="https://github.com/spa1teN/Tausendsassa" target="_blank" rel="noopener" class="hover:text-text-2 transition-colors">GitHub</a>
+    </div>
+    <div class="text-xs text-muted flex items-center gap-3">
+      <a href="/privacy" class="hover:text-text-2 transition-colors">Privacy Policy</a>
+      <span>·</span>
+      <a href="/terms" class="hover:text-text-2 transition-colors">Terms of Service</a>
+    </div>
+    <div class="kofi-footer">
+      <script type='text/javascript' src='https://storage.ko-fi.com/cdn/widget/Widget_2.js'></script>
+      <script type='text/javascript'>kofiwidget2.init('Support me on Ko-fi', '#72a4f2', 'S5J826XE6U');kofiwidget2.draw();</script>
+    </div>
+  </div>
 </footer>
 
 </body>

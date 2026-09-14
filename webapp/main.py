@@ -182,6 +182,7 @@ def format_color_hex(val) -> Optional[str]:
 templates.env.globals["guild_icon_url"] = guild_icon_url
 templates.env.globals["user_avatar_url"] = user_avatar_url
 templates.env.globals["format_color_hex"] = format_color_hex
+templates.env.globals["now"] = __import__("datetime").datetime.utcnow
 
 BOT_API_BASE = os.getenv("BOT_API_BASE", "http://tausendsassa-bot:8090")
 
@@ -946,8 +947,14 @@ def _simple_md_to_html(text: str) -> str:
         line = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
         # Inline links [text](url)
         line = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2" class="text-discord hover:underline">\1</a>', line)
+        # H3
+        if line.startswith("### "):
+            if in_list:
+                out.append(f"</{in_list}>")
+                in_list = None
+            out.append(f'<h3 class="text-lg font-semibold text-white mt-6 mb-2">{line[4:]}</h3>')
         # H2
-        if line.startswith("## "):
+        elif line.startswith("## "):
             if in_list:
                 out.append(f"</{in_list}>")
                 in_list = None

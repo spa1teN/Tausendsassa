@@ -17,8 +17,11 @@
   <a href="https://discord.gg/yVNkpH6vDS">
     <img src="https://img.shields.io/badge/Support%20Server-5865F2?logo=discord&logoColor=white&style=for-the-badge" alt="Support Server">
   </a>
-  <a href="https://tausendsassa.casparsadenius.de">
+  <a href="https://tausendsassa-bot.eu">
     <img src="https://img.shields.io/badge/Web%20Panel-4285F4?logo=googlechrome&logoColor=white&style=for-the-badge" alt="Web Panel">
+  </a>
+  <a href="https://ko-fi.com/S5J826XE6U">
+    <img src="https://img.shields.io/badge/Support%20me%20on%20Ko--fi-72a4f2?logo=kofi&logoColor=white&style=for-the-badge" alt="Support me on Ko-fi">
   </a>
 </p>
 
@@ -33,13 +36,21 @@
 
 **[Invite the Bot](https://discord.com/oauth2/authorize?client_id=1398477775828029645&permissions=537259968&scope=bot%20applications.commands)**
 ·
-**[Web Admin Panel](https://tausendsassa.casparsadenius.de)**
+**[Web Admin Panel](https://tausendsassa-bot.eu)**
 ·
 **[Support Server](https://discord.gg/yVNkpH6vDS)**
 ·
-**[Privacy Policy](https://tausendsassa.casparsadenius.de/privacy)**
+**[Support me on Ko-fi](https://ko-fi.com/S5J826XE6U)**
 ·
-**[Terms of Service](https://tausendsassa.casparsadenius.de/terms)**
+**[Privacy Policy](https://tausendsassa-bot.eu/privacy)**
+·
+**[Terms of Service](https://tausendsassa-bot.eu/terms)**
+
+<p align="center">
+  <a href="https://ko-fi.com/S5J826XE6U">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" width="200">
+  </a>
+</p>
 
 ### Features
 
@@ -50,7 +61,7 @@
 | **Calendar** | iCal/ICS sync with automatic Discord event lifecycle (create, start, end), weekly summaries, blacklist/whitelist filtering |
 | **Moderation** | Join/leave logging, kick/ban/timeout tracking with moderator attribution, purge command, auto-join role |
 | **Feedback** | Per-server `/feedback` with subject categories, anonymous toggle, status workflow (new, important, in_progress, archived), and **DM replies** — admins answer directly from the web panel or dashboard inbox, the full user↔bot conversation (text & images) is stored and shown as a chat thread |
-| **Web Panel** | Discord OAuth2 admin dashboard at [tausendsassa.casparsadenius.de](https://tausendsassa.casparsadenius.de) — manage feeds, calendars, maps, moderation, and feedback across all your servers |
+| **Web Panel** | Discord OAuth2 admin dashboard at [tausendsassa-bot.eu](https://tausendsassa-bot.eu) — manage feeds, calendars, maps, moderation, and feedback across all your servers |
 
 ### Screenshots
 
@@ -143,6 +154,6 @@ curl -s http://localhost:8081/  # should return 307 (redirect to /login)
 
 MIT © [spa1teN](https://github.com/spa1teN)
 
-The bot's [Privacy Policy](https://tausendsassa.casparsadenius.de/privacy) and
-[Terms of Service](https://tausendsassa.casparsadenius.de/terms) apply to all
+The bot's [Privacy Policy](https://tausendsassa-bot.eu/privacy) and
+[Terms of Service](https://tausendsassa-bot.eu/terms) apply to all
 users of the hosted instance.

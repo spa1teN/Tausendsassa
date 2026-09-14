@@ -2,18 +2,21 @@
 {% block title %}Server Selection{% endblock %}
 
 {% block content %}
-<div class="mb-8">
-  <h1 class="text-2xl font-semibold text-white">Select a server</h1>
-  <p class="text-sm text-muted mt-1">
-    Only servers where you have admin permissions and the bot is active.
-  </p>
+<div class="mb-8 flex items-end justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold text-white">Select a server</h1>
+    <p class="text-sm text-muted mt-1">
+      Only servers where you have admin permissions and the bot is active.
+    </p>
+  </div>
+  <span class="text-xs px-2.5 py-1 rounded-full bg-discord/15 text-discord border border-discord/30">{{ guilds|length }} servers</span>
 </div>
 
 {% if guilds %}
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
   {% for guild in guilds %}
   <a href="/guild/{{ guild.id }}"
-     class="card p-5 flex items-center gap-4 hover:border-border-strong hover:bg-surface-2 transition-all group">
+     class="card p-5 flex items-center gap-4 hover:border-border-strong hover:bg-surface-2 hover:-translate-y-0.5 transition-all duration-150">
     {% if guild.icon %}
     <img src="{{ guild_icon_url(guild.id, guild.icon) }}"
          class="w-12 h-12 rounded-2xl flex-shrink-0" alt="" />
@@ -30,6 +33,9 @@
       </p>
       <p class="text-xs text-muted mt-0.5">ID: {{ guild.id }}</p>
     </div>
+    <svg class="ml-auto w-4 h-4 text-muted flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+    </svg>
   </a>
   {% endfor %}
 </div>
