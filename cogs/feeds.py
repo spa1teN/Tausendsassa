@@ -94,7 +94,7 @@ class FeedCog(commands.Cog):
                 self._feeds_cache[guild.id] = [self._feed_to_dict(f) for f in feeds]
                 # Initialize stats
                 self.stats[guild.id] = {
-                    f.name: {"last_run": None, "last_success": None, "failures": 0}
+                    f.name: {"last_run": None, "last_success": None, "failures": 0, "delivery_failures": 0}
                     for f in feeds
                 }
 
@@ -138,6 +138,39 @@ class FeedCog(commands.Cog):
                 self._feeds_cache.pop(guild_id, None)
         if guild_id in self.stats:
             self.stats[guild_id].pop(name, None)
+
+    async def _record_delivery_failure(self, guild_id: int, feed_cfg: dict):
+        """Record a poll cycle in which a feed's entries could not be delivered
+        by any means (webhook and bot fallback both failed, or the channel is
+        gone). After FAILURE_THRESHOLD consecutive such cycles the feed is
+        deleted, so broken feeds in guilds we can't fix don't linger forever.
+        """
+        name = feed_cfg.get("name")
+        st = self.stats.setdefault(guild_id, {}).setdefault(
+            name, {"last_run": None, "last_success": None, "failures": 0})
+        st["delivery_failures"] = st.get("delivery_failures", 0) + 1
+        count = st["delivery_failures"]
+        self.log.warning(
+            "Feed '%s' in guild %s delivered nothing (%d/%d consecutive failures)",
+            name, guild_id, count, FAILURE_THRESHOLD)
+
+        if count >= FAILURE_THRESHOLD:
+            feed_id = feed_cfg.get("id")
+            self.log.warning(
+                "Deleting feed '%s' (id=%s) in guild %s after %d consecutive delivery failures",
+                name, feed_id, guild_id, count)
+            try:
+                if feed_id and self.bot.db:
+                    await self.bot.db.feeds.delete_feed(feed_id)
+            except Exception:
+                self.log.exception("Failed to delete broken feed '%s' (id=%s)", name, feed_id)
+            self._evict_feed(guild_id, name)
+
+    def _reset_delivery_failures(self, guild_id: int, feed_cfg: dict):
+        """Clear a feed's consecutive delivery-failure streak after a success."""
+        st = self.stats.get(guild_id, {}).get(feed_cfg.get("name"))
+        if st:
+            st["delivery_failures"] = 0
 
     def _feed_to_dict(self, feed) -> dict:
         """Convert Feed model to dict for compatibility"""
@@ -201,7 +234,7 @@ class FeedCog(commands.Cog):
             # Initialize stats
             if guild_id not in self.stats:
                 self.stats[guild_id] = {}
-            self.stats[guild_id][feed.name] = {"last_run": None, "last_success": None, "failures": 0}
+            self.stats[guild_id][feed.name] = {"last_run": None, "last_success": None, "failures": 0, "delivery_failures": 0}
 
             self.log.info(f"Added feed '{feed.name}' for guild {guild_id}")
             return True
@@ -417,7 +450,7 @@ class FeedCog(commands.Cog):
         out = []
         for guild_id, feed_cfg, guild_stats in consumers:
             name = feed_cfg.get("name")
-            st = guild_stats.setdefault(name, {"last_run": None, "last_success": None, "failures": 0})
+            st = guild_stats.setdefault(name, {"last_run": None, "last_success": None, "failures": 0, "delivery_failures": 0})
             st["last_run"] = now
             feed_id = feed_cfg.get("id")
             embeds = []
@@ -715,6 +748,10 @@ class FeedCog(commands.Cog):
                     continue
                 channel = self.bot.get_channel(feed_cfg["channel_id"])
                 if not channel:
+                    self.log.warning(
+                        "Channel %s for feed '%s' (guild %s) not found; nothing delivered",
+                        feed_cfg["channel_id"], feed_cfg.get("name"), guild_id)
+                    await self._record_delivery_failure(guild_id, feed_cfg)
                     continue
                 if feed_cfg.get("cv2"):
                     p, u = await self._post_cv2(guild_id, feed_cfg, channel, embeds)
@@ -722,6 +759,14 @@ class FeedCog(commands.Cog):
                     p, u = await self._post_embeds(guild_id, feed_cfg, channel, embeds)
                 posts_made += p
                 updates_made += u
+                # A cycle counts as a delivery failure only when there were
+                # entries to post but none got through. Skip feeds evicted
+                # out-of-band during posting (their stats entry is gone).
+                if p + u == 0:
+                    if feed_cfg.get("name") in self.stats.get(guild_id, {}):
+                        await self._record_delivery_failure(guild_id, feed_cfg)
+                else:
+                    self._reset_delivery_failures(guild_id, feed_cfg)
 
         if posts_made > 0 or updates_made > 0:
             self.log.info(f"Completed: {posts_made} new posts, {updates_made} updates")
