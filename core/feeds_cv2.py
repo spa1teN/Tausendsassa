@@ -38,6 +38,9 @@ _PREVIEW_REDD_RE = re.compile(r"https?://preview\.redd\.it/([^?]+)\?")
 _SVG_RE = re.compile(r"\.svg(\?|#|$)", re.IGNORECASE)
 _REDGIFS_RE = re.compile(r"https?://(?:www\.|v3\.)?redgifs\.com/(?:watch|ifr)/([a-z0-9]+)", re.IGNORECASE)
 _IMGUR_GIF_RE = re.compile(r"https?://(?:i\.)?imgur\.com/[a-zA-Z0-9]+\.(?:gif|gifv|mp4)", re.IGNORECASE)
+# Discord's MediaGallery caps at 10 items; exceeding it raises ValueError and
+# fails the whole entry (seen on large Reddit galleries).
+MAX_MEDIA_ITEMS = 10
 _GFYCAT_RE = re.compile(r"https?://(?:www\.)?gfycat\.com/[a-z0-9]+", re.IGNORECASE)
 _GIPHY_RE = re.compile(r"https?://(?:www\.)?giphy\.com/(?:gifs|embed)/[a-zA-Z0-9\-]+", re.IGNORECASE)
 _TENOR_RE = re.compile(r"https?://(?:www\.)?tenor\.com/view/[^\s]+", re.IGNORECASE)
@@ -228,7 +231,7 @@ def build_entry_view(
 
     if images:
         gallery = discord.ui.MediaGallery()
-        for img in images:
+        for img in images[:MAX_MEDIA_ITEMS]:
             gallery.add_item(media=img)
         container.add_item(gallery)
 

@@ -35,6 +35,10 @@ class FeedCog(commands.Cog):
         # In-memory caches (backed by database)
         self._feeds_cache: Dict[int, List[dict]] = {}  # guild_id -> feeds list
         self._webhook_cache: Dict[int, discord.Webhook] = {}  # channel_id -> webhook
+        # Channels where webhook creation was denied (missing Manage Webhooks).
+        # Feeds posting there fall back to the bot, but after FAILURE_THRESHOLD
+        # cycles they're removed since the channel can't be configured.
+        self._webhook_denied: set[int] = set()
 
         # Health stats per feed
         self.stats: Dict[int, Dict[str, dict]] = {}  # guild_id -> feed_name -> stats
@@ -151,7 +155,7 @@ class FeedCog(commands.Cog):
         st["delivery_failures"] = st.get("delivery_failures", 0) + 1
         count = st["delivery_failures"]
         self.log.warning(
-            "Feed '%s' in guild %s delivered nothing (%d/%d consecutive failures)",
+            "Feed '%s' in guild %s failed delivery (%d/%d consecutive failures)",
             name, guild_id, count, FAILURE_THRESHOLD)
 
         if count >= FAILURE_THRESHOLD:
@@ -343,6 +347,7 @@ class FeedCog(commands.Cog):
             webhook = self._webhook_cache[channel.id]
             try:
                 await webhook.fetch()
+                self._webhook_denied.discard(channel.id)
             except discord.NotFound:
                 del self._webhook_cache[channel.id]
                 await self._delete_webhook_cache(channel.id)
@@ -358,9 +363,11 @@ class FeedCog(commands.Cog):
                     reason="Auto-created webhook for RSS feed"
                 )
                 self._webhook_cache[channel.id] = webhook
+                self._webhook_denied.discard(channel.id)
                 await self._save_webhook(channel.id, webhook)
                 self.log.info(f"Created new webhook for channel #{channel.name}")
             except discord.Forbidden:
+                self._webhook_denied.add(channel.id)
                 self.log.error(f"No permission to create webhook in #{channel.name}")
                 return None
             except Exception:
@@ -629,7 +636,7 @@ class FeedCog(commands.Cog):
                 # Convert attachment refs to discord.File objects
                 files = []
                 if attach_files:
-                    for ref, data in attach_files:
+                    for ref, data in attach_files[:feeds_cv2.MAX_MEDIA_ITEMS]:
                         fname = ref.split("://", 1)[-1]
                         files.append(discord.File(data, filename=fname))
                 if webhook:
@@ -759,10 +766,11 @@ class FeedCog(commands.Cog):
                     p, u = await self._post_embeds(guild_id, feed_cfg, channel, embeds)
                 posts_made += p
                 updates_made += u
-                # A cycle counts as a delivery failure only when there were
-                # entries to post but none got through. Skip feeds evicted
-                # out-of-band during posting (their stats entry is gone).
-                if p + u == 0:
+                # A cycle counts as a delivery failure when nothing got through,
+                # or when the channel forbids webhooks (the feed can never post
+                # with its intended webhook and the operator can't fix it).
+                # Skip feeds evicted out-of-band during posting (stats entry gone).
+                if channel.id in self._webhook_denied or p + u == 0:
                     if feed_cfg.get("name") in self.stats.get(guild_id, {}):
                         await self._record_delivery_failure(guild_id, feed_cfg)
                 else:
